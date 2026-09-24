@@ -2,7 +2,7 @@
 import gc, os, shutil, socket, time
 from pathlib import Path
 import hdfe_stream as hs
-from hdfe_stream import feols_stream
+from hdfe_stream import feols_stream, workspace
 
 WD = Path("ct")
 shutil.rmtree(WD, ignore_errors=True)
@@ -86,7 +86,7 @@ print("   after with-block:", runs())
 dead = WD / "hdfe_run_19700101_000000_deadbeef"
 (dead / "rows").mkdir(parents=True)
 (dead / "rows" / "x.bin").write_bytes(b"0" * 1_000_000)
-(dead / hs._MARKER).write_text(f"{socket.gethostname()} 999999 {time.time()}\n")
+(dead / workspace._MARKER).write_text(f"{socket.gethostname()} 999999 {time.time()}\n")
 print("8. dry run:", [(Path(p).name, b) for p, b in hs.cleanup(WD, dry_run=True)])
 print("   removed:", len(hs.cleanup(WD)), "| left:", runs())
 
