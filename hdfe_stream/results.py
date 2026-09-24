@@ -218,7 +218,7 @@ class HDFEMulti:
 
 
 def _canon_cluster(var):
-    """'pik + sein' -> 'pik+sein'; 'sein ^ year' -> 'sein^year'."""
+    """'worker_id + firm_id' -> 'worker_id+firm_id'; 'firm_id ^ year' -> 'firm_id^year'."""
     return "+".join("^".join(c.strip() for c in part.split("^")) for part in var.split("+"))
 
 

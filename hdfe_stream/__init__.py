@@ -2,14 +2,14 @@
 hdfe_stream: out-of-core OLS with several high-dimensional fixed effects.
 
     from hdfe_stream import feols_stream
-    fit = feols_stream("log_earn ~ age_squared + age_cubed | pik + sein + year",
-                       "data/*.parquet", workdir="hdfe_work", vcov={"CRV1": "pik"})
+    fit = feols_stream("log_earn ~ age_squared + age_cubed | worker_id + firm_id + year",
+                       "data/*.parquet", workdir="hdfe_work", vcov={"CRV1": "worker_id"})
     fit.summary()
 
 Formulas follow pyfixest syntax and are parsed with pyfixest's own parser:
 covariates, interactions (`:` and `*`), `I()`, `log()`, `C()`, `i()`,
 several dependent variables (`y1 + y2 ~ ...`), `sw()` / `csw()` stepwise
-syntax, fixed-effect interactions (`sein^year`), and IV
+syntax, fixed-effect interactions (`firm_id^year`), and IV
 (`y ~ x | fe | endog ~ z`). Every covariate term is compiled to a Polars
 expression, so constructing the design never leaves the streaming engine.
 Weighted least squares via `weights=` (aweights or fweights). The
@@ -32,8 +32,8 @@ dimension listed first. Every other dimension is represented by level-sized
 vectors in RAM.
 
 Varying slopes (FEIS) on the streamed dimension use fixest syntax:
-`| pik[exper] + sein` gives worker effects plus worker-specific slopes on
-exper (several: `pik[exper, exper2]`). Projecting out the streamed dimension
+`| worker_id[t] + firm_id` gives worker effects plus worker-specific slopes on
+t (several: `worker_id[t, t2]`). Projecting out the streamed dimension
 then means removing each worker's own weighted regression on [1, slopes],
 which is still local to the worker.
 
@@ -77,7 +77,7 @@ kernels_base.py    numba kernels
 kernels_slopes.py  numba kernels, varying slopes
 formula.py         pyfixest formula -> Polars expressions (input side)
 reporting.py       pyfixest etable/coefplot views (output side)
-feterms.py         'pik[exper]' / 'sein^year' parsing
+feterms.py         'worker_id[t]' / 'firm_id^year' parsing
 results.py         `HDFEResult`, `HDFEMulti`
 workspace.py       run directories, `cleanup()`
 report.py          logging / printing

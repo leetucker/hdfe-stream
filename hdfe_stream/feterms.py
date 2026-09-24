@@ -1,4 +1,4 @@
-"""Fixed-effect term syntax: 'pik[exper]', 'sein^year'.
+"""Fixed-effect term syntax: 'worker_id[t]', 'firm_id^year'.
 
 Deliberately free of any pyfixest dependency: `StreamingHDFE` parses FE terms
 in its constructor and must work without the formula front end installed.
@@ -13,7 +13,8 @@ _FE_TERM = re.compile(r"^\s*([^\[\]]+?)\s*(\[\[?)(.*?)(\]\]?)\s*$")
 
 
 def _parse_fe_term(term):
-    """'pik[exper, exper2]' -> ('pik', ['exper', 'exper2']); 'sein' -> ('sein', [])."""
+    """'worker_id[t, t2]' -> ('worker_id', ['t', 't2']);
+    'firm_id' -> ('firm_id', [])."""
     m = _FE_TERM.match(term)
     if not m:
         return "^".join(c.strip() for c in term.split("^")), []

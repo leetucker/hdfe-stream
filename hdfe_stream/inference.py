@@ -77,7 +77,7 @@ class _InferenceMixin:
         more ways), combined by inclusion-exclusion (Cameron, Gelbach and
         Miller 2011), as in pyfixest/fixest. Each term is one of:
           seg     the fe[0] groups themselves: scores summed per group
-          segsub  a refinement of fe[0] (e.g. pik^sein): rows of a cluster
+          segsub  a refinement of fe[0] (e.g. worker_id^firm_id): rows of a cluster
                   are always in the same chunk, so scores are summed per
                   (group, code) inside each chunk; no global array
           fe      another FE dimension: its codes, level-sized accumulator

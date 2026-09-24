@@ -22,7 +22,7 @@ def _phys_mem_gb():
 
 
 def _safe(name):
-    """File-name-safe version of a dimension name like 'sein^year'."""
+    """File-name-safe version of a dimension name like 'firm_id^year'."""
     return re.sub(r"[^A-Za-z0-9_.-]", "_", name.replace("^", "_x_"))
 
 

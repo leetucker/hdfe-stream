@@ -44,9 +44,9 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin):
         (name, Polars expression) pairs. Each y is estimated as its own model
         (sharing one solve) unless `models` says otherwise.
     x : covariates, as for `y`. May be empty (FE-only model).
-    fe : fixed-effect dimensions, e.g. ["pik", "sein", "year"] or
-         ["pik", "sein^year"] ('^' interacts columns). One dimension may carry
-         varying slopes, "pik[exper]" or "pik[exper, exper2]" (fixest syntax;
+    fe : fixed-effect dimensions, e.g. ["worker_id", "firm_id", "year"] or
+         ["worker_id", "firm_id^year"] ('^' interacts columns). One dimension may carry
+         varying slopes, "worker_id[t]" or "worker_id[t, t2]" (fixest syntax;
          FE intercepts plus slopes); it is then the streamed dimension.
     stream : name of the dimension to stream. Default: the dimension with
          slopes, else the highest approximate cardinality (ties: listed
@@ -305,7 +305,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin):
                  number of ways). iid and hetero are always computed; switch
                  with result.with_vcov(...).
         cluster: further cluster specs to compute CRV1 for, e.g.
-                 ["sein", "pik+sein"]. Any column or 'a^b' combination works;
+                 ["firm_id", "worker_id+firm_id"]. Any column or 'a^b' combination works;
                  fe[0] itself and the other FE dimensions reuse their codes.
         fe_dof : 'exact' counts one redundant level per connected component of
                  the (fe[0], fe[1]) graph, plus one per further dimension;

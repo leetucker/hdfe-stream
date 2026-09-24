@@ -23,7 +23,7 @@ class _FormulaEstimator:
 def feols_stream(fml, data, workdir=None, vcov=None, cluster=(), fe_dof="exact", **options):
     """
     Out-of-core OLS with high-dimensional fixed effects from a pyfixest-style
-    formula, e.g. "y ~ x1 + i(year, treat, ref=2010) | pik + sein^year".
+    formula, e.g. "y ~ x1 + i(year, treat, ref=2010) | worker_id + firm_id^year".
 
     data    : Parquet path/glob or Polars LazyFrame.
     workdir : directory under which run directories are created (default:
@@ -34,9 +34,9 @@ def feols_stream(fml, data, workdir=None, vcov=None, cluster=(), fe_dof="exact",
     **options : passed to StreamingHDFE (stream, weights, weights_type,
               solver, precond, keep, verbose, logger, log_level, ...).
 
-    Varying slopes on the streamed dimension: "y ~ x | pik[exper] + sein".
-    The worker FE file then has fe_pik (intercept) and fe_pik[exper] (slope)
-    columns; the residual file's fe_pik column is the worker's total
+    Varying slopes on the streamed dimension: "y ~ x | worker_id[t] + firm_id".
+    The worker FE file then has fe_worker_id (intercept) and fe_worker_id[t] (slope)
+    columns; the residual file's fe_worker_id column is the worker's total
     contribution for that row.
 
     IV formulas ("y ~ x | fe | endog ~ z") are estimated by 2SLS; each result
