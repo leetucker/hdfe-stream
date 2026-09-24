@@ -168,11 +168,12 @@ def test_exactly_collinear_covariates_are_dropped(fitted):
     `C(treat)` duplicates the worker fixed effect because `treat` is constant
     within worker.
 
-    Such a column makes the conjugate-gradient solve for its own right-hand
-    side non-convergent -- there is no unique solution to converge to -- so
-    this fit reports `converged=False` and warns. That is confined to the
-    columns that are then dropped: the estimate that survives still matches
-    pyfixest, which the parametrized tests above check for this same case.
+    The two are detected at different points. `C(treat)` is annihilated by the
+    streamed fixed effect, so its right-hand side is numerically zero and the
+    solver short-circuits it (see `test_stream_absorbed_covariate_short_circuits`).
+    `i(year)` has a perfectly ordinary right-hand side -- its degeneracy is in
+    the null space of the reduced system, which the solver handles normally --
+    and it is caught by the rank check in step 3.
     """
     models, refs = fitted(6)
     model = models[0]
@@ -184,7 +185,34 @@ def test_exactly_collinear_covariates_are_dropped(fitted):
     assert dropped == set(getattr(ref, "_collin_vars", None) or [])
 
     assert model.coefnames == ["age_squared"]
-    assert not model.solver_info["converged"]       # see the docstring
+
+
+def test_stream_absorbed_covariate_short_circuits(fitted):
+    """A covariate the streamed fixed effect absorbs entirely must not cost the
+    solver anything.
+
+    Its right-hand side is zero up to round-off, so the relative convergence
+    test can never be satisfied and the solve would run to `maxiter` -- while
+    already holding the right answer, since b = 0 means Gamma = 0. The solver
+    reports such variables in `fe_spanned` and still converges.
+    """
+    models, _ = fitted(6)
+    info = models[0].solver_info
+
+    assert info["fe_spanned"] == ["C(treat)[T.1]"]
+    assert info["converged"]
+    iterations = info["iterations"]
+    iterations = iterations if isinstance(iterations, list) else [iterations]
+    assert max(iterations) < 500, iterations
+
+
+def test_no_short_circuit_without_an_absorbed_covariate(fitted):
+    """The check must not fire on ordinary covariates."""
+    for index in (0, 1, 2):
+        models, _ = fitted(index)
+        for model in models:
+            assert "fe_spanned" not in model.solver_info, (index, model.fml)
+            assert model.solver_info["converged"], (index, model.fml)
 
 
 def test_multiple_estimation_expands_to_all_models(fitted):

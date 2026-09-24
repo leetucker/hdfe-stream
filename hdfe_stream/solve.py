@@ -20,6 +20,28 @@ class _STooLarge(Exception):
     """The explicit reduced matrix S would exceed `max_s_gb`."""
 
 
+# A covariate spanned by the *streamed* fixed effect -- one that is constant
+# within every fe[0] group, say -- is annihilated by M_0, so its right-hand
+# side b = D_o' M_0 V is zero up to round-off rather than exactly zero. The CG
+# convergence test is relative, ||r|| <= tol * ||b||, which for such a column
+# asks for a residual far below double precision: it can never be met, so the
+# solve would run to `maxiter` and report failure for a column whose answer is
+# already right (b = 0 means Gamma = 0 solves it). The column is dropped as
+# collinear in step 3 anyway.
+#
+# The test is b's norm against the square root of the variable's own total sum
+# of squares, which pass 0 has already computed, so it costs nothing. The
+# measured separation is enormous: such a column comes in around 1e-16, while
+# the smallest genuine column seen is around 0.3, so this threshold is nowhere
+# near anything real.
+#
+# Note this is specific to the streamed dimension. A covariate collinear with a
+# *non-streamed* fixed effect (i(year) alongside a year FE) has a perfectly
+# large b; its degeneracy lives in the null space of S, where CG is already
+# well behaved.
+_RHS_ZERO_TOL = 1e-11
+
+
 # Shared-state contract with the other mixins
 # -------------------------------------------
 # Reads, set by _PassesMixin: the identifying cells (starts, codes, n, sums,
@@ -34,18 +56,27 @@ class _STooLarge(Exception):
 class _SolveMixin:
 
     # --------------------------------------------------------------- step 2
-    def _pcg(self, matvec, precond, b):
+    def _pcg(self, matvec, precond, b, zero=None):
         """Block PCG: one independent CG per right-hand-side column, run in
-        lockstep so every operator application covers all columns."""
+        lockstep so every operator application covers all columns.
+
+        `zero` marks columns whose right-hand side is numerically zero (see
+        `_RHS_ZERO_TOL`); they are returned as the zero solution, which is what
+        solves them, and take no part in the iteration.
+        """
         bnorm = np.linalg.norm(b, axis=0)
         bnorm[bnorm == 0] = 1.0
         X = np.zeros_like(b)
         R = b.copy()
+        if zero is not None and zero.any():
+            R[:, zero] = 0.0            # solved already: X stays zero
+            if zero.all():
+                return X, 0, True, 0.0
         Z = precond(R)
         P = Z.copy()
         rz = np.einsum("ij,ij->j", R, Z)
-        active = np.ones(b.shape[1], bool)
-        rel = np.ones(b.shape[1])
+        active = np.ones(b.shape[1], bool) if zero is None else ~zero
+        rel = np.zeros(b.shape[1])
         it = 0
         for it in range(1, self.maxiter + 1):
             AP = matvec(P)
@@ -150,7 +181,11 @@ class _SolveMixin:
                    "S_build_seconds": round(time.time() - t0, 2)}
 
     def _make_block_solver(self):
-        """Return (solve(b) -> (X, iterations, converged, rel), info dict)."""
+        """Return (solve(b, zero) -> (X, iterations, converged, rel), info dict).
+
+        The `within` solver takes a column range instead and has no `zero`
+        argument; it does its own convergence handling.
+        """
         solver = self.solver
         info = {}
         if solver in ("auto", "explicit"):
@@ -185,7 +220,7 @@ class _SolveMixin:
                     return np.column_stack([M @ R[:, j] for j in range(R.shape[1])])
             else:
                 precond = self._jacobi()
-            return (lambda b: self._pcg(matvec, precond, b)), info
+            return (lambda b, zero=None: self._pcg(matvec, precond, b, zero)), info
 
         if solver == "stream_cg":
             nt = nb.get_num_threads()
@@ -201,7 +236,7 @@ class _SolveMixin:
                                       self.offs, acc)
                 return acc.sum(axis=0)
             jac = self._jacobi()
-            return (lambda b: self._pcg(matvec_s, jac, b)), info
+            return (lambda b, zero=None: self._pcg(matvec_s, jac, b, zero)), info
 
         # within: full system on identifying cells, keep the non-streamed blocks
         import within
@@ -234,6 +269,7 @@ class _SolveMixin:
         gamma = np.lib.format.open_memmap(self.paths["gamma"], mode="w+",
                                           dtype=np.float64, shape=(L, m))
         its, conv, rel = [], True, 0.0
+        fe_spanned = []
         for j0 in range(0, m, self.rhs_block):
             j1 = min(m, j0 + self.rhs_block)
             if info["solver"] == "within":
@@ -245,7 +281,14 @@ class _SolveMixin:
                                self.cmat[:, :, j0:j1], self.offs, b)
                 else:
                     _nb_rhs(self.starts, self.codes, self.n, self.sums[:, j0:j1], self.offs, b)
-                X, it, c, r = solve(b)
+                # compare each right-hand side against the scale of its own
+                # variable; see _RHS_ZERO_TOL. raw_ss is the variable's total
+                # sum of squares, already computed in pass 0, so this costs
+                # nothing beyond the norm of b itself.
+                scale = np.sqrt(np.maximum(self.raw_ss[j0:j1], 0.0))
+                zero = np.linalg.norm(b, axis=0) <= _RHS_ZERO_TOL * scale
+                fe_spanned += [self.var_names[j0 + k] for k in np.flatnonzero(zero)]
+                X, it, c, r = solve(b, zero)
             gamma[:, j0:j1] = self._normalize(X)
             its.append(it)
             conv &= c
@@ -255,6 +298,10 @@ class _SolveMixin:
                      "blocks": len(its), "seconds": round(time.time() - t0, 2)})
         if not np.isnan(rel):
             info["max_rel_residual"] = rel
+        if fe_spanned:
+            info["fe_spanned"] = fe_spanned
+            self._log(f"  {len(fe_spanned)} variable(s) absorbed by {self.g_fe}: "
+                      + ", ".join(fe_spanned))
         if not conv:
             _warn(f"solver did not converge within maxiter={self.maxiter}", self.logger)
         return np.load(self.paths["gamma"], mmap_mode="r"), info
