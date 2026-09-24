@@ -23,3 +23,16 @@ formula = [
     "pandas>=2.0",
 ]
 all = ["hdfe-stream[within,amg,formula]"]
+# the test suite compares against pyfixest, so it needs the formula extra
+test = [
+    "pytest>=7.0",
+    "hdfe-stream[formula]",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # pyfixest and its dependencies are noisy about deprecations we don't control
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+]

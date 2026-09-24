@@ -328,10 +328,15 @@ class _InferenceMixin:
 
         for f in self.o_fe:
             nl, o = self.n_levels[f], off[f]
+            # `component` is only defined for the dimension the connected
+            # components were computed on (see _components)
             extra = {"component": pl.Series(self.comp)} if f == self.o_fe[0] else {}
             (pl.scan_parquet(self.paths["maps"][f])
                .with_columns(**{f"fe_{f}": pl.Series(gam_y[o:o + nl]),
                                 "n_obs": pl.Series(self.cnt[o:o + nl]).cast(pl.Int64)}, **extra)
+               # the dense code is an internal label; the level values identify
+               # the rows for the caller
+               .drop(self.code_of[f])
                .sink_parquet(paths["fe"][f]))
 
         meat = {t: sc.T @ sc for t, sc in scores.items()}
