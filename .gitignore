@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# hdfe_stream: simulated data, scratch space and output written by the examples
+examples/output/
