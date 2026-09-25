@@ -38,7 +38,7 @@ DEFAULT_YEARS = range(2005, 2015)
 
 def simulate_akm(n_workers=50_000, n_firms=None, years=DEFAULT_YEARS,
                  p_move=0.08, p_obs=0.85, sd_worker=0.4, sd_firm=0.25,
-                 sd_noise=0.3, seed=0):
+                 sd_noise=0.3, seed=0, keep_effects=False):
     """An AKM panel: one row per worker-year actually observed.
 
     Parameters
@@ -54,6 +54,12 @@ def simulate_akm(n_workers=50_000, n_firms=None, years=DEFAULT_YEARS,
     sd_worker, sd_firm, sd_noise : standard deviations of the worker effect,
         the firm effect and the residual.
     seed : anything accepted by `np.random.default_rng`.
+    keep_effects : also return the worker and firm effects that generated the
+        data, as `true_worker_effect` and `true_firm_effect`. Off by default so
+        they cannot be used as regressors by accident. Useful for checking an
+        estimator against a known answer -- in particular for bias corrections
+        to variance components, where the quantity being estimated is a moment
+        of exactly these columns.
 
     Returns
     -------
@@ -112,7 +118,9 @@ def simulate_akm(n_workers=50_000, n_firms=None, years=DEFAULT_YEARS,
         log_earn=10 + pl.col("_worker") + pl.col("_firm")
         + 0.08 * pl.col("age_squared") - 0.012 * pl.col("age_cubed")
         + pl.Series(noise),
-    ).drop("_worker", "_firm")
+    )
+    df = (df.rename({"_worker": "true_worker_effect", "_firm": "true_firm_effect"})
+          if keep_effects else df.drop("_worker", "_firm"))
     return df.sample(fraction=1.0, shuffle=True, seed=seed)
 
 

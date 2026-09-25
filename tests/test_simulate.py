@@ -25,6 +25,34 @@ def test_base_panel_has_the_documented_columns():
     assert df["firm_id"].dtype == pl.Utf8
 
 
+def test_keep_effects_exposes_the_generating_effects_without_changing_the_data():
+    """`keep_effects=True` adds the true worker and firm effects and must change
+    nothing else -- otherwise it could not be used to check an estimator against
+    the answer the data was built from."""
+    plain = simulate_akm(n_workers=300, seed=3)
+    with_effects = simulate_akm(n_workers=300, seed=3, keep_effects=True)
+
+    added = {"true_worker_effect", "true_firm_effect"}
+    assert set(with_effects.columns) - set(plain.columns) == added
+    assert plain.equals(with_effects.drop(*added))
+
+    # the outcome really is built from them, up to the age profile and noise
+    rebuilt = (with_effects["true_worker_effect"] + with_effects["true_firm_effect"]
+               + 0.08 * with_effects["age_squared"]
+               - 0.012 * with_effects["age_cubed"] + 10)
+    residual = with_effects["log_earn"] - rebuilt
+    assert residual.std() == pytest.approx(0.3, rel=0.1)   # sd_noise
+    assert abs(residual.mean()) < 0.05
+
+    # and the effects are constant within worker / within firm
+    assert (with_effects.group_by("worker_id")
+            .agg(pl.col("true_worker_effect").n_unique())["true_worker_effect"]
+            == 1).all()
+    assert (with_effects.group_by("firm_id")
+            .agg(pl.col("true_firm_effect").n_unique())["true_firm_effect"]
+            == 1).all()
+
+
 def test_panel_is_unbalanced_and_shuffled():
     """Rows are not sorted on disk, and not every worker is seen every year --
     both of which the streaming path has to cope with."""
