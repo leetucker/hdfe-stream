@@ -96,8 +96,9 @@ def _fill_pyfixest(obj, r):
         "_fml": r.fml, "_depvar": r.depvar,
         # the FE string as written in the formula: maketables matches FE rows
         # across models by the text between '+' signs, spaces included
-        "_fixef": r.fml.split("|")[1].strip() if "|" in r.fml else " + ".join(r.fe_names),
-        "_has_fixef": True, "_coefnames": list(r.coefnames), "_k": len(r.coefnames),
+        "_fixef": ((r.fml.split("|")[1].strip() if "|" in r.fml else " + ".join(r.fe_names))
+                   if r.fe_names else None),
+        "_has_fixef": bool(r.fe_names), "_coefnames": list(r.coefnames), "_k": len(r.coefnames),
         "_beta_hat": np.asarray(r.beta), "_se": se, "_tstat": t,
         "_pvalue": 2 * stats.t.sf(np.abs(t), r.df_t),
         "_conf_int": np.vstack([r.beta - crit * se, r.beta + crit * se]),

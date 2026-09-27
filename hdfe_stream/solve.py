@@ -265,6 +265,11 @@ class _SolveMixin:
         off, L = self._offsets()
         m = self.m
         t0 = time.time()
+        if L == 0:
+            # No dimension besides the streamed one (or none at all): the
+            # reduced system is empty, and demeaning by fe[0] is all there is.
+            return np.zeros((0, m)), {"solver": "none", "iterations": 0, "converged": True,
+                                      "blocks": 0, "seconds": 0.0}
         solve, info = self._make_block_solver()
         gamma = np.lib.format.open_memmap(self.paths["gamma"], mode="w+",
                                           dtype=np.float64, shape=(L, m))

@@ -2,11 +2,12 @@
 
     python benchmarks/plot_benchmarks.py
 
-Reads benchmarks/results/akm.csv and kss.csv and writes, for each, three
-figures -- wall time, peak memory, peak disk -- against the number of workers,
-one line per configuration, in a light and a dark version:
+Reads benchmarks/results/akm.csv, kss.csv and covariates.csv and writes, for
+each, three figures -- wall time, peak memory, peak disk -- against the number
+of workers (the number of covariates for the last), one line per
+configuration, in a light and a dark version:
 
-    docs/figures/{akm,kss}_{time,memory,disk}.{light,dark}.svg
+    docs/figures/{akm,kss,covariates}_{time,memory,disk}.{light,dark}.svg
 
 Only this file needs changing to restyle them; the numbers stay in the CSVs.
 
@@ -20,6 +21,8 @@ left out, and listed in the note under the figure.
 from __future__ import annotations
 
 import csv
+import json
+import textwrap
 from pathlib import Path
 
 import matplotlib
@@ -66,6 +69,13 @@ SERIES = {
         "hdfe_stream (standard errors)": ("magenta", "^", "--"),
         "hdfe_stream (low memory)": ("violet", "X", "-"),
     },
+    "covariates": {
+        "pyfixest (MAP)": ("blue", "o", "-"),
+        "pyfixest (LSMR)": ("orange", "s", "-"),
+        "xhdfe": ("aqua", "D", "-"),
+        "hdfe_stream": ("magenta", "v", "-"),
+        "hdfe_stream (sized to the design)": ("violet", "X", "-"),
+    },
 }
 
 METRICS = {
@@ -77,7 +87,21 @@ METRICS = {
 TITLES = {
     "akm": "AKM regression",
     "kss": "KSS leave-out variance decomposition",
+    "covariates": "Many covariates (8.5 million rows)",
 }
+
+# the x axis: column, tick label, axis label (given the rows), point name
+X_AXES = {
+    "workers": ("n_workers",
+                lambda n: f"{n / 1_000_000:g}M" if n >= 1_000_000 else f"{n / 1_000:g}k",
+                lambda rows, sizes: "Workers (firms = workers / 15; about "
+                f"{sum(rows[n] / n for n in sizes) / len(sizes):.1f} rows per worker)",
+                "workers"),
+    "covariates": ("n_covariates", lambda n: f"{n:,}",
+                   lambda rows, sizes: "Covariates (age indicators, from 5-year bins "
+                   "to 1-month bins)", "covariates"),
+}
+AXIS = {"akm": "workers", "kss": "workers", "covariates": "covariates"}
 
 
 def read(name):
@@ -85,21 +109,18 @@ def read(name):
         return list(csv.DictReader(handle))
 
 
-def worker_label(n):
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:g}M"
-    return f"{n / 1_000:g}k"
-
-
 def figure(bench, metric, theme_name, rows):
     column, ylabel, scale = METRICS[metric]
     theme = THEMES[theme_name]
     series = SERIES[bench]
-    sizes = sorted({int(r["n_workers"]) for r in rows})
-    n_rows = {int(r["n_workers"]): int(r["n_rows"]) for r in rows}
+    x_col, tick_label, axis_label, point_name = X_AXES[AXIS[bench]]
+    sizes = sorted({int(r[x_col]) for r in rows})
+    n_rows = {int(r[x_col]): int(r.get("n_rows") or 0) for r in rows}
 
     plt.rcParams.update({
         "svg.fonttype": "none",
+        "svg.hashsalt": "hdfe-stream",     # stable element ids: a replot of the
+                                           # same numbers is the same file
         "font.family": "sans-serif",
         "font.size": 10,
     })
@@ -107,7 +128,7 @@ def figure(bench, metric, theme_name, rows):
     fig.patch.set_facecolor(theme["surface"])
     ax.set_facecolor(theme["surface"])
 
-    skipped = []
+    skipped = {}                    # reason -> configuration -> x labels
     drawn = 0
     for label, (slot, marker, style) in series.items():
         points = []
@@ -119,13 +140,15 @@ def figure(bench, metric, theme_name, rows):
                 if why.startswith("timeout after"):
                     hours = float(why.split()[2]) / 3600
                     why = f"did not finish within {hours:g} hours"
-                skipped.append(f"{label} at {worker_label(int(r['n_workers']))}"
-                               f" workers ({why})")
+                if why.startswith("killed"):
+                    why = "out of memory"
+                skipped.setdefault(why, {}).setdefault(label, []).append(
+                    tick_label(int(r[x_col])))
                 continue
             value = float(r[column] or 0) * scale
             if value <= 0:          # uses no disk: nothing to draw on a log axis
                 continue
-            points.append((int(r["n_workers"]), value))
+            points.append((int(r[x_col]), value))
         if not points:
             continue
         points.sort()
@@ -136,15 +159,21 @@ def figure(bench, metric, theme_name, rows):
                 label=label, zorder=3)
         drawn += 1
 
+    if metric == "memory" and (limit := _machine_memory_gb()):
+        # what the in-memory libraries run into; a recessive rule, not a series
+        ax.axhline(limit, color=theme["axis"], linewidth=1, linestyle=(0, (4, 3)),
+                   zorder=1)
+        ax.annotate(f"this machine's memory ({limit:g} GB)", xy=(0.01, limit),
+                    xycoords=("axes fraction", "data"), xytext=(0, 3),
+                    textcoords="offset points", fontsize=8, color=theme["muted"],
+                    va="bottom")
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.xaxis.set_major_locator(FixedLocator(sizes))
     ax.xaxis.set_minor_locator(NullLocator())
-    ax.set_xticklabels([worker_label(n) for n in sizes])
+    ax.set_xticklabels([tick_label(n) for n in sizes])
     ax.set_xlim(sizes[0] / 1.35, sizes[-1] * 1.35)
-    per_worker = sum(n_rows[n] / n for n in sizes) / len(sizes)
-    ax.set_xlabel(f"Workers (firms = workers / 15; about {per_worker:.1f} rows "
-                  "per worker)", color=theme["muted"])
+    ax.set_xlabel(axis_label(n_rows, sizes), color=theme["muted"])
     ax.set_ylabel(ylabel, color=theme["muted"])
     ax.set_title(f"{TITLES[bench]}: {ylabel.split(' (')[0].lower()}",
                  color=theme["text"], loc="left", fontsize=11, pad=10)
@@ -177,18 +206,32 @@ def figure(bench, metric, theme_name, rows):
         if len(drawn_disk) > 1:
             notes.append("The hdfe_stream settings write almost the same "
                          "amount, so their lines overlap.")
-    if skipped:
-        notes.append("Missing points: " + "; ".join(skipped) + ".")
-    if notes:
-        fig.text(0.01, 0.01, "\n".join(notes), color=theme["muted"],
-                 fontsize=8, ha="left", va="bottom", wrap=True)
-    fig.tight_layout(rect=(0, 0.05 * len(notes), 1, 1))
+    for why, where in skipped.items():
+        notes.append(f"Missing ({why}): " + "; ".join(
+            f"{label} at {_and(xs)}" for label, xs in where.items())
+            + f" {point_name}.")
+    lines = [line for note in notes for line in textwrap.wrap(note, 125)]
+    if lines:
+        fig.text(0.01, 0.01, "\n".join(lines), color=theme["muted"],
+                 fontsize=8, ha="left", va="bottom")
+    fig.tight_layout(rect=(0, 0.035 * len(lines) + (0.01 if lines else 0), 1, 1))
     return fig, drawn
+
+
+def _and(items):
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _machine_memory_gb():
+    try:
+        return json.loads((RESULTS / "machine.json").read_text()).get("memory_gb")
+    except (OSError, ValueError):
+        return None
 
 
 def main():
     FIGURES.mkdir(parents=True, exist_ok=True)
-    for bench in ("akm", "kss"):
+    for bench in ("akm", "kss", "covariates"):
         if not (RESULTS / f"{bench}.csv").exists():
             print(f"no results for {bench}; run benchmarks/{bench}_benchmark.py")
             continue
@@ -197,7 +240,8 @@ def main():
             for theme in THEMES:
                 fig, drawn = figure(bench, metric, theme, rows)
                 path = FIGURES / f"{bench}_{metric}.{theme}.svg"
-                fig.savefig(path, facecolor=fig.get_facecolor())
+                fig.savefig(path, facecolor=fig.get_facecolor(),
+                            metadata={"Date": None})
                 plt.close(fig)
                 print(f"{path.relative_to(HERE.parent)} ({drawn} series)")
 

@@ -54,6 +54,11 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
          ["worker_id", "firm_id^year"] ('^' interacts columns). One dimension may carry
          varying slopes, "worker_id[t]" or "worker_id[t, t2]" (fixest syntax;
          FE intercepts plus slopes); it is then the streamed dimension.
+         One dimension is a within regression: the streamed dimension is
+         demeaned group by group and there is nothing left to solve for.
+         None (or []) is ordinary least squares: the rows are read in
+         batches and never grouped, and an "Intercept" column is added to
+         each model's covariates unless `models` lists them explicitly.
     stream : name of the dimension to stream. Default: the dimension with
          slopes, else the highest approximate cardinality (ties: listed
          first). The choice is logged and stored in diagnostics["stream"];
@@ -146,12 +151,8 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         ys, xs = _norm_vars(y), _norm_vars(x if x is not None else [])
         self.var_names = list(ys) + [k for k in xs if k not in ys]
         self.var_exprs = {**xs, **ys}
-        self.m = len(self.var_names)
-        self.vidx = {nm: j for j, nm in enumerate(self.var_names)}
-        parsed = [_parse_fe_term(t) for t in fe]
+        parsed = [_parse_fe_term(t) for t in (fe or [])]
         self.fe_user = [nm for nm, _ in parsed]
-        if len(self.fe_user) < 2:
-            raise ValueError("need at least two fixed-effect dimensions")
         if len(set(self.fe_user)) < len(self.fe_user):
             raise ValueError(f"duplicate fixed-effect dimensions in {self.fe_user}")
         self.slopes = {nm: sl for nm, sl in parsed if sl}
@@ -165,13 +166,26 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
             raise ValueError("varying slopes are only supported on the streamed dimension; "
                              f"slopes are on {list(self.slopes)[0]!r}, stream={self.stream!r}")
         self.slope_vars = next(iter(self.slopes.values())) if self.slopes else []
+        # With no fixed effects there is no dimension to group the rows by:
+        # every pass reads them in plain batches and nothing is demeaned.
+        self.no_fe = not self.fe_user
         self.p = 1 + len(self.slope_vars)
         self.fe_cols = {d: [c.strip() for c in d.split("^")] for d in self.fe_user}
         if models is None:
             rhs = " + ".join(xs) or "1"
-            models = [{"fml": f"{yn} ~ {rhs} | {' + '.join(fe)}", "y": yn, "x": list(xs)}
-                      for yn in ys]
+            if self.no_fe:
+                # OLS keeps its constant as a coefficient, as pyfixest reports it
+                if "Intercept" not in self.var_exprs:
+                    self.var_names.append("Intercept")
+                    self.var_exprs["Intercept"] = pl.lit(1.0)
+                models = [{"fml": f"{yn} ~ {rhs}", "y": yn, "x": ["Intercept", *xs]}
+                          for yn in ys]
+            else:
+                models = [{"fml": f"{yn} ~ {rhs} | {' + '.join(fe)}", "y": yn,
+                           "x": list(xs)} for yn in ys]
         self.models = models
+        self.m = len(self.var_names)
+        self.vidx = {nm: j for j, nm in enumerate(self.var_names)}
         self.base_dir = Path(workdir) if workdir else Path(tempfile.gettempdir())
         if outputs not in ("auto", "keep"):
             raise ValueError("outputs must be 'auto' or 'keep'")
@@ -191,8 +205,12 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                              "use 'auto', 'explicit' or 'stream_cg'")
         if self.slopes and assembly == "cells":
             raise ValueError("varying slopes need assembly='rows'")
+        if self.no_fe and assembly == "cells":
+            raise ValueError("assembly='cells' needs a fixed effect to group the rows "
+                             "by; without one the cross-products come from a row pass")
         self.assembly = (assembly if assembly != "auto" else
-                         ("cells" if self.m <= 8 and not self.slopes else "rows"))
+                         ("cells" if self.m <= 8 and not self.slopes and not self.no_fe
+                          else "rows"))
         fe_src = {c for d in self.fe_user for c in self.fe_cols[d]}
         self.keep = [c for c in dict.fromkeys(keep) if c not in fe_src]
         self.tol, self.maxiter = tol, maxiter
@@ -255,9 +273,10 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                 child.unlink(missing_ok=True)
 
     def _setup_dims(self, g):
-        """Fix the streamed dimension g; the others keep the user's order."""
-        self.fe = [g] + [d for d in self.fe_user if d != g]
-        self.g_fe, self.o_fe = self.fe[0], self.fe[1:]
+        """Fix the streamed dimension g; the others keep the user's order.
+        With no fixed effects g is None and every list is empty."""
+        self.fe = [] if g is None else [g] + [d for d in self.fe_user if d != g]
+        self.g_fe, self.o_fe = (self.fe[0] if self.fe else None), self.fe[1:]
         self.ccols = [f"c{d}" for d in range(1, len(self.fe))]   # code columns
         self.code_of = {d: cc for d, cc in zip(self.o_fe, self.ccols)}
         self.code_of[self.g_fe] = "gcode"
@@ -267,8 +286,12 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         """Streamed dimension: explicit `stream`, else the dimension with
         varying slopes, else the highest (approximate) cardinality, ties going
         to the dimension listed first."""
+        if self.no_fe:
+            return None, "no fixed effects"
         if self.stream is not None:
             return self.stream, "stream= option"
+        if len(self.fe_user) == 1:
+            return self.fe_user[0], "the only fixed effect"
         if self.slopes:
             return next(iter(self.slopes)), "varying slopes"
         best = max(self.fe_user, key=lambda d: (approx[d], -self.fe_user.index(d)))
@@ -292,9 +315,12 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
 
     def _fit_passes(self, source, keys, extra, default, fe_dof, t0):
         self._pass0_code(source, keys, extra)
-        self._pass1_cells()
-        self._pass1b_identifying()
-        self._components()
+        if self.no_fe:
+            self._no_cells()
+        else:
+            self._pass1_cells()
+            self._pass1b_identifying()
+            self._components()
         self._log("n={:,} cells={:,} identifying groups={:,} cells={:,} "
                            "components={:,} threads={} ".format(
             self.n_obs, self.n_cells, self.n_identifying, self.n_ident_cells,
@@ -308,7 +334,12 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         A = self._assemble(gamma)
         nested = {t: self._nested_dims(t) for t in self.clusters}
         total = sum(self.fe_params.values())   # fe[0]: one per group, or its rank with slopes
-        n_red = (self.n_components + len(self.o_fe) - 1) if fe_dof == "exact" else len(self.o_fe)
+        if len(self.fe) < 2:
+            n_red = 0                   # one dimension, or none: nothing is redundant
+        elif fe_dof == "exact":
+            n_red = self.n_components + len(self.o_fe) - 1
+        else:
+            n_red = len(self.o_fe)
         n_red += len(self._redundant_slopes())
         ctx = {"k_fe": total - n_red, "nested": nested, "default": default, "t0": t0,
                "info": info}

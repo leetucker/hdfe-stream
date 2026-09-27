@@ -36,8 +36,10 @@ CASES = [
     # varying slopes together with 2SLS
     ("y ~ x | worker_id[t] + firm_id | xe ~ z",
      "y ~ x + C(worker_id):tc | worker_id + firm_id | xe ~ z", {}),
+    # the slopes' dimension as the only fixed effect
+    ("y ~ x | worker_id[t]", "y ~ x + C(worker_id):tc | worker_id", {}),
 ]
-IDS = ["slopes", "slopes-middle", "two-slopes-weighted", "slopes-iv"]
+IDS = ["slopes", "slopes-middle", "two-slopes-weighted", "slopes-iv", "slopes-only"]
 SOLVERS = ["explicit", "stream_cg"]      # `within` does not support slopes
 
 

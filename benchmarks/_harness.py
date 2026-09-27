@@ -174,7 +174,7 @@ def upsert_csv(path, rows, key=("n_workers", "configuration")):
     kept = [r for r in existing if tuple(str(r[k]) for k in key) not in new_keys]
     merged = kept + [{k: v for k, v in r.items()} for r in rows]
     fields = list(dict.fromkeys(f for r in merged for f in r))
-    merged.sort(key=lambda r: (int(r["n_workers"]), str(r.get("order", ""))))
+    merged.sort(key=lambda r: (int(r[key[0]]), int(r.get("order") or 0)))
     with open(path, "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()

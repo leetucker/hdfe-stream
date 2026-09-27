@@ -1,19 +1,23 @@
 # Benchmarks
 
-Two benchmarks compare hdfe_stream with in-memory libraries on the simulated
-AKM panel that ships with the package, at five sizes from 25,000 to 5,000,000
-workers. The number of firms is always workers / 15, so the number of workers
-is the only thing that changes along the x axis of every figure.
+Three benchmarks compare hdfe_stream with in-memory libraries on the simulated
+AKM panel that ships with the package. Two vary the height of the data, at five
+sizes from 25,000 to 5,000,000 workers; the number of firms is always workers /
+15, so the number of workers is the only thing that changes along their x axis.
+The third holds the data at 1,000,000 workers (8.5 million rows) and varies its
+width: the number of covariates, from 8 to 503.
 
 | script | job | compared with |
 |---|---|---|
 | `akm_benchmark.py` | `log_earn ~ age_squared + age_cubed \| worker_id + firm_id + year`, clustered by worker | pyfixest (MAP and LSMR demeaners), xhdfe |
 | `kss_benchmark.py` | the KSS leave-out variance decomposition of `log_earn ~ age_squared + age_cubed \| worker_id + firm_id`, with and without standard errors | xhdfe |
+| `covariates_benchmark.py` | `log_earn ~ i(age_bin) \| worker_id + firm_id`, clustered by worker, with age bins from five years to one month wide | pyfixest (both demeaners), xhdfe |
 
 ```bash
 pip install -e ".[benchmark]"
 python benchmarks/akm_benchmark.py          # all sizes; or list sizes: 25000 100000
 python benchmarks/kss_benchmark.py
+python benchmarks/covariates_benchmark.py   # or list bin widths in months: 12 3
 python benchmarks/plot_benchmarks.py        # redraw docs/figures/ from the CSVs
 ```
 
@@ -59,7 +63,8 @@ noise, well under 1% at every size measured.
 
 ## Results files
 
-`results/akm.csv` and `results/kss.csv` hold one row per (size, configuration).
+`results/akm.csv` and `results/kss.csv` hold one row per (size, configuration),
+and `results/covariates.csv` one per (number of covariates, configuration).
 Re-running a size replaces that size's rows. `results/machine.json` records the
 hardware and package versions. The columns are:
 
@@ -74,6 +79,7 @@ hardware and package versions. The columns are:
 | `coef_*` (regression) | the estimates, used for the agreement check |
 | `kss_*`, `se_*` (KSS) | the leave-out components and their standard errors |
 | `n_obs_pruned` (KSS) | observations left after pruning to the leave-one-out connected set |
+| `n_covariates`, `bin_months`, `n_coef` (covariates) | indicators in the design, the age-bin width, and coefficients reported: the same number, except that xhdfe also reports an intercept alongside the absorbed effects, as reghdfe does |
 
 `plot_benchmarks.py` reads only these files, so the figures can be restyled
 without re-running anything.

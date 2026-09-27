@@ -37,6 +37,13 @@ t (several: `worker_id[t, t2]`). Projecting out the streamed dimension
 then means removing each worker's own weighted regression on [1, slopes],
 which is still local to the worker.
 
+Fewer than two dimensions. With one, it is streamed and there is nothing
+left to solve for: step 2 is skipped and the fit is the within regression.
+With none, there is no dimension to group the rows by, so pass 0 writes them
+unpartitioned and unsorted, passes 1 and 1b and step 2 are skipped, and the
+row passes read plain batches without demeaning; the model keeps an
+"Intercept" coefficient, as in pyfixest.
+
 Memory: rows are only ever streamed. The arrays held in RAM are sized by the
 non-streamed dimensions' level counts (times a block of at most `rhs_block`
 variables at a time), plus, for the explicit solver, the sparse reduced

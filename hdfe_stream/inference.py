@@ -16,7 +16,7 @@ from .kernels_base import _nb_assemble, _nb_assemble_rows, _nb_pass2
 from .kernels_slopes import _nb_assemble_rows_sl, _nb_pass2_sl
 from .report import _warn
 from .results import HDFEResult
-from .utils import _safe, _scatter, iter_group_chunks
+from .utils import _safe, _scatter, _tbl_to_np, iter_group_chunks
 
 
 def _ratio(num, den):
@@ -51,20 +51,43 @@ class _InferenceMixin:
         self._log("step 3: row pass for V' M_D V")
         wcol = ["w"] if self.weights is not None else []
         tcols = [f"t{j + 1}" for j in range(len(self.slope_vars))]
-        cols = ["gcode", *self.ccols, *wcol, *tcols, *[f"v{j}" for j in range(m)]]
-        for ch in iter_group_chunks(self.paths["rows"], cols, self.batch_rows):
-            gc = ch["gcode"]
-            starts = np.concatenate(([0], np.flatnonzero(gc[1:] != gc[:-1]) + 1, [len(gc)]))
-            codes = np.column_stack([ch[cc] for cc in self.ccols]).astype(np.int64)
+        cols = [*self.ccols, *wcol, *tcols, *[f"v{j}" for j in range(m)]]
+        for ch, starts, codes in self._row_chunks(cols):
             V = np.column_stack([ch[f"v{j}"] for j in range(m)]).astype(np.float64)
             w = (np.ascontiguousarray(ch["w"], dtype=np.float64) if wcol
-                 else np.ones(len(gc)))
+                 else np.ones(len(V)))
             if tcols:
                 _nb_assemble_rows_sl(starts, codes, self.offs, w, self._slope_matrix(ch), V,
                                      gamma, acc)
             else:
-                _nb_assemble_rows(starts, codes, self.offs, w, V, gamma, acc)
+                _nb_assemble_rows(starts, codes, self.offs, w, V, gamma, not self.no_fe, acc)
         return acc.sum(axis=0)
+
+    def _row_chunks(self, cols):
+        """Yield (chunk, starts, codes) over the row files.
+
+        With fixed effects each chunk holds complete fe[0] groups and `starts`
+        marks them. Without, the rows are never grouped: chunks are plain
+        batches and `starts` just cuts each into pieces for the threads (the
+        kernels are told not to demean). `codes` stacks the non-streamed
+        dimensions' codes, and has no columns when there are none.
+        """
+        if self.no_fe:
+            pieces = 8 * nb.get_num_threads()
+            for batch in (b for path in self.paths["rows"]
+                          for b in pq.ParquetFile(path).iter_batches(
+                              batch_size=self.batch_rows, columns=cols or None)):
+                ch = _tbl_to_np(pa.Table.from_batches([batch]))
+                n = batch.num_rows
+                starts = np.unique(np.linspace(0, n, min(n, pieces) + 1).astype(np.int64))
+                yield ch, starts, np.zeros((n, 0), np.int64)
+            return
+        for ch in iter_group_chunks(self.paths["rows"], ["gcode", *cols], self.batch_rows):
+            gc = ch["gcode"]
+            starts = np.concatenate(([0], np.flatnonzero(gc[1:] != gc[:-1]) + 1, [len(gc)]))
+            codes = (np.column_stack([ch[cc] for cc in self.ccols]).astype(np.int64)
+                     if self.ccols else np.zeros((len(gc), 0), np.int64))
+            yield ch, starts, codes
 
     def _slope_matrix(self, ch):
         """T = [1, centered slope variables] for a chunk of rows."""
@@ -92,7 +115,8 @@ class _InferenceMixin:
         """
         reqs = [k.split(":", 1)[1] for k in keys if k.startswith("CRV1:")]
         reqs += [c for c in extra if c not in reqs]
-        g0 = set(self.fe_cols[self.g_fe])
+        # with no fixed effects there are no groups to be nested in
+        g0 = set(self.fe_cols[self.g_fe]) if self.fe else None
         dim_of = {frozenset(self.fe_cols[d]): d for d in self.o_fe}
         self.clusters, self.cmaps, self.cluster_reqs = {}, {}, {}
 
@@ -108,9 +132,9 @@ class _InferenceMixin:
             if key in self.clusters:
                 return key
             cs = set(cols)
-            if cs == g0:
+            if g0 is not None and cs == g0:
                 spec = {"kind": "seg", "dim": self.g_fe, "code": "gcode"}
-            elif cs > g0:
+            elif g0 is not None and cs > g0:
                 xcols = [c for c in cols if c not in g0]
                 xdim = dim_of.get(frozenset(xcols))
                 spec = {"kind": "segsub", "xdim": xdim,
@@ -261,13 +285,10 @@ class _InferenceMixin:
         cols = list(dict.fromkeys(["gcode", *self.ccols, *ccodes, *src, *self.keep, *tcols,
                                    *(["w"] if weighted else []), f"v{yj}",
                                    *[f"v{j}" for j in xk], *[f"v{j}" for j in zk]]))
-        g_cols = self.fe_cols[self.g_fe]
+        g_cols = self.fe_cols[self.g_fe] if self.fe else []
         yc = float(self.means[yj])
         r_writer = g_writer = None
-        for ch in iter_group_chunks(self.paths["rows"], cols, self.batch_rows):
-            gc = ch["gcode"]
-            starts = np.concatenate(([0], np.flatnonzero(gc[1:] != gc[:-1]) + 1, [len(gc)]))
-            codes = np.column_stack([ch[cc] for cc in self.ccols]).astype(np.int64)
+        for ch, starts, codes in self._row_chunks([c for c in cols if c != "gcode"]):
             y = np.ascontiguousarray(ch[f"v{yj}"], dtype=np.float64)
             n = len(y)
             w = np.ascontiguousarray(ch["w"], dtype=np.float64) if weighted else np.ones(n)
@@ -289,7 +310,8 @@ class _InferenceMixin:
             else:
                 g_eff = np.empty(G)
                 _nb_pass2(starts, codes, self.offs, w, y, X, beta_c, gam_y, gam_y0, Z, gam_z,
-                          Pi_c, yc, fweights, g_eff, e, h, acc_s, acc_B, acc_hc, acc_g)
+                          Pi_c, yc, fweights, not self.no_fe, g_eff, e, h, acc_s, acc_B,
+                          acc_hc, acc_g)
                 g_row = None
             Ng = np.diff(starts)
             if scores or subs:
@@ -313,7 +335,8 @@ class _InferenceMixin:
                     out["weights"] = w
                 out[ycol_name] = y
                 # row-level fe[0] contribution (intercept + slopes * variables)
-                out[f"fe_{self.g_fe}"] = np.repeat(g_eff, Ng) if g_row is None else g_row
+                if self.fe:
+                    out[f"fe_{self.g_fe}"] = np.repeat(g_eff, Ng) if g_row is None else g_row
                 for j, f in enumerate(self.o_fe):
                     out[f"fe_{f}"] = gam_y[self.offs[j] + codes[:, j]]
                 out.update({"xb": X @ beta_c, "resid": e})
@@ -322,6 +345,8 @@ class _InferenceMixin:
                     r_writer = pq.ParquetWriter(paths["resid"], tbl.schema)
                 r_writer.write_table(tbl, row_group_size=self.rgs)
 
+            if not self.fe:
+                continue
             slopes_out = ({f"fe_{self.g_fe}[{v}]": g_coef[:, j + 1]
                            for j, v in enumerate(self.slope_vars)} if tcols else {})
             gt = pa.table({**{c: ch[c][starts[:-1]] for c in g_cols},
@@ -331,7 +356,8 @@ class _InferenceMixin:
             g_writer.write_table(gt, row_group_size=self.rgs)
         if r_writer is not None:
             r_writer.close()
-        g_writer.close()
+        if g_writer is not None:
+            g_writer.close()
 
         for f in self.o_fe:
             nl, o = self.n_levels[f], off[f]
@@ -438,7 +464,8 @@ class _InferenceMixin:
             # the Wald F on the excluded instruments, as pyfixest reports it
             excluded = [z for z in znames if z not in names]
             for ei, en in enumerate(iv["endog"]):
-                fs_model = {"fml": f"{en} ~ {' + '.join(znames)} | {' + '.join(self.fe)}",
+                fs_fe = f" | {' + '.join(self.fe)}" if self.fe else ""
+                fs_model = {"fml": f"{en} ~ {' + '.join(znames)}{fs_fe}",
                             "y": en, "x": znames}
                 fs = self._estimate(f"{tag}_fs{ei}", fs_model, A, gamma, ctx)
                 first_stage.append(fs)
@@ -448,14 +475,17 @@ class _InferenceMixin:
                 f_stats.append(float(b @ np.linalg.solve(Vs, b) / len(idx)) if idx else np.nan)
 
         # goodness of fit, with pyfixest's definitions (not reported for IV)
-        k_fe_r2 = sum(self.fe_params.values()) - len(self.fe) + 1
+        # Without fixed effects the constant is one of the k coefficients, and
+        # there is no within R2 (pyfixest reports none either).
+        k_fe_r2 = sum(self.fe_params.values()) - len(self.fe) + 1 if self.fe else 0
         r2 = 1 - rss / ssy if ssy > 0 and not iv else np.nan
-        r2w = 1 - rss / tss_w if tss_w > 0 and not iv else np.nan
+        r2w = 1 - rss / tss_w if tss_w > 0 and not iv and self.fe else np.nan
         diag = {"rss_assembled": float(rss_asm), "rss_rows": float(rss),
                 "bread_rel_diff": (float(np.abs(bread_asm - B).max() / np.abs(B).max()) if k
                                    else 0.0),
                 "cells_per_obs": round(self.n_cells / self.n_obs, 4),
                 "assembly": self.assembly, "nested_in_cluster": nested,
+                "design_evaluated": getattr(self, "design_evaluated", None),
                 "stream": self.stream_choice, "fe_params": dict(self.fe_params),
                 "slope_redundancy": getattr(self, "slope_redundancy", []),
                 "seconds_total": round(time.time() - ctx["t0"], 2)}

@@ -24,6 +24,8 @@ def feols_stream(fml, data, workdir=None, vcov=None, cluster=(), fe_dof="exact",
     """
     Out-of-core OLS with high-dimensional fixed effects from a pyfixest-style
     formula, e.g. "y ~ x1 + i(year, treat, ref=2010) | worker_id + firm_id^year".
+    Any number of fixed effects works, including one ("y ~ x | worker_id",
+    a within regression) and none ("y ~ x", OLS with an intercept).
 
     data    : Parquet path/glob or Polars LazyFrame.
     workdir : directory under which run directories are created (default:
@@ -56,9 +58,11 @@ def feols_stream(fml, data, workdir=None, vcov=None, cluster=(), fe_dof="exact",
         for fe, g in groups.items():
             est = StreamingHDFE(y=list(g["y"].items()), x=list(g["x"].items()), fe=list(fe),
                                 workdir=workdir, models=g["models"], **options)
-            # pyfixest's default: cluster by the first fixed effect as written
-            res = est.fit(lf, vcov=vcov if vcov is not None else
-                          {"CRV1": _parse_fe_term(fe[0])[0]}, cluster=cluster, fe_dof=fe_dof)
+            # pyfixest's default: cluster by the first fixed effect as written,
+            # or iid when there is none
+            default = {"CRV1": _parse_fe_term(fe[0])[0]} if fe else "iid"
+            res = est.fit(lf, vcov=vcov if vcov is not None else default, cluster=cluster,
+                          fe_dof=fe_dof)
             results += list(res) if isinstance(res, HDFEMulti) else [res]
     except BaseException:
         # a later FE set failed: don't leave the earlier sets' files behind

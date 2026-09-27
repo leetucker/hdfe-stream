@@ -149,8 +149,13 @@ def _categorical_vars(rhs, schema):
     return cats
 
 
-def _compile_design(depvar, rhs, schema, levels):
-    """Return (depvar expr, [(coefname, expr), ...]) for one model."""
+def _compile_design(depvar, rhs, schema, levels, intercept=False):
+    """Return (depvar expr, [(coefname, expr), ...]) for one model.
+
+    `intercept`: keep the model matrix's constant, named "Intercept" as in
+    pyfixest. Only a model without fixed effects has one; the formula can
+    still remove it ("y ~ x - 1").
+    """
     import formulaic
     Formula, create_model_matrix = _pyfixest_formula_api()
     needed = {v for v in formulaic.Formula(rhs).required_variables if v in schema}
@@ -171,8 +176,8 @@ def _compile_design(depvar, rhs, schema, levels):
         else:
             synth[v] = rng.uniform(1, 2, R)
     mm = create_model_matrix(Formula.parse(f"__y__ ~ {rhs}")[0], pd.DataFrame(synth),
-                             drop_intercept=True)
-    names = [c for c in mm.independent.columns if c != "Intercept"]
+                             drop_intercept=not intercept)
+    names = [c for c in mm.independent.columns if intercept or c != "Intercept"]
 
     cat_labels = {}
     for v in levels:
@@ -194,6 +199,9 @@ def _compile_design(depvar, rhs, schema, levels):
 
     cols = []
     for nm in names:
+        if nm == "Intercept":
+            cols.append((nm, pl.lit(1.0)))
+            continue
         expr = None
         for c in _split_components(nm):
             e = component(c)
@@ -208,10 +216,6 @@ def _plan_formula(fml, lf):
     Formula, _ = _pyfixest_formula_api()
     schema = lf.collect_schema()
     specs = Formula.parse(fml)
-    for s in specs:
-        if len(_parse_fe(s.fixed_effects)) < 2:
-            raise ValueError(f"'{s.formula}': at least two fixed-effect dimensions are "
-                             "required (the first is streamed)")
 
     # level discovery for all categorical variables (one streaming pass each)
     cats = set()
@@ -227,8 +231,8 @@ def _plan_formula(fml, lf):
     groups = {}
     for s in specs:
         dep, rhs = (t.strip() for t in s.second_stage.split("~", 1))
-        (dname, dexpr), cols = _compile_design(dep, rhs, schema, levels)
         fe = tuple(_parse_fe(s.fixed_effects))
+        (dname, dexpr), cols = _compile_design(dep, rhs, schema, levels, intercept=not fe)
         g = groups.setdefault(fe, {"y": {}, "x": {}, "models": []})
         g["y"][dname] = dexpr
         model = {"fml": s.formula, "y": dname, "x": [nm for nm, _ in cols]}
@@ -238,7 +242,7 @@ def _plan_formula(fml, lf):
             # instrument set Z; the endogenous columns come from compiling the
             # left-hand side as a right-hand side
             endog, fs_rhs = (t.strip() for t in s.first_stage.split("~", 1))
-            _, fs_cols = _compile_design(dep, fs_rhs, schema, levels)
+            _, fs_cols = _compile_design(dep, fs_rhs, schema, levels, intercept=not fe)
             _, en_cols = _compile_design(dep, endog, schema, levels)
             model["iv"] = {"endog": [nm for nm, _ in en_cols], "z": [nm for nm, _ in fs_cols]}
             missing = [e for e in model["iv"]["endog"] if e not in model["x"]]

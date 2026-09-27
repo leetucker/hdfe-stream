@@ -109,7 +109,6 @@ def test_interacted_fixed_effects(akm, workdir):
 # --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("fe,message", [
-    (["worker_id"], "at least two"),
     (["worker_id", "worker_id"], "duplicate"),
 ])
 def test_fixed_effect_sets_are_validated(akm, workdir, fe, message):
@@ -172,3 +171,60 @@ def test_auto_solver_falls_back_when_the_matrix_is_too_large(akm, workdir):
     res = est.fit(akm.src)
     assert res.solver_info["solver"] == "stream_cg"
     assert "fallback" in res.solver_info
+
+
+# --------------------------------------------------------------------------
+# where the design is evaluated
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("expr,row_wise", [
+    ((pl.col("a") == pl.lit(5)).cast(pl.Float64), True),
+    (pl.col("x").log() + pl.col("y").sqrt() - pl.col("z").abs() / 2, True),
+    (pl.when(pl.col("x") > 1).then(pl.col("x")).otherwise(None), True),
+    (pl.col("s").is_in(["a", "b"]), True),
+    (pl.lit(1.0), True),
+    (pl.col("x") - pl.col("x").mean(), False),
+    (pl.col("x") - pl.col("x").mean().over("g"), False),
+    (pl.col("x").shift(1), False),
+    (pl.col("x").cum_sum(), False),
+    (pl.col("x").rank(), False),
+    (pl.col("x").sort(), False),
+    (pl.col("x").fill_null(strategy="forward"), False),
+    (pl.col("x").fill_null(pl.col("x").mean()), False),
+    (pl.col("x").is_in(pl.col("y").implode()), False),
+    (pl.lit(pl.Series([1.0, 2.0])), False),
+])
+def test_row_wise_check(expr, row_wise):
+    """Only expressions whose value on a row depends on that row alone may be
+    evaluated bucket by bucket; everything else must be caught."""
+    from hdfe_stream.utils import _row_wise
+    assert _row_wise(expr)[0] is row_wise
+
+
+def test_row_wise_design_is_evaluated_per_bucket(akm, workdir):
+    est = StreamingHDFE("log_earn", ["age_squared", ("over_40", (pl.col("age") > 40)
+                                                     .cast(pl.Float64))],
+                        FE, workdir=workdir, verbose=False, n_buckets=3)
+    with est.fit(akm.src) as res:
+        assert res.diagnostics["design_evaluated"] == "per bucket"
+
+
+def test_whole_column_expression_falls_back_with_the_same_estimates(akm, workdir):
+    """`(x - mean(x))^2` needs the whole column: evaluated per bucket it would use
+    each bucket's mean. The fit must notice, evaluate the design before
+    partitioning, warn, and give exactly the estimates of the same column
+    defined in the input LazyFrame (where the design is evaluated per bucket)."""
+    centered = (pl.col("age") - pl.col("age").mean()) ** 2
+    est = StreamingHDFE("log_earn", ["age_squared", ("age_c", centered)],
+                        ["worker_id", "firm_id"], workdir=workdir, verbose=False,
+                        n_buckets=3)
+    with pytest.warns(UserWarning, match="'age_c' is not row-wise"):
+        eager = est.fit(akm.src)
+    lazy = pl.scan_parquet(akm.src).with_columns(age_c=centered)
+    deferred = StreamingHDFE("log_earn", ["age_squared", "age_c"], ["worker_id", "firm_id"],
+                             workdir=workdir, verbose=False, n_buckets=3).fit(lazy)
+    with eager, deferred:
+        assert eager.diagnostics["design_evaluated"].startswith("before partitioning")
+        assert deferred.diagnostics["design_evaluated"] == "per bucket"
+        assert rel(eager.beta, deferred.beta) < TOL_BETA
+        assert rel(eager.se, deferred.se) < TOL_BETA

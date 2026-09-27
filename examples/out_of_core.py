@@ -4,7 +4,7 @@ This is the reason the library exists, so it is worth being concrete about what
 is actually held in memory and what is not.
 
 Never in memory
-    the rows. They are read in batches, hash-partitioned into buckets by the
+    all the rows at once. They are read in batches, hash-partitioned into buckets by the
     streamed dimension, sorted one bucket at a time, and reduced to a table of
     cells. Row-level output (residuals, per-row fixed effects) is written
     straight to Parquet.
@@ -13,7 +13,10 @@ In memory
     one vector per level of each *non-streamed* dimension, times a block of at
     most `rhs_block` variables -- so firms x years, not workers x rows. Plus,
     for the explicit solver, the reduced matrix S, whose size depends on how
-    levels co-occur rather than on the number of rows.
+    levels co-occur rather than on the number of rows. And whatever rows are in
+    flight: one bucket while it is sorted, one batch while it is read, each with
+    all of its variables -- which is why a wide design wants smaller buckets and
+    batches (see wide_designs.py).
 
 The streamed dimension -- normally the biggest one, workers -- costs no memory
 at all. That asymmetry is the whole design.

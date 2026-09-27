@@ -37,6 +37,11 @@ is larger than the memory you are allowed. Concretely, reach for it when:
   whose groups each touch only a few levels of the others;
 - you want **worker-specific slopes** as well as intercepts (`worker_id[t]`),
   which multiplies the parameter count by the number of slopes;
+- the design is **wide**: hundreds of covariates, such as a categorical
+  expanded into fine indicators or many interactions. An in-memory library
+  needs rows × covariates in memory before it starts; this needs one batch of
+  rows × covariates at a time, with any number of fixed effects, including one
+  or none (see [many covariates](#many-covariates));
 - you need a hard, predictable memory ceiling — a shared cluster, or a job that
   must not be the one that gets killed.
 
@@ -55,7 +60,9 @@ levels). The reduced normal equations for the non-streamed dimensions are then
 solved by conjugate gradient, and the streamed effects are recovered group by
 group in a final pass that writes residuals and fixed effects straight to
 Parquet. So memory scales with firms × years, not with workers × rows, and that
-asymmetry is the whole design. Full detail is in
+asymmetry is the whole design. The covariates travel with the rows: what is
+held at once is one bucket or batch of rows × covariates, never all of them,
+which is why a wide design fits where an in-memory one does not. Full detail is in
 [`hdfe_stream/__init__.py`](hdfe_stream/__init__.py).
 
 ## Install
@@ -79,7 +86,9 @@ takes column names or Polars expressions instead of a formula string.
 
 ## Features
 
-**Fixed effects.** Any number of dimensions. Interactions with `^`
+**Fixed effects.** Any number of dimensions, including one (a within
+regression, `y ~ x | worker_id`) and none (OLS with an intercept, `y ~ x`).
+Interactions with `^`
 (`firm_id^year`). Varying slopes on the streamed dimension in fixest syntax
 (`worker_id[t]`, `worker_id[t, t2]`). Connected components of the
 worker–firm graph are computed and reported, and the degrees-of-freedom
@@ -90,7 +99,9 @@ correction counts the fixed-effect parameters that are actually identified
 string columns), interactions (`:`, `*`), event-study terms
 (`i(year, treat, ref=2009)`). Terms spanned by the fixed effects are dropped
 exactly as pyfixest drops them. Every term compiles to a Polars expression, so
-the design is built while the data streams.
+the design is built while the data streams, one bucket at a time: a categorical
+expanded into hundreds of indicators is carried through the partitioning as the
+one column it comes from.
 
 **Standard errors.** `iid`, heteroskedasticity-robust (`hetero`/HC1), and CRV1
 clustered on any column, any `^` interaction, or several dimensions at once
@@ -213,6 +224,90 @@ projections struggles with. If you are comparing, compare against LSMR.
 million workers, where `stream_cg` and `explicit` stay near 5.5 GB. Prefer
 those when memory is the constraint.
 
+### Many covariates
+
+The same kind of comparison, holding the data fixed and varying its width: the
+million-worker panel (8.5 million rows, 66,665 firms) with age entered as
+indicators, `log_earn ~ i(age_bin) | worker_id + firm_id`, clustered by worker,
+in bins from five years wide (8 indicators) down to one month (503). hdfe_stream
+runs at its defaults and "sized to the design", with bucket, batch and row-group
+sizes scaled down as the design widens (the rule is below). The numbers are in
+[benchmarks/results/covariates.csv](benchmarks/results/covariates.csv); every
+configuration that finished agrees with every other to within 1e-8.
+
+```bash
+python benchmarks/covariates_benchmark.py
+```
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/covariates_memory.dark.svg">
+  <img alt="Many covariates: peak memory against the number of covariates, one line per configuration, log-log" src="docs/figures/covariates_memory.light.svg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/covariates_time.dark.svg">
+  <img alt="Many covariates: wall time against the number of covariates, one line per configuration, log-log" src="docs/figures/covariates_time.light.svg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/covariates_disk.dark.svg">
+  <img alt="Many covariates: peak disk use of hdfe_stream against the number of covariates, log-log" src="docs/figures/covariates_disk.light.svg">
+</picture>
+
+Wall time and peak memory ("—": ran out of this machine's 26 GB):
+
+| covariates | pyfixest (MAP) | pyfixest (LSMR) | xhdfe | hdfe_stream | hdfe_stream, sized |
+|---:|---:|---:|---:|---:|---:|
+| 8 | 219 s, 5.7 GB | 17 s, 7.3 GB | 18 s, 9.0 GB | 7 s, 3.0 GB | 8 s, 2.9 GB |
+| 41 | 522 s, 13.1 GB | 56 s, 17.3 GB | 55 s, 18.1 GB | 25 s, 8.0 GB | 25 s, 4.1 GB |
+| 83 | 1,026 s, 24.8 GB | 189 s, 25.4 GB | — | 60 s, 14.6 GB | 50 s, 4.8 GB |
+| 167 | — | — | — | 237 s, 25.5 GB | 125 s, 5.3 GB |
+| 503 | — | — | — | — | **1,190 s, 8.9 GB** |
+
+**The in-memory libraries run out first.** Their peak grows with rows ×
+covariates. At 8.5 million rows pyfixest was within 1 GB of this machine's 26 GB
+at 83 indicators and out of memory at 167; xhdfe was already out of memory at
+83. hdfe_stream sized to the
+design goes from 2.9 GB at 8 indicators to 5.3 GB at 167 and 8.9 GB at 503. Of
+that last figure, about 4.9 GB is the memory-mapped cell table: file pages the
+kernel can drop under pressure. The memory the fit itself allocated peaked at
+4.6 GB (a separate profile, reading the process's anonymous and file-backed
+pages apart).
+
+**Size the batches to the design.** At its defaults hdfe_stream holds a whole
+bucket of up to 20 million rows, with every covariate, while it sorts; that is
+fine for a handful of covariates and not for hundreds (25.5 GB at 167, out of
+memory at 503). Every step that holds rows holds all the covariates, so scale
+`rows_per_bucket`, `batch_rows` and `row_group_size` down with the width. The
+benchmark aims at about 1 GB of design per bucket and 250 MB per batch and row
+group, never above the defaults:
+
+```python
+per_row = 8 * (k + 4)                   # k covariates, plus outcome and ids
+batch = min(2_000_000, int(250e6 // per_row))
+fit = feols_stream(fml, data, rows_per_bucket=min(20_000_000, int(1e9 // per_row)),
+                   batch_rows=batch, row_group_size=min(500_000, batch))
+```
+
+**Time grows with the square of the width.** The cross-products are k × k per
+row, so 503 indicators take 20 minutes where 167 take two. hdfe_stream is still
+the fastest configuration at every width measured, but the growth is steep; its
+per-row cross-product loops are not yet handed to BLAS.
+
+**Disk grows with the width too**, since the working copy of the rows carries
+every covariate: 0.3 GB at 8 indicators, 6 GB at 503.
+
+**How the design is built matters.** A formula term such as `i(age_bin)` is
+carried through the partitioning as the one column it is computed from, and the
+indicators are built one bucket at a time. That works for any expression whose
+value on a row depends on that row alone, which formula terms always do. With
+the low-level `StreamingHDFE`, an expression that needs the whole column
+(`pl.col("x") - pl.col("x").mean()`, a window, a shift) is detected and the design
+is built before partitioning instead, with a warning: the estimates are the
+same, the memory is not. Define such a column in the input LazyFrame to avoid
+it. `result.diagnostics["design_evaluated"]` says which happened.
+[examples/wide_designs.py](examples/wide_designs.py) puts this together.
+
 ### Trading memory for time
 
 Same data, same solver, same answer — only how much is in flight at once:
@@ -233,7 +328,9 @@ python benchmarks/akm_benchmark.py --memory-sweep 1000000
 Most of the saving comes from the first step down. The defaults are tuned for a
 machine with room to spare; if memory is the binding constraint, set
 `rows_per_bucket` to something near what you can afford and leave the rest
-alone. `rhs_block` bounds the other big array (levels × variables), and
+alone (with many covariates, scale `batch_rows` and `row_group_size` down too;
+see [many covariates](#many-covariates)). `rhs_block` bounds the other big
+array (levels × variables), and
 `max_s_gb` caps the explicit reduced matrix, above which `solver="auto"` falls
 back to `stream_cg` by itself.
 
@@ -270,6 +367,8 @@ Runnable, on simulated data, no setup — see [examples/](examples/):
 | [`akm_variance.py`](examples/akm_variance.py) | the variance decomposition, in a streaming pass |
 | [`formulas.py`](examples/formulas.py) | the formula syntax, end to end |
 | [`weights_and_iv.py`](examples/weights_and_iv.py) | weights and 2SLS |
+| [`fewer_fixed_effects.py`](examples/fewer_fixed_effects.py) | one fixed effect, or none |
+| [`wide_designs.py`](examples/wide_designs.py) | hundreds of covariates, and sizing the batches to them |
 | [`varying_slopes.py`](examples/varying_slopes.py) | worker-specific trends, and the low-level interface |
 | [`out_of_core.py`](examples/out_of_core.py) | memory, disk, solvers, logging |
 | [`reporting.py`](examples/reporting.py) | tables and plots via pyfixest |
@@ -355,7 +454,6 @@ pytest
 
 ## Limitations
 
-- **Two fixed-effect dimensions minimum.** For one, use pyfixest.
 - **Varying slopes only on the streamed dimension**, and only one dimension may
   carry them.
 - **CRV1 only** for clustered errors: no CRV3, no wild bootstrap, no jackknife.
@@ -367,6 +465,10 @@ pytest
   estimation adds to that: it memory-maps its row-sized accumulators rather than
   holding them, which is what keeps it inside a bounded memory footprint, at
   about 90 bytes per row of scratch while it runs.
+- **Wide designs need the batch sizes scaled down** (see
+  [many covariates](#many-covariates)): the defaults hold a whole bucket of rows
+  with every covariate. And the cross-products cost k × k per row, so time grows
+  with the square of the number of covariates.
 - **Leave-out estimation handles one outcome at a time**, and its standard
   errors omit the split-sample refinement of KSS §4.2 (so they are conservative,
   as their Lemma 5 provides for). Under weak identification it supplies the

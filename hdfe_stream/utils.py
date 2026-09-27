@@ -91,3 +91,107 @@ def _norm_vars(items):
             name, expr = it
             out[name] = expr.cast(pl.Float64)
     return out
+
+
+# --------------------------------------------------------------------------
+# row-wise expressions
+#
+# Pass 0 can evaluate the design either before the rows are partitioned into
+# buckets or afterwards, one bucket at a time. Afterwards is far cheaper for a
+# wide design (a categorical expanded into hundreds of indicators is carried
+# through the partition as one column), but it is only correct for expressions
+# whose value on a row depends on that row alone: evaluated per bucket,
+# `pl.col("x") - pl.col("x").mean()` would subtract each bucket's mean.
+#
+# Polars 1.x has no public test for that, so `_row_wise` walks the serialized
+# expression tree against an allowlist. Anything it does not recognize counts
+# as not row-wise, which is the safe direction: the caller then evaluates the
+# design before partitioning, exactly as it did before, and pays only memory.
+# A change in Polars' serialization can therefore make the test more cautious
+# but never wrong.
+# --------------------------------------------------------------------------
+
+# expression variants that are row-wise provided their inputs are
+_ROW_NODES = {"Column", "Cast", "Alias", "BinaryExpr", "Ternary", "Function", "Literal"}
+
+# Function names (with their category, where Polars nests them). Aggregations,
+# windows, sorts, slices, filters, shift/diff/cum_*, rank and fill_null by
+# strategy are all missing on purpose.
+_ROW_FUNCTIONS = {
+    "Log", "Log1p", "Exp", "Negate", "Abs", "Floor", "Ceil", "Round", "Clip", "Sign",
+    "FillNull", "AsStruct", "Hash",
+    "Pow.Generic", "Pow.Sqrt", "Pow.Cbrt",
+    "Boolean.IsNull", "Boolean.IsNotNull", "Boolean.IsFinite", "Boolean.IsInfinite",
+    "Boolean.IsNan", "Boolean.IsNotNan", "Boolean.Not", "Boolean.IsIn",
+    "Trigonometry.Sin", "Trigonometry.Cos", "Trigonometry.Tan", "Trigonometry.ArcSin",
+    "Trigonometry.ArcCos", "Trigonometry.ArcTan", "Trigonometry.Sinh",
+    "Trigonometry.Cosh", "Trigonometry.Tanh",
+    "StringExpr.LenChars", "StringExpr.LenBytes", "StringExpr.Contains",
+    "StringExpr.StartsWith", "StringExpr.EndsWith", "StringExpr.Lowercase",
+    "StringExpr.Uppercase",
+    "TemporalExpr.Year", "TemporalExpr.Month", "TemporalExpr.Day",
+    "TemporalExpr.Quarter", "TemporalExpr.Week", "TemporalExpr.WeekDay",
+    "TemporalExpr.OrdinalDay", "TemporalExpr.Hour", "TemporalExpr.Minute",
+    "TemporalExpr.Second",
+}
+
+
+def _function_name(spec):
+    """'Log' from "Log"; 'Pow.Sqrt' from {"Pow": "Sqrt"}; 'Clip' from
+    {"Clip": {...options}}; 'Boolean.IsIn' from {"Boolean": {"IsIn": ...}}."""
+    if isinstance(spec, str):
+        return spec
+    if isinstance(spec, dict) and len(spec) == 1:
+        (key, value), = spec.items()
+        if isinstance(value, str):
+            return f"{key}.{value}"
+        if isinstance(value, dict) and len(value) == 1 and key in (
+                "Boolean", "StringExpr", "TemporalExpr", "Trigonometry", "Pow"):
+            return f"{key}.{next(iter(value))}"
+        return key
+    return None
+
+
+def _row_wise(expr):
+    """(True, None) if `expr` is known to be row-wise, else (False, what was
+    not recognized)."""
+    import json
+
+    try:
+        tree = json.loads(expr.meta.serialize(format="json"))
+    except Exception as err:          # noqa: BLE001 -- anything: be cautious
+        return False, f"cannot inspect it ({type(err).__name__})"
+
+    def walk(node):
+        if not isinstance(node, dict) or len(node) != 1:
+            return str(node)[:40]
+        (kind, body), = node.items()
+        if kind not in _ROW_NODES:
+            return kind
+        if kind == "Column":
+            return None
+        if kind == "Literal":
+            # a scalar broadcasts; a Series literal is positional
+            return None if isinstance(body, dict) and set(body) <= {"Dyn", "Scalar"} else "Series literal"
+        if kind == "Cast":
+            return walk(body["expr"])
+        if kind == "Alias":
+            return walk(body[0])
+        if kind == "BinaryExpr":
+            return walk(body["left"]) or walk(body["right"])
+        if kind == "Ternary":
+            return walk(body["predicate"]) or walk(body["truthy"]) or walk(body["falsy"])
+        name = _function_name(body.get("function"))
+        if name not in _ROW_FUNCTIONS:
+            return f"function {name}"
+        inputs = body.get("input", [])
+        if name == "Boolean.IsIn" and any("Literal" not in i for i in inputs[1:]):
+            return "is_in against a column"
+        for sub in inputs:
+            bad = walk(sub)
+            if bad:
+                return bad
+        return None
+
+    bad = walk(tree)
+    return (bad is None), bad

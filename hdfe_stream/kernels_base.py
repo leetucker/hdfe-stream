@@ -69,10 +69,14 @@ def _nb_diag(starts, codes, n, offs, diag):
 
 
 @nb.njit(parallel=True, cache=True)
-def _nb_assemble_rows(starts, codes, offs, w, V, Gamma, acc):
+def _nb_assemble_rows(starts, codes, offs, w, V, Gamma, demean, acc):
     """acc[t] += sum over rows of w v~ v~', with v~ = v - sum_d Gamma_d[level]
     minus its weighted fe[0]-group mean: the fully residualized
-    cross-products."""
+    cross-products.
+
+    With `demean` False there is no fe[0] (no fixed effects at all) and the
+    group mean is zero; `starts` then only splits the rows among threads.
+    """
     nt, D, m = acc.shape[0], codes.shape[1], V.shape[1]
     G = len(starts) - 1
     for t in nb.prange(nt):
@@ -81,16 +85,17 @@ def _nb_assemble_rows(starts, codes, offs, w, V, Gamma, acc):
         for gi in range(t * G // nt, (t + 1) * G // nt):
             s, e = starts[gi], starts[gi + 1]
             qg[:] = 0.0
-            Wg = 0.0
-            for i in range(s, e):
-                Wg += w[i]
+            if demean:
+                Wg = 0.0
+                for i in range(s, e):
+                    Wg += w[i]
+                    for j in range(m):
+                        v = V[i, j]
+                        for d in range(D):
+                            v -= Gamma[offs[d] + codes[i, d], j]
+                        qg[j] += w[i] * v
                 for j in range(m):
-                    v = V[i, j]
-                    for d in range(D):
-                        v -= Gamma[offs[d] + codes[i, d], j]
-                    qg[j] += w[i] * v
-            for j in range(m):
-                qg[j] /= Wg
+                    qg[j] /= Wg
             for i in range(s, e):
                 for j in range(m):
                     v = V[i, j]
@@ -298,11 +303,14 @@ def _nb_assemble(starts, codes, n, sums, offs, Gamma, acc):
 
 @nb.njit(parallel=True, cache=True)
 def _nb_pass2(starts, codes, offs, w, y, X, beta, gam_y, gam_y0, Z, gam_z, Pi, yc,
-              fweights, g_eff, e_out, h_out, acc_s, acc_B, acc_hc, acc_g):
+              fweights, demean, g_eff, e_out, h_out, acc_s, acc_B, acc_hc, acc_g):
     """Row pass for one chunk of complete fe[0] groups.
 
     Residuals use the regressors X:  e = y - X beta - FEs, with the fe[0]
-    effect the weighted group mean of y - X beta - (other FEs). The scores
+    effect the weighted group mean of y - X beta - (other FEs). With `demean`
+    False there is no fe[0] (no fixed effects at all): that effect, and every
+    other group mean, is zero, and `starts` only splits the rows among
+    threads (acc_g is then meaningless). The scores
     use h = Pi' z~, where z~ are the residualized instruments Z; for OLS,
     Z = X and Pi = I, so h = x~. Per-thread accumulators:
       acc_s[t]  = [sum w e^2, sum w y~^2, sum w (y-yc), sum w (y-yc)^2]
@@ -342,10 +350,15 @@ def _nb_pass2(starts, codes, offs, w, y, X, beta, gam_y, gam_y0, Z, gam_z, Pi, y
                 mu += wi * u
                 my += wi * yy
                 e_out[i] = u
-            mu /= Wg
-            my /= Wg
-            for j in range(q):
-                mz[j] /= Wg
+            if demean:
+                mu /= Wg
+                my /= Wg
+                for j in range(q):
+                    mz[j] /= Wg
+            else:
+                mu = 0.0
+                my = 0.0
+                mz[:] = 0.0
             g_eff[gi] = mu
             sg[:] = 0.0
             for i in range(s, e):

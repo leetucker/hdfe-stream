@@ -154,6 +154,11 @@ class HDFEResult:
                 "cannot be reached; use the top-level hdfe_stream.leave_out_kss")
         from .leaveout import _check_leave_out
 
+        if len(estimator.fe_user) < 2:
+            raise ValueError("leave-out variance components need two fixed effects "
+                             "(worker and firm); this model has "
+                             f"{len(estimator.fe_user) or 'none'}")
+
         _check_leave_out(leave_out, se, stayers, centering, se_variance,
                          self.weights)
 
@@ -205,6 +210,9 @@ class HDFEResult:
         """Lazy scan of one dimension's estimated fixed effects. The file lives
         as long as this result object (outputs='auto'): collect or sink what
         you need before dropping the result."""
+        if name not in self.paths["fe"]:
+            raise KeyError(f"{name!r} is not a fixed effect of this model; it has "
+                           + (", ".join(map(repr, self.paths["fe"])) or "none"))
         return self._scan(self.paths["fe"][name], f"fixed effects for {name!r}")
 
     def resid(self) -> pl.LazyFrame:
@@ -243,13 +251,17 @@ class HDFEResult:
                  "obs: {:,}   ".format(self.n_obs)
                  + "   ".join(f"{k}: {v:,}" for k, v in self.n_levels.items())]
         st = self.diagnostics.get("stream")
-        if st:
+        if st and st["dim"] is not None:
             lines.append(f"streamed dimension: {st['dim']} ({st['reason']})")
-        lines.append(f"identifying {self.fe_names[0]} groups: {self.n_identifying:,}   "
-                     f"({self.fe_names[0]} x {self.fe_names[1]}) components: "
-                     f"{self.n_components:,}")
-        lines.append(f"FE dof: {self.k_fe:,}   RSS: {self.rss:.6g}   RMSE: {self.rmse:.4g}   "
-                     f"R2: {self.r2:.6f}   within R2: {self.r2_within:.6f}")
+        if len(self.fe_names) >= 2:
+            lines.append(f"identifying {self.fe_names[0]} groups: {self.n_identifying:,}   "
+                         f"({self.fe_names[0]} x {self.fe_names[1]}) components: "
+                         f"{self.n_components:,}")
+        fit = f"RSS: {self.rss:.6g}   RMSE: {self.rmse:.4g}   R2: {self.r2:.6f}"
+        if self.fe_names:
+            fit = (f"FE dof: {self.k_fe:,}   {fit}   "
+                   f"within R2: {self.r2_within:.6f}")
+        lines.append(fit)
         if self.weights:
             lines.append(f"weights: {self.weights} ({self.weights_type})")
         if self.is_iv:

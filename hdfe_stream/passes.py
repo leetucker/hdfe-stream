@@ -4,6 +4,7 @@ and find connected components.
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -12,7 +13,12 @@ import polars as pl
 
 from .kernels_base import _nb_components, _nb_diag
 from .kernels_slopes import _nb_diag_sl
-from .utils import _segments, iter_group_chunks
+from .report import _warn
+from .utils import _row_wise, _segments, iter_group_chunks
+
+# names pass 0 gives its own columns; a raw column carried through the
+# partition must not share one
+_RESERVED = re.compile(r"w|_bucket|gcode|[vtck]\d+")
 
 
 # Shared-state contract with the other mixins
@@ -46,15 +52,16 @@ class _PassesMixin:
         if missing:
             raise ValueError(f"columns not found in data: {missing}")
         m = self.m
+        source = lf
         wexpr = [self.weights.alias("w")] if self.weights is not None else []
         texpr = [pl.col(v).cast(pl.Float64).alias(f"t{j + 1}")
                  for j, v in enumerate(self.slope_vars)]
-        finite = [pl.col(f"v{j}").is_finite() for j in range(m)]
-        finite += [pl.col(f"t{j + 1}").is_finite() for j in range(len(self.slope_vars))]
+        design = [self.var_exprs[nm].alias(f"v{j}") for j, nm in enumerate(self.var_names)]
+        others_finite = [pl.col(f"t{j + 1}").is_finite() for j in range(len(self.slope_vars))]
         if self.weights is not None:
-            finite.append(pl.col("w").is_finite())
-        lf = (lf.select([pl.col(c) for c in src + self.keep] + wexpr + texpr
-                        + [self.var_exprs[nm].alias(f"v{j}") for j, nm in enumerate(self.var_names)])
+            others_finite.append(pl.col("w").is_finite())
+        finite = [pl.col(f"v{j}").is_finite() for j in range(m)] + others_finite
+        lf = (lf.select([pl.col(c) for c in src + self.keep] + wexpr + texpr + design)
                 .drop_nulls(src)
                 .filter(pl.all_horizontal(finite)))
 
@@ -63,7 +70,7 @@ class _PassesMixin:
         wstats = ([pl.col("w").sum().alias("wsum"), pl.col("w").min().alias("wmin")]
                   if self.weights is not None else [])
         tstats = [pl.col(f"t{j + 1}").mean() for j in range(len(self.slope_vars))]
-        need_card = self.stream is None and not self.slopes
+        need_card = self.stream is None and not self.slopes and len(self.fe_user) > 1
         card = []
         if need_card:
             for d in self.fe_user:
@@ -80,7 +87,8 @@ class _PassesMixin:
         g, why = self._choose_stream(approx)
         self._setup_dims(g)
         self.stream_choice = {"dim": g, "reason": why}
-        self._log(f"pass 0: streaming {g} ({why})")
+        self._log(f"pass 0: streaming {g} ({why})" if g is not None
+                  else "pass 0: no fixed effects (ordinary least squares)")
         self._resolve_clusters(keys, extra)
         self.tmeans = np.array([mom[f"t{j + 1}"].item() for j in range(len(self.slope_vars))])
         self.n_obs = mom["n"].item()
@@ -102,7 +110,21 @@ class _PassesMixin:
         maps = [(d, self.fe_cols[d], cc, self.paths["maps"][d])
                 for d, cc in zip(self.o_fe, self.ccols)]
         maps += [(name, cm["cols"], cm["code"], cm["map"]) for name, cm in self.cmaps.items()]
-        coded = lf
+        # The rows that are partitioned carry either the evaluated design
+        # (`lf`) or, when that is safe, only the columns it is computed from,
+        # with the design evaluated bucket by bucket at the sort below. See
+        # _defer_design. The filter is the same either way, so both select
+        # exactly the same rows.
+        raw_extra = self._defer_design(schema, src)
+        if raw_extra is None:
+            coded = lf
+        else:
+            coded = (source.select([pl.col(c) for c in src + self.keep + raw_extra]
+                                   + wexpr + texpr)
+                           .drop_nulls(src)
+                           .filter(pl.all_horizontal(
+                               [self.var_exprs[nm].is_finite() for nm in self.var_names]
+                               + others_finite)))
         for name, cols, cc, path in maps:
             self._log(f"pass 0: factorizing {name}")
             lf.select(cols).unique().sort(cols).with_row_index(cc).sink_parquet(path)
@@ -112,6 +134,18 @@ class _PassesMixin:
             else:
                 self.cmaps[name]["G"] = nl
             coded = coded.join(pl.scan_parquet(path), on=cols)
+
+        if self.no_fe:
+            # Nothing to group by, so nothing to partition or sort: the rows
+            # go to disk in the order they arrive, in one file.
+            self._log("pass 0: writing rows (no fixed effects: no grouping)")
+            out = str(self.workdir / "rows_b0000.parquet")
+            coded.sink_parquet(out, row_group_size=self.rgs)
+            self.paths["rows"] = [out]
+            self._track_disk()
+            for spec in self.clusters.values():
+                spec["G"] = self.cmaps[spec["map"]]["G"]
+            return
 
         # Hash-partition rows by fe[0]: every group lands in exactly one bucket.
         g_cols = self.fe_cols[self.g_fe]
@@ -158,7 +192,10 @@ class _PassesMixin:
             sort_by = list(g_cols)
             if self.keep_intermediates:
                 sort_by += [*self.ccols, *[f"v{j}" for j in range(self.m)]]
-            (pl.scan_parquet(str(srcdir / "*.parquet"))
+            bucket = pl.scan_parquet(str(srcdir / "*.parquet"))
+            if raw_extra is not None:
+                bucket = bucket.with_columns(design).drop(raw_extra)
+            (bucket
                .sort(sort_by)
                .with_columns(gcode=(new_group.cast(pl.UInt32).cum_sum() - 1 + offset)
                              .cast(pl.UInt32))
@@ -338,11 +375,73 @@ class _PassesMixin:
         self.offs = np.array([off[f] for f in self.o_fe], np.int64)
         self.n_ident_cells = M
 
+    def _defer_design(self, schema, src):
+        """Decide where the design is evaluated; see `utils._row_wise`.
+
+        Returns None to evaluate it before partitioning (the rows then carry
+        the m design columns through the partition and the sort), or the list
+        of extra raw columns to partition instead, with the design evaluated
+        one bucket at a time. The second is what keeps a wide design -- one
+        categorical expanded into hundreds of indicators -- from multiplying
+        the partition's memory by the number of indicators; it is taken
+        whenever every design expression is row-wise, which formula-built
+        designs always are. Otherwise the fit falls back, with a warning: the
+        estimates are the same, only the memory differs.
+        """
+        self.design_evaluated = "before partitioning"
+        if self.no_fe:                  # nothing is partitioned
+            return None
+        for name in self.var_names:
+            ok, why = _row_wise(self.var_exprs[name])
+            if not ok:
+                self.design_evaluated += f" ({name!r} is not row-wise: {why})"
+                _warn(f"the expression for {name!r} is not row-wise ({why}), so the "
+                      "design is evaluated before the rows are partitioned. The "
+                      "estimates are unaffected; with many covariates it costs "
+                      "memory. To avoid it, define the column in the input "
+                      "LazyFrame and name it here.", self.logger)
+                return None
+        taken = set(src) | set(self.keep)
+        roots = dict.fromkeys(r for name in self.var_names
+                              for r in self.var_exprs[name].meta.root_names())
+        extra = [r for r in roots if r not in taken]
+        missing = [r for r in extra if r not in schema]
+        clash = [r for r in extra if _RESERVED.fullmatch(r)]
+        if missing or clash:
+            # missing: let the eager path raise Polars' own error;
+            # clash: a raw column would collide with an internal one
+            self.design_evaluated += f" (column names {missing or clash})"
+            return None
+        self.design_evaluated = "per bucket"
+        return extra
+
+    # ------------------------------------------------------------- no FE
+    def _no_cells(self):
+        """Stand-in for passes 1 and 1b when there are no fixed effects.
+
+        There are no cells and nothing for the solver to do: every count the
+        later steps read is set to what it means for plain OLS.
+        """
+        self.n_levels, self.fe_params = {}, {}
+        self.n_cells, self.n_ident_cells, self.n_identifying = self.n_obs, 0, 0
+        self.n_components, self.fe0_rank = 0, 0
+        self.obs = self.cnt = self.diag = np.zeros(0)
+        self.comp = np.zeros(0, np.int64)
+        self.starts = np.zeros(1, np.int64)
+        self.codes = np.zeros((0, 0), np.uint32)
+        self.n = np.zeros(0)
+        self.sums = np.zeros((0, self.m))
+        self.offs = np.zeros(0, np.int64)
+
     # ----------------------------------------------------------- components
     def _components(self):
         """Connected components of the (fe[0], fe[1]) graph by union-find.
         Only the first two dimensions get exact redundancy accounting; any
         further dimension contributes one more restriction (see `fe_dof`)."""
+        if not self.o_fe:           # one dimension: no graph to connect
+            self.comp = np.zeros(0, np.int64)
+            self.n_components = 0
+            return
         self._log("computing connected components")
         lab = _nb_components(self.starts, self.codes, self.n_levels[self.o_fe[0]])
         self.comp = lab
