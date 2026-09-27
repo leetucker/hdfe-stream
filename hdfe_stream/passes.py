@@ -134,8 +134,32 @@ class _PassesMixin:
             if not srcdir.exists():
                 continue
             out = str(self.workdir / f"rows_b{bkt:04d}.parquet")
+            # Every fit sorts each bucket by fe[0], because the streaming
+            # algorithm needs whole groups together. A fit whose intermediates
+            # are being kept sorts by more than that: the other dimensions'
+            # codes, then the variables.
+            #
+            # That wider key makes the stored row order a function of the data
+            # rather than of the order it arrived in, which is what leave-out
+            # estimation needs -- it draws random vectors keyed on a row's
+            # position, so without it the same data written in a different order
+            # gives a different (equally valid, but unreproducible) answer. Both
+            # halves matter: without the codes a re-exported panel changes the
+            # answer, and without the variables two observations of the same
+            # worker at the same firm stay tied and can swap between runs.
+            #
+            # Keeping the intermediates is the condition because it is exactly
+            # what makes the operator in inverse.py reachable: if you can get at
+            # the row files, their order is canonical. An ordinary fit pays
+            # nothing for a guarantee it cannot use.
+            #
+            # Groups stay contiguous either way, since fe[0] leads the key, so
+            # `gcode` does not depend on this.
+            sort_by = list(g_cols)
+            if self.keep_intermediates:
+                sort_by += [*self.ccols, *[f"v{j}" for j in range(self.m)]]
             (pl.scan_parquet(str(srcdir / "*.parquet"))
-               .sort(g_cols)
+               .sort(sort_by)
                .with_columns(gcode=(new_group.cast(pl.UInt32).cum_sum() - 1 + offset)
                              .cast(pl.UInt32))
                .sink_parquet(out, row_group_size=self.rgs))

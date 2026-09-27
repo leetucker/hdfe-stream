@@ -23,6 +23,12 @@ formula = [
     "pandas>=2.0",
 ]
 all = ["hdfe-stream[within,amg,formula]"]
+# benchmarks/: pyfixest to compare against and matplotlib for the figures.
+# xhdfe is compared too, but installs from source (see benchmarks/README.md)
+benchmark = [
+    "hdfe-stream[formula]",
+    "matplotlib>=3.7",
+]
 # the test suite compares against pyfixest, so it needs the formula extra
 test = [
     "pytest>=7.0",

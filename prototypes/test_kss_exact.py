@@ -148,7 +148,7 @@ def test_estimated_bias_term_has_the_expected_sign(panel):
 
 
 def test_components_are_invariant_to_which_firm_is_dropped(panel):
-    """The normalisation sets one firm effect to zero; the variance components
+    """The normalization sets one firm effect to zero; the variance components
     are location-invariant and must not depend on which firm that is."""
     reversed_firms = Panel(worker=panel.worker,
                            firm=panel.n_firms - 1 - panel.firm,

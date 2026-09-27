@@ -227,3 +227,76 @@ if __name__ == "__main__":
     print(f"{df.height:,} rows x {df.width} columns -> {out}")
     print(f"{df['worker_id'].n_unique():,} workers, {df['firm_id'].n_unique():,} firms, "
           f"{df['year'].n_unique()} years")
+
+
+def simulate_bottleneck(n_bridge=6, firms_per_block=8, movers_per_block=150,
+                        stayers_per_firm=8, block_gap=0.5, sd_worker=0.4,
+                        sd_firm=0.3, sd_noise=0.15, seed=0, keep_effects=False):
+    """A panel whose AKM variance components are weakly identified.
+
+    Two blocks of firms with plenty of mobility inside each and only `n_bridge`
+    workers moving between them: a bottleneck in the mobility network. The
+    difference between the blocks' average firm effects is then one linear
+    combination of the effects that is estimated far worse than the rest, so
+    one eigenvalue dominates the estimator's variance -- KSS's weakly identified
+    case, where the normal interval undercovers and the q = 1 interval is the
+    one to use. `leave_out_kss(..., se=True)` reports both.
+
+    Parameters
+    ----------
+    n_bridge : workers moving between the blocks. Fewer is weaker; with only
+        one or two, the leading direction rests on so few rows that even the
+        q = 1 theory's conditions fail, and six is a comfortable middle.
+    firms_per_block, movers_per_block, stayers_per_firm : the size of each block.
+        Movers are observed four years across two firms of their block, stayers
+        three years at one.
+    block_gap : added to every firm effect in the second block. It sets how far
+        the badly estimated direction's true value is from zero, which is what
+        decides whether the ordinary interval merely widens or badly undercovers.
+    sd_worker, sd_firm, sd_noise : standard deviations of the effects and the
+        residual.
+    seed : anything accepted by `np.random.default_rng`.
+    keep_effects : also return the effects that generated the data, as in
+        `simulate_akm`.
+
+    Returns
+    -------
+    A Polars DataFrame with worker_id, firm_id and log_earn (and, with
+    `keep_effects`, true_worker_effect and true_firm_effect).
+    """
+    rng = np.random.default_rng(seed)
+    n_firms = 2 * firms_per_block
+    firm_effect = rng.normal(0, sd_firm, n_firms)
+    firm_effect[firms_per_block:] += block_gap
+    worker, firm = [], []
+    wid = 0
+
+    def add(firms):
+        nonlocal wid
+        worker.extend([wid] * len(firms))
+        firm.extend(firms)
+        wid += 1
+
+    for block in range(2):
+        firms = list(range(block * firms_per_block, (block + 1) * firms_per_block))
+        for _ in range(movers_per_block):
+            a, b = rng.choice(firms, 2, replace=False)
+            add([a, a, b, b])
+        for f in firms:
+            for _ in range(stayers_per_firm):
+                add([f] * 3)
+    for k in range(n_bridge):
+        a = k % firms_per_block
+        add([a, a, firms_per_block + a, firms_per_block + a])
+
+    worker = np.asarray(worker)
+    firm = np.asarray(firm)
+    worker_effect = rng.normal(0, sd_worker, wid)
+    alpha = worker_effect[worker]
+    psi = firm_effect[firm]
+    y = alpha + psi + rng.normal(0, sd_noise, len(worker))
+    df = pl.DataFrame({"worker_id": worker, "firm_id": firm, "log_earn": y})
+    if keep_effects:
+        df = df.with_columns(true_worker_effect=pl.Series(alpha),
+                             true_firm_effect=pl.Series(psi))
+    return df

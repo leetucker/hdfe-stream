@@ -1,6 +1,6 @@
 """Two-stage least squares, weighted least squares, and fit statistics.
 
-Weights come in both flavours: `aweights` (analytic, the default) and
+Weights come in both flavors: `aweights` (analytic, the default) and
 `fweights` (frequency, where N is the sum of the weights rather than the row
 count, which changes every degrees-of-freedom correction).
 """
@@ -47,7 +47,7 @@ def reference_kwargs(options):
 def fitted(rich, tmp_path_factory):
     """One streaming fit and one pyfixest reference per case.
 
-    The streaming fit computes every vcov flavour in a single pass (`cluster=`
+    The streaming fit computes every vcov flavor in a single pass (`cluster=`
     asks for the extra ones), so the tests below switch between them with
     `with_vcov` instead of refitting.
     """
@@ -126,7 +126,7 @@ def test_first_stage_f_matches_wald_statistic(rich, tmp_path_factory, index, key
     is pyfixest's own first stage, so this pins the definition rather than
     copying a number.
 
-    The statistic depends on the vcov, so each flavour needs its own fit.
+    The statistic depends on the vcov, so each flavor needs its own fit.
     """
     from pyfixest.estimation.formula.parse import Formula
 

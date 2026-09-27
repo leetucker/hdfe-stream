@@ -32,7 +32,7 @@ def fml_for(fe):
 
 
 def fit_stream(panel, fe, workdir, solver="auto", fe_dof=FE_DOF_PF, **options):
-    """A streaming fit with all the vcov flavours computed in one pass.
+    """A streaming fit with all the vcov flavors computed in one pass.
 
     Small `batch_rows` and several buckets on purpose: it forces the
     multi-batch and multi-bucket code paths that a large real dataset hits.
@@ -49,7 +49,7 @@ def references(akm):
     """One pyfixest reference per FE set, fitted once for the whole module.
 
     pyfixest recomputes the vcov in place via `.vcov(...)`, so each test sets
-    the flavour it needs before reading standard errors.
+    the flavor it needs before reading standard errors.
     """
     ensure_interactions(akm, [d for fe in FE_SETS for d in fe])
     return {tuple(fe): pf_feols(fml_for(fe), akm) for fe in FE_SETS}

@@ -95,5 +95,8 @@ print(firms.group_by("component").agg(
 # biased up and Cov(worker, firm) biased down by estimation error -- the
 # "limited mobility bias" of Andrews et al. This example reports the raw
 # plug-in decomposition, which is what the estimated effects give you.
+#
+# `leave_out_kss` removes that bias; see examples/leave_out_kss.py. The number
+# below is the one to judge it by, since the bias grows as it falls.
 print("\nobservations per worker: "
       f"{fit.n_obs / fit.n_levels['worker_id']:.1f} on average")

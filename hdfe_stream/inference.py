@@ -19,6 +19,13 @@ from .results import HDFEResult
 from .utils import _safe, _scatter, iter_group_chunks
 
 
+def _ratio(num, den):
+    """num / den, or nan when den is zero: a saturated model (a fit made only
+    for its effects can be) has no residual df, so its variances are undefined
+    rather than an error."""
+    return num / den if den else np.nan
+
+
 # Shared-state contract with the other mixins
 # -------------------------------------------
 # Reads, set by _PassesMixin: the identifying cells (starts, codes, n, sums,
@@ -407,15 +414,17 @@ class _InferenceMixin:
         # count (pyfixest's G_df="min"); t-tests use G_min - 1 df.
         K = k + k_fe
         Binv = np.linalg.inv(B) if k else np.zeros((0, 0))
-        vc = {"iid": (rss / (N - K) * Binv, N - K),
-              "hetero": (N / (N - K) * Binv @ meat_hc @ Binv, N - K)}
+        # a saturated model has no residual df: its variances are undefined,
+        # not an error (a fit made only for its effects can be saturated)
+        vc = {"iid": (_ratio(rss, N - K) * Binv, N - K),
+              "hetero": (_ratio(N, N - K) * Binv @ meat_hc @ Binv, N - K)}
         n_clusters = {}
         for req, terms in self.cluster_reqs.items():
             Gs = [self.clusters[t]["G"] for t, _, single in terms if single]
             Gm = min(Gs)
             nest = list(dict.fromkeys(d for t, _, _ in terms for d in nested[t]))
             Kc = K - sum(self.fe_params[d] for d in nest) + len(nest)
-            adj = Gm / (Gm - 1) * (N - 1) / (N - Kc)
+            adj = _ratio(Gm, Gm - 1) * _ratio(N - 1, N - Kc)
             Vc = sum(sign * adj * (Binv @ meat[t] @ Binv) for t, sign, _ in terms)
             vc[f"CRV1:{req}"] = (Vc, Gm - 1)
             n_clusters[req] = Gs
@@ -456,9 +465,10 @@ class _InferenceMixin:
             n_identifying=self.n_identifying, n_components=self.n_components, k_fe=k_fe,
             rss=float(rss), r2_within=float(r2w), solver_info=dict(ctx["info"]), paths=paths,
             collin_vars=dropped, diagnostics=diag, all_vcovs=vc, r2=float(r2),
-            adj_r2=float(1 - (1 - r2) * (N - 1) / (N - k - k_fe_r2)),
-            adj_r2_within=float(1 - (1 - r2w) * (N - k_fe_r2) / (N - k - k_fe_r2)),
+            adj_r2=float(1 - (1 - r2) * _ratio(N - 1, N - k - k_fe_r2)),
+            adj_r2_within=float(1 - (1 - r2w) * _ratio(N - k_fe_r2, N - k - k_fe_r2)),
             rmse=float(np.sqrt(rss / N)) if not iv else np.nan, is_iv=bool(iv), first_stage=first_stage,
             f_stat_1st_stage=f_stats,
             n_clusters=n_clusters,
-            weights=self.weights_name, weights_type=self.weights_type, _run=self._run)
+            weights=self.weights_name, weights_type=self.weights_type, _run=self._run,
+            _estimator=self)

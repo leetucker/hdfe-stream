@@ -154,3 +154,15 @@ def test_trends_are_worker_specific(workdir):
     slopes = feols_stream("y ~ x | worker_id[t] + firm_id", str(path),
                           workdir=workdir / "b", verbose=False)
     assert slopes.rss < intercepts.rss
+
+
+def test_simulate_bottleneck_is_deterministic_and_connected():
+    from hdfe_stream.simulate import simulate_bottleneck
+
+    a = simulate_bottleneck(seed=3, keep_effects=True)
+    b = simulate_bottleneck(seed=3, keep_effects=True)
+    assert a.equals(b)
+    # the bridging movers are the only link between the two blocks
+    per_worker = a.group_by("worker_id").agg(
+        low=(pl.col("firm_id") < 8).any(), high=(pl.col("firm_id") >= 8).any())
+    assert per_worker.filter(pl.col("low") & pl.col("high")).height == 6

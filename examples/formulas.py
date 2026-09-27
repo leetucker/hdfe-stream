@@ -90,7 +90,7 @@ collinear = feols_stream(
 print(f"\n{'=' * 72}\ncollinear terms are dropped\n{'=' * 72}")
 print("dropped:", collinear.collin_vars)
 print("kept:   ", collinear.coefnames)
-# A covariate the streamed dimension absorbs entirely is recognised during the
+# A covariate the streamed dimension absorbs entirely is recognized during the
 # solve rather than costing iterations
 print("absorbed by the streamed dimension:",
       collinear.solver_info.get("fe_spanned", []))

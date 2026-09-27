@@ -47,7 +47,7 @@ print(etable(multi, type="df").to_string())
 #
 # One thing to know: pf.etable lines up fixed-effect rows by the literal text
 # between the '+' signs, so the same dimension in a different position in the
-# formula becomes a separate row. That is pyfixest's own behaviour -- it happens
+# formula becomes a separate row. That is pyfixest's own behavior -- it happens
 # between two pyfixest models too -- so keep the fixed-effect side spelled the
 # same way across models you want to compare.
 FML = "log_earn ~ age_squared + age_cubed | worker_id + firm_id + year"

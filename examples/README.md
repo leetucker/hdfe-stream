@@ -26,6 +26,7 @@ your working directory.
 | [`varying_slopes.py`](varying_slopes.py) | Worker-specific time trends (FEIS), how the streamed dimension is chosen, and the low-level `StreamingHDFE` interface. |
 | [`out_of_core.py`](out_of_core.py) | What is held in memory and what is not, the three solvers, the memory knobs, disk lifecycle, and logging. Read this before pointing the library at something large. |
 | [`reporting.py`](reporting.py) | Regression tables and event-study plots via pyfixest, mixing streaming and in-memory models. |
+| [`leave_out_kss.py`](leave_out_kss.py) | The Kline–Saggio–Sølvsten bias correction for the AKM variance decomposition, leaving out a worker–firm match as the reference implementations do — checked against the effects the data was generated from, so you can see the plug-in bias and watch it removed, then standard errors (leaving out an observation), whether their intervals cover, the check on whether they are justified, and a weakly identified panel where they are not. The slowest example, around two minutes, because it runs the correction seven times. |
 
 [`simulated_data.py`](simulated_data.py) is the shared helper the examples
 import for their data paths and scratch directories. It is not an example

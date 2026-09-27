@@ -46,7 +46,7 @@ Three layers, in increasing order of how much they establish:
 
 1. **Algebraic identities.** Leverages sum to the rank of the design and lie
    strictly inside the unit interval; the components are invariant to which firm
-   is dropped for the normalisation; pruning reaches a fixed point; a panel that
+   is dropped for the normalization; pruning reaches a fixed point; a panel that
    is not leave-one-out connected is rejected with an explanation.
 
 2. **Unbiasedness against known truth.** This is the load-bearing test.
@@ -141,18 +141,71 @@ upstream or a documented limitation of that option.
   coincide but are not the same thing, which is exactly why the pytwoway
   comparison is run on a pre-pruned sample.
 - **Inference** on the components.
-- **Covariates, weights, or IV.** Two fixed effects and an outcome, nothing else.
+- **Covariates or IV.** Two fixed effects, an outcome and an optional weight,
+  nothing else.
 
 ### Where this leaves the streaming question
 
-The pieces a streaming implementation would need, and which of them this
-prototype has settled:
+[`JLA_NOTES.md`](JLA_NOTES.md) works through the Johnson–Lindenstrauss algorithm
+from the paper, the authors' 2021 follow-up note, and pytwoway's implementation.
+Reading it revised two of the judgments made before it:
+
+- the **leave-one-out connected set is the easiest** remaining piece, not the
+  hardest — KSS's Algorithm 1 is an articulation-point pass, not the harder
+  graph problem expected (that is the *leave-two-out* set). It does have to be
+  repeated until no articulation point remains, as LeaveOutTwoWay and xhdfe do:
+  removing one can create another. An early version here ran it once, a
+  defect since fixed;
+- the bias term should follow **pytwoway's** Hutchinson trace estimator rather
+  than KSS's per-observation `B̂ᵢᵢ`, because it produces scalars and so needs no
+  row-sized output. This still holds; see the note on the null space below,
+  which does *not* change it.
+
+**The null space, and why it does not change the choice.** Coefficient-space
+Hutchinson is usually written assuming `S⁻¹` exists. pytwoway drops a firm
+dummy, so for it that is true. `hdfe_stream` keeps every level of every
+dimension, so `S` is singular — nullity 1 for two fixed effects, 2 for three —
+and a *random* coefficient-space vector lands outside `range(S)`: measured at
+4.75% of its norm, with the solve then diverging.
+
+`apply_inverse` projects onto `range(S)` first, which is what the pseudo-inverse
+does. The null space is known structurally (one vector per connected component,
+plus one per dimension beyond the second), so the projection is a QR of a tiny
+basis and two products — free in any practical sense. The result matches dense
+`A·pinv(S)·v` to 1e-14.
+
+This is worth knowing but it is **not** a reason to prefer KSS's row-space
+`B̂ᵢᵢ`. That formulation solves for `S⁻(A_ℓ'r)`, which is equally a
+coefficient-space vector — merely one assembled from rows — and whether it lands
+in `range(S)` depends on the centering and the component structure rather than
+being automatic. The projection question does not separate the two approaches.
+(What *is* automatically consistent is a right-hand side reduced from rows by
+`project_rows`, which is why none of this arose for the leverages.)
 
 | piece | status |
 |---|---|
-| what the estimand is, and the exact form of the correction | **settled here** |
-| σ̂² conventions (demeaned outcome, stayer imputation) | **settled here** |
-| a trustworthy reference to test against | **this file, plus the Monte Carlo** |
-| applying `(X'X)⁻¹` to an arbitrary vector inside the streaming pipeline | not started |
-| JLA projections and their bias correction | not started |
-| the graph-theoretic leave-one-out set | not started |
+| what the estimand is, and the exact form of the correction | **settled** (this file) |
+| σ̂² conventions (demeaned outcome, stayers) | **settled** — LeaveOutTwoWay's: own `σ̂²` at observation level, `sigma_for_stayers` at match level |
+| standard errors when leaving out a match | **built** — reference: `leave_out_COMPLETE` with `'matches'` (beta there). `xhdfe_match_se` ports xhdfe's port of it literally and reproduces it; `kss_match_se` is the package's version (reference by default, documented differences), streaming agrees with it within 10%; coverage in `docs/kss_methodological_differences.md` §5.7 |
+| leaving out a match, as the references do by default | **built** — `kss_match()` here agrees with xhdfe to 5e-14–5e-12; `hdfe_stream/leaveout_match.py` agrees with it within Monte Carlo error, stayers' `σ̂²` to 1e-12 |
+| pruning as the references do it (iterated, single-observation workers dropped) | **fixed** — matches xhdfe row for row on three panels |
+| a trustworthy reference to test against | **settled** (Monte Carlo + pytwoway) |
+| the JLA algorithm, its two generations, and the cost/accuracy budget | **settled** ([JLA_NOTES.md](JLA_NOTES.md)) |
+| which `B̂ᵢᵢ` estimator suits streaming | **settled** ([JLA_NOTES.md](JLA_NOTES.md)) |
+| the sign/coefficient discrepancy between pytwoway and the 2021 note | **settled** — the note is right, shown by a bias race ([JLA_NOTES.md](JLA_NOTES.md)) |
+| applying `S⁻` to an arbitrary vector in the streaming pipeline | **built** — `hdfe_stream/inverse.py`, validated against dense to 1e-13 |
+| the five per-row JLA accumulators | **built** — `hdfe_stream/leaveout.py`, with the note's normalization and non-linearity correction |
+| Algorithm 1 pruning (articulation points) | **built** — `leave_one_out_connected()` in `hdfe_stream/leaveout.py`; takes a 3.4M-row panel from max leverage 1.0 to 0.71 in 0.8s |
+| covariates in the projection | **fixed** — bordered solve with a Schur complement on the k×k covariate block; matches the dense `[X, D]` design to 1e-8, and `jla_leverages` now defaults to the fitted model's own covariates |
+| coefficient-space `S⁻` (`apply_inverse`) | **built** — matches the dense pseudo-inverse to 1e-8 across covariates, 3 FE, weights, both solvers |
+| the null-space problem it exposed | **found and fixed** — `range(S)` projection; does not change the choice of estimator |
+| the Hutchinson trace itself | **built** — `hutchinson_trace()`; converges to the dense trace, block-invariant |
+| assembling the estimator (plug-in + mover/stayer σ̂² + the pieces above) | **built** — `leave_out_components()` |
+| validating the streaming estimator against `kss_exact` and pytwoway | **done** — plug-in exact; leave-out within 3e-5 of the prototype at 1024 draws, and within 0.2% of pytwoway on the same sample |
+| weights in the leave-out layer | **built** — √W leverages, weighted plug-in and σ̂²; the weighted prototype is unbiased by Monte Carlo (t within ±1), and streaming matches it to 0.05% at 2048 draws with the unweighted path unchanged |
+| standard errors for the components | **built** — `component_variances()`; the exact identity `ỹ'Cỹ == plug-in − bias` holds to 1e-14 through the streaming operator, streaming matches dense within 2%, and Monte Carlo coverage is 94.4–94.9% at n=5120 |
+| KSS's split-sample σ̃² (edge-disjoint paths) | **not implementable here, and not in the reference either** — see [SE_NOTES.md](SE_NOTES.md) |
+| weak-identification diagnostic (λ²/Σλ², q, first-stage F) | **built** — `weak_id_diagnostics()`, on by default with `se=True`. Eigenvalues match dense to 1e-13 at convergence; deflated Hutchinson matches `tr((S⁻Q)²)` to four decimals on a bottleneck where the plain estimator was 160% off. See [WEAKID_NOTES.md](WEAKID_NOTES.md) |
+| weak-identification interval (Theorem 3 / Andrews–Mikusheva curvature, q = 1) | **built** — deflated kernel `C₂` exact to 1e-15 dense / 1e-9 streaming, interval matches Saggio's quartic to 3e-15, and Monte Carlo shows nominal coverage where the normal interval undercovers. See [WEAKID_NOTES.md](WEAKID_NOTES.md) |
+| q ≥ 2 interval | not started — a (q+1)-dimensional quadratic program with the full curvature maximization |
+| how it surfaces in the public API, and an example | not started |

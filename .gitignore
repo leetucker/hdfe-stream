@@ -221,3 +221,4 @@ __marimo__/
 examples/output/
 benchmarks/data/
 prototypes/.ref-venv/
+prototypes/.xhdfe-venv/

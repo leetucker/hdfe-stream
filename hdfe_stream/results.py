@@ -53,6 +53,7 @@ class HDFEResult:
     weights: str | None = None
     weights_type: str = "aweights"
     _run: object = field(default=None, repr=False, compare=False)
+    _estimator: object = field(default=None, repr=False, compare=False)
 
     @property
     def se(self):
@@ -93,6 +94,101 @@ class HDFEResult:
         wild bootstrap) are not."""
         from .reporting import _to_pyfixest   # reporting imports this module
         return _to_pyfixest(self)
+
+    def leave_out_kss(self, n_draws=250, seed=0, block=None, psi=None,
+                      leave_out="match", stayers=None, se=False, se_draws=None,
+                      se_trace=True, diagnose=None, diagnose_draws=64,
+                      weak_interval=True, confidence=0.95, centering="reference",
+                      se_variance="person_year"):
+        """Kline-Saggio-Solvsten leave-out variance components for this fit.
+
+        This is the secondary way in, for when you want the regression in its
+        own right as well. The top-level `hdfe_stream.leave_out_kss` is the
+        usual one, and does the whole sequence.
+
+        The fit must be on a panel that is already leave-one-out connected. If
+        you have not pruned, use the top-level function: pruning changes the
+        estimation sample, so a fit made before pruning is a fit of a different
+        model.
+
+        `leave_out` is the unit left out:
+
+          "match"        (default) a whole worker-firm spell, as LeaveOutTwoWay,
+                         VarianceComponentsHDFE.jl and xhdfe do by default. It is
+                         robust to errors correlated within a spell. Everything
+                         except the worker and firm effects is partialled out
+                         first and the data collapsed to one row per match, so
+                         this fit is the regression, not the leave-out one.
+                         Standard errors for var(psi) and the covariance,
+                         following LeaveOutTwoWay's leave_out_COMPLETE, whose
+                         match-level option is marked beta there.
+          "observation"  a single person-year. Needs this fit made with
+                         `keep_intermediates=True`.
+
+        `stayers` applies at observation level only ("own" by default; see
+        `leave_out_components`); at match level the reference's within-match
+        rule is used.
+
+        `centering` applies at match level only. "reference" (default) is
+        LeaveOutTwoWay's: sqrt(w) ybar less its mean over matches. "weighted"
+        centers ybar at its weighted mean first. They coincide when spells are
+        of equal length or the outcome is centered near zero; otherwise both are
+        unbiased but the reference's carries the outcome's level into sigma2,
+        and with log earnings its standard deviation was 1.7 to 3 times the
+        weighted one's (docs/kss_methodological_differences.md).
+
+        `se_variance` applies at match level with `se=True`: how each match's
+        error variance is estimated. "person_year" (default) is the reference
+        implementation's (leave_out_COMPLETE, matches, beta there), from the
+        person-year residuals, pooling the variation within the spell; it
+        assumes errors independent within a spell and needs an unweighted fit.
+        "match" goes beyond the reference: the collapsed leave-match-out
+        estimate alone, which stays right when errors are correlated within a
+        spell, at the cost of more noise (docs/kss_methodological_differences.md
+        5.7).
+        """
+        estimator = self._estimator
+        if estimator is None:
+            raise RuntimeError(
+                "this result has no estimator attached, so its intermediates "
+                "cannot be reached; use the top-level hdfe_stream.leave_out_kss")
+        from .leaveout import _check_leave_out
+
+        _check_leave_out(leave_out, se, stayers, centering, se_variance,
+                         self.weights)
+
+        if leave_out == "match":
+            if len(estimator.fe_user) != 2 and psi is None:
+                raise ValueError(
+                    "with more than two fixed effects, name the second one of "
+                    "the pair with psi=; the rest are partialled out")
+            from .leaveout_match import leave_out_match
+
+            alpha = estimator.g_fe
+            psi = psi or estimator.o_fe[0]
+            return leave_out_match(
+                self, alpha, psi, estimator.workdir / "leave_out_match",
+                n_draws=n_draws, seed=seed, block=block, se=se,
+                se_draws=se_draws, se_trace=se_trace, diagnose=diagnose,
+                diagnose_draws=diagnose_draws, weak_interval=weak_interval,
+                confidence=confidence, verbose=estimator.verbose,
+                logger=estimator.logger, centering=centering,
+                se_variance=se_variance)
+
+        if not getattr(estimator, "keep_intermediates", False):
+            raise RuntimeError(
+                "leaving out an observation needs the fit's intermediates, which "
+                "are deleted unless the fit was made with keep_intermediates="
+                "True. Refit with feols_stream(..., keep_intermediates=True), or "
+                "use the top-level hdfe_stream.leave_out_kss, which handles this "
+                "and the pruning for you")
+        estimator.reload_intermediates()
+        return estimator.leave_out_components(
+            self, n_draws=n_draws, block=block, seed=seed, psi=psi,
+            stayers="own" if stayers is None else stayers, se=se,
+            se_draws=se_draws, se_trace=se_trace, diagnose=diagnose,
+            diagnose_draws=diagnose_draws, weak_interval=weak_interval,
+            confidence=confidence)
 
     def _scan(self, path, what):
         if path is None:

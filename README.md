@@ -105,6 +105,14 @@ and 2SLS (`y ~ exog | fe | endog ~ instruments`) with a first-stage F.
 (`sw()`, `csw()`) and stepwise fixed-effect sets. Models sharing a fixed-effect
 set share one pass over the data and one solve.
 
+**Leave-out variance components.** The Kline–Saggio–Sølvsten bias correction for
+the AKM decomposition, via `leave_out_kss` — including the leave-one-out
+connected set, Johnson–Lindenstrauss leverages, weights, standard errors with
+95% intervals (`se=True`), KSS's weak-identification diagnostic saying whether
+those intervals are justified, and the interval that stays valid when they are
+not. See [below](#leave-out-variance-components-kss) and
+[docs/kss.md](docs/kss.md).
+
 **Output.** Coefficients as a Polars DataFrame (`tidy()`); residuals and
 per-row fixed effects as lazy Polars scans, so aggregates like a variance
 decomposition run as a streaming pass; estimated effects per dimension via
@@ -121,91 +129,89 @@ soon as they are no longer needed, everything is removed if the fit fails, and
 
 A standard three-way AKM specification,
 `log_earn ~ age_squared + age_cubed | worker_id + firm_id + year`, clustered by
-worker, on the simulated panel that ships with the library. Reproduce with:
+worker, on the simulated panel that ships with the library. It is compared with
+[pyfixest](https://github.com/py-econometrics/pyfixest), under both of its
+demeaners, and with [xhdfe](https://github.com/reisportela/xhdfe-xfe), on its
+CPU backend. Sizes run from 25,000 to 5,000,000 workers, with firms = workers /
+15 at every size and about 8.5 rows per worker, so the largest panel has 42.5
+million rows. Every configuration agrees with every other on the coefficients
+to within 4e-10, so these are measurements of equally good answers. Reproduce
+with:
 
 ```bash
+pip install -e ".[benchmark]"      # xhdfe installs separately: see benchmarks/README.md
 python benchmarks/akm_benchmark.py
+python benchmarks/plot_benchmarks.py
 ```
 
-Wall time includes reading the data, because pyfixest needs it as a pandas
-DataFrame before it can start and hdfe_stream reads it itself — that difference
-is the comparison, not an artifact. Peak memory is `VmHWM` for the whole
-process. Every configuration is run in a separate process, and all of them agree
-on the coefficients to within 3e-11, so these are times for equally good
-answers.
+The numbers behind the figures are in
+[benchmarks/results/akm.csv](benchmarks/results/akm.csv), and
+[benchmarks/README.md](benchmarks/README.md) says how each is measured. In
+brief: wall time includes reading the data, because pyfixest and xhdfe need it in
+memory before they can start and hdfe_stream reads it itself — that difference is
+the comparison, not an artifact. Peak memory is `VmHWM` for the whole process,
+including about 0.5 GB of imports. Each configuration runs in its own process.
 
-**8,500,353 rows, 1,000,000 worker effects, 66,666 firms**
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/akm_time.dark.svg">
+  <img alt="AKM regression: wall time against the number of workers, one line per configuration, log-log" src="docs/figures/akm_time.light.svg">
+</picture>
 
-| configuration | wall time | peak memory | peak disk |
-|---|---:|---:|---:|
-| pyfixest (MapDemeaner, default) | 87.0 s | 4,519 MB | — |
-| pyfixest (LsmrDemeaner) | 13.6 s | 5,656 MB | — |
-| hdfe_stream (`solver="explicit"`) | 8.4 s | 3,797 MB | 779 MB |
-| hdfe_stream (`solver="stream_cg"`) | 7.5 s | 3,816 MB | 779 MB |
-| hdfe_stream (`solver="within"`) | 11.7 s | 3,870 MB | 779 MB |
-| **hdfe_stream (`stream_cg`, low memory)** | **8.3 s** | **1,318 MB** | 795 MB |
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/akm_memory.dark.svg">
+  <img alt="AKM regression: peak memory against the number of workers, one line per configuration, log-log" src="docs/figures/akm_memory.light.svg">
+</picture>
 
-**3,399,908 rows, 400,000 worker effects**
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/akm_disk.dark.svg">
+  <img alt="AKM regression: peak disk use of hdfe_stream against the number of workers, log-log" src="docs/figures/akm_disk.light.svg">
+</picture>
 
-| configuration | wall time | peak memory | peak disk |
-|---|---:|---:|---:|
-| pyfixest (MapDemeaner, default) | 33.0 s | 2,132 MB | — |
-| pyfixest (LsmrDemeaner) | 5.1 s | 2,670 MB | — |
-| hdfe_stream (`solver="explicit"`) | 3.9 s | 2,128 MB | 313 MB |
-| hdfe_stream (`solver="stream_cg"`) | 3.5 s | 2,203 MB | 313 MB |
-| hdfe_stream (`solver="within"`) | 4.7 s | 2,101 MB | 313 MB |
-| **hdfe_stream (`stream_cg`, low memory)** | **3.6 s** | **1,041 MB** | 317 MB |
-
-**850,191 rows, 100,000 worker effects**
+At 5 million workers:
 
 | configuration | wall time | peak memory | peak disk |
 |---|---:|---:|---:|
-| pyfixest (MapDemeaner, default) | 7.0 s | 845 MB | — |
-| pyfixest (LsmrDemeaner) | 1.8 s | 949 MB | — |
-| hdfe_stream (`solver="explicit"`) | 1.5 s | 1,286 MB | 78 MB |
-| hdfe_stream (`solver="stream_cg"`) | 1.4 s | 1,226 MB | 78 MB |
-| hdfe_stream (`solver="within"`) | 1.6 s | 1,318 MB | 78 MB |
-| hdfe_stream (`stream_cg`, low memory) | 1.5 s | 924 MB | 78 MB |
+| pyfixest (MAP, its default) | 888 s | 20.7 GB | — |
+| pyfixest (LSMR) | 150 s | 25.8 GB | — |
+| xhdfe | 126 s | 19.1 GB | — |
+| hdfe_stream (`stream_cg`) | 48 s | 5.6 GB | 3.9 GB |
+| **hdfe_stream (`stream_cg`, low memory)** | **52 s** | **3.6 GB** | 4.0 GB |
 
-**212,307 rows, 25,000 worker effects**
+### Reading the figures
 
-| configuration | wall time | peak memory | peak disk |
-|---|---:|---:|---:|
-| pyfixest (MapDemeaner, default) | 1.5 s | 505 MB | — |
-| pyfixest (LsmrDemeaner) | 1.2 s | 526 MB | — |
-| hdfe_stream (`solver="explicit"`) | 0.9 s | 779 MB | 19 MB |
-| hdfe_stream (`solver="stream_cg"`) | 0.9 s | 783 MB | 19 MB |
-| hdfe_stream (`solver="within"`) | 1.0 s | 813 MB | 19 MB |
-| hdfe_stream (`stream_cg`, low memory) | 0.9 s | 796 MB | 19 MB |
+**Memory is the point.** At 5 million workers the in-memory libraries peak at
+19–26 GB: pyfixest's LSMR run needed almost all of this machine's 26 GB.
+hdfe_stream peaks at 5.6 GB with its defaults and 3.6 GB with the batch and
+bucket sizes turned down ("low memory": `rows_per_bucket=250_000`,
+`batch_rows=200_000`), for about 10% more time and the same answer. What it
+spends instead is disk: about 90 bytes per row, 4 GB at 42.5 million rows, freed
+when the fit finishes. The in-memory libraries' peak grows in proportion to the
+data. hdfe_stream's low-memory setting grows far more slowly: 0.8 GB at 25,000
+workers, 1.3 GB at a million, 3.6 GB at five million.
 
-### Reading the tables
+**It is not slower for it.** From about 400,000 workers up, hdfe_stream is the
+fastest configuration measured. At 5 million workers it takes 48 s against
+xhdfe's 126 s and pyfixest's 150 s (LSMR) or 888 s (MAP). With AKM panel data,
+reducing rows to worker-firm cells before solving more than pays for the disk
+traffic. The simulated panel has about 8.5 rows per worker and one cell per
+row, which suits this approach; a specification where the cell table is no
+smaller than the data, and the fixed effects are less local, may do worse.
 
-**The default pyfixest demeaner is not the one to compare against.** `MapDemeaner`
-(alternating projections) is about 6x slower than `LsmrDemeaner` on the two
-larger panels here, and rather closer on the small ones: a million worker
-effects is exactly the case alternating projections struggles with. If you are
-comparing, compare against LSMR.
+**Below about 400,000 workers, the in-memory libraries use less memory.**
+Running any hdfe_stream fit costs about 0.8 GB, most of it importing polars,
+numba and scipy and starting Polars' streaming engine and numba's thread pools.
+On small data that floor dominates: at 25,000 workers xhdfe peaks at 0.27 GB and
+pyfixest at about 0.5 GB. This is the concrete version of "use pyfixest (or
+xhdfe) if your data fits".
 
-**The last row of each table is the point.** `rows_per_bucket` and `batch_rows`
-control how much data is in flight at once. Turning them down cuts peak memory
-by a factor of three at 8.5M rows, for about 10% more wall time and the same
-answer to ten decimal places. pyfixest has no equivalent knob — its memory is
-whatever the design matrix needs.
+**The default pyfixest demeaner is not the one to compare against.**
+`MapDemeaner` (alternating projections) is about 6x slower than `LsmrDemeaner`
+from 400,000 workers up, since many worker effects are the case alternating
+projections struggles with. If you are comparing, compare against LSMR.
 
-**Below about a million rows, hdfe_stream uses more memory, not less.** Running
-any fit at all costs about 540 MB — 223 MB of it just importing polars, numba
-and scipy, the rest Polars' streaming engine and numba's thread pools — and on
-small data that floor swamps everything else. This is the concrete version of
-"use pyfixest if your data fits": at 212,307 rows pyfixest uses about a third
-less memory. With the settings tuned, hdfe_stream draws level around a million
-rows and pulls away above that.
-
-**CPU time can be comparable to `pyfixest`, depending on your data.** With
-AKM panel data, the extra disk traffic involved in using this library is offset
-by reducing rows to cells before solving. The simulated panel has about 8.5 rows
-per worker and one cell per row, which is friendly to this approach. A
-specification where the cell table is no smaller than the data and the fixed
-effects are less local may perform worse.
+**hdfe_stream's `within` solver** uses more memory at scale: 14.7 GB at 5
+million workers, where `stream_cg` and `explicit` stay near 5.5 GB. Prefer
+those when memory is the constraint.
 
 ### Trading memory for time
 
@@ -219,10 +225,10 @@ python benchmarks/akm_benchmark.py --memory-sweep 1000000
 
 | `rows_per_bucket` | `batch_rows` | wall time | peak memory | peak disk |
 |---:|---:|---:|---:|---:|
-| 20,000,000 (default) | 2,000,000 | 7.4 s | 3,772 MB | 779 MB |
-| 1,000,000 | 500,000 | 7.2 s | 1,552 MB | 780 MB |
-| 250,000 | 200,000 | 8.4 s | 1,339 MB | 795 MB |
-| 100,000 | 100,000 | 9.5 s | 1,268 MB | 789 MB |
+| 20,000,000 (default) | 2,000,000 | 7.1 s | 3,861 MB | 779 MB |
+| 1,000,000 | 500,000 | 7.4 s | 1,560 MB | 781 MB |
+| 250,000 | 200,000 | 7.8 s | 1,343 MB | 795 MB |
+| 100,000 | 100,000 | 9.3 s | 1,280 MB | 789 MB |
 
 Most of the saving comes from the first step down. The defaults are tuned for a
 machine with room to spare; if memory is the binding constraint, set
@@ -231,10 +237,15 @@ alone. `rhs_block` bounds the other big array (levels × variables), and
 `max_s_gb` caps the explicit reduced matrix, above which `solver="auto"` falls
 back to `stream_cg` by itself.
 
-Measured on an Intel Core Ultra 7 258V, 8 cores, 15 GB RAM, Linux (WSL2);
+Leave-out estimation has a memory knob of its own, `scratch_mb`; see
+[docs/kss.md](docs/kss.md#performance).
+
+Measured on an Intel Core Ultra 7 258V, 8 cores, 26 GB RAM, Linux (WSL2);
 Python 3.13.5, polars 1.44.2, numpy 2.5.3, numba 0.67.0, scipy 1.18.1,
-pyfixest 0.60.0. Numba kernels are compiled on first use and cached to disk; the
-benchmark runs a warm-up fit so compilation is not charged to any configuration.
+pyfixest 0.60.0, xhdfe 2.28.0 (CPU backend). The exact versions are in
+[benchmarks/results/machine.json](benchmarks/results/machine.json). Numba
+kernels are compiled on first use and cached to disk; the benchmark runs a
+warm-up fit so compilation is not charged to any configuration.
 
 ## Choosing a solver
 
@@ -262,6 +273,7 @@ Runnable, on simulated data, no setup — see [examples/](examples/):
 | [`varying_slopes.py`](examples/varying_slopes.py) | worker-specific trends, and the low-level interface |
 | [`out_of_core.py`](examples/out_of_core.py) | memory, disk, solvers, logging |
 | [`reporting.py`](examples/reporting.py) | tables and plots via pyfixest |
+| [`leave_out_kss.py`](examples/leave_out_kss.py) | the KSS bias correction, checked against the effects the data was built from |
 
 ## Simulated data
 
@@ -279,6 +291,52 @@ with enough mobility to connect the firms into one component. `simulate_rich`
 adds categoricals, non-fixed-effect cluster variables, weights, an IV block and
 missing values; `simulate_trends` adds worker-specific time trends. All are
 deterministic given a `seed`.
+
+## Leave-out variance components (KSS)
+
+The plug-in AKM decomposition is biased: worker and firm effects are estimated
+with error, which inflates their variances and attenuates their covariance.
+`leave_out_kss` applies the bias correction of
+[Kline, Saggio and Sølvsten (2020)](https://doi.org/10.3982/ECTA16410), streaming
+like the rest of the package:
+
+```python
+from hdfe_stream import leave_out_kss
+
+lo = leave_out_kss("log_earn ~ age_squared | worker_id + firm_id",
+                   "data/*.parquet", workdir="scratch", se=True)
+print(lo.summary())
+```
+
+It follows Saggio's reference implementation,
+[LeaveOutTwoWay](https://github.com/rsaggio87/LeaveOutTwoWay). It prunes to the
+leave-one-out connected set, leaves out a worker–firm match by default, and
+approximates leverages by random projection. It supports weights, standard
+errors, and KSS's weak-identification diagnostic and q = 1 interval.
+
+**[docs/kss.md](docs/kss.md)** covers the options, the standard errors and their
+measured coverage, weak identification, validation, reproducibility, and
+[performance against xhdfe](docs/kss.md#performance): at 5 million workers,
+5.3 GB of memory against xhdfe's 20 GB, with standard errors in 46 minutes
+where xhdfe's did not finish in three hours.
+**[docs/kss_methodological_differences.md](docs/kss_methodological_differences.md)**
+lists every way this implementation differs from LeaveOutTwoWay,
+VarianceComponentsHDFE.jl, xhdfe and pytwoway, with the motivation and measured
+effect of each.
+
+## Reproducibility
+
+Everything in a fit is deterministic: the same data and the same options give
+the same numbers, with no random component anywhere — to floating-point rounding.
+Repeated fits normally agree bit for bit, but aggregation runs in parallel, and
+once, under heavy CPU load from another process, two identical fits differed in
+the last digit. Treat agreement to about 1e-12 as the guarantee, not bitwise
+identity.
+
+The exception is leave-out estimation, which uses random projection and random
+draws. Its results are reproducible from the seed but not deterministic;
+[docs/kss.md](docs/kss.md#reproducibility) says exactly what they depend on and
+what to report in a paper.
 
 ## Correctness
 
@@ -305,7 +363,13 @@ pytest
   data. Ask for what you need at fit time via `cluster=`.
 - **Formula support pins a pyfixest range** (`>=0.50,<0.61`), because it uses
   pyfixest's internal formula modules. `StreamingHDFE` has no such dependency.
-- **Needs scratch disk**, roughly the size of your data during the fit.
-- **Limited-mobility bias** is not corrected for. The variance decomposition you
-  get is the plug-in one; if you need bias-corrected AKM estimands, compute them
-  from the output yourself.
+- **Needs scratch disk**, roughly the size of your data during the fit. Leave-out
+  estimation adds to that: it memory-maps its row-sized accumulators rather than
+  holding them, which is what keeps it inside a bounded memory footprint, at
+  about 90 bytes per row of scratch while it runs.
+- **Leave-out estimation handles one outcome at a time**, and its standard
+  errors omit the split-sample refinement of KSS §4.2 (so they are conservative,
+  as their Lemma 5 provides for). Under weak identification it supplies the
+  q = 1 interval, not KSS's q > 1 generalization. Leaving out a match, as it
+  does by default, var(alpha) has no standard error and the covariance no q = 1
+  interval. See [docs/kss.md](docs/kss.md#what-it-does-not-do-yet).

@@ -86,6 +86,9 @@ utils.py           small shared helpers
 
 from .api import feols_stream
 from .estimator import StreamingHDFE
+from .leaveout_se import ComponentSE
+from .leaveout_weakid import WeakIdDiagnostics
+from .leaveout import leave_one_out_connected, leave_out_kss
 from .reporting import etable
 from .results import HDFEMulti, HDFEResult
 from .utils import iter_group_chunks
@@ -97,6 +100,10 @@ __all__ = [
     "HDFEResult",
     "HDFEMulti",
     "etable",
+    "leave_out_kss",
+    "ComponentSE",
+    "WeakIdDiagnostics",
+    "leave_one_out_connected",
     "cleanup",
     "iter_group_chunks",
 ]

@@ -18,6 +18,10 @@ import polars as pl
 
 from .feterms import _parse_fe_term
 from .inference import _InferenceMixin
+from .inverse import _InverseMixin
+from .leaveout import _ComponentsMixin, _LeaveOutMixin, _TraceMixin
+from .leaveout_se import _StandardErrorMixin
+from .leaveout_weakid import _WeakIdMixin
 from .passes import _PassesMixin
 from .report import _log
 from .results import HDFEMulti, _canon_cluster, _vcov_key
@@ -34,7 +38,9 @@ from .workspace import _ACTIVE_RUNS, _MARKER, _Run, _dir_bytes
 # (pass 1/1b), and clusters (inference).
 
 
-class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin):
+class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
+                    _LeaveOutMixin, _TraceMixin, _ComponentsMixin,
+                    _StandardErrorMixin, _WeakIdMixin):
     """
     Low-level interface (see `feols_stream` for formulas).
 
@@ -55,7 +61,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin):
          effects that outnumber workers in a subsample).
     workdir : directory under which each fit creates its own run directory
          (hdfe_run_<time>_<id>/) for intermediate and result files. Default:
-         the system temporary directory (honours TMPDIR). Put it on a disk
+         the system temporary directory (honors TMPDIR). Put it on a disk
          with room for several times the input's Parquet size (the sorted
          working copy of the rows is less compressible than typical input;
          about 4-5x in tests); diagnostics["disk_peak_gb"] reports it.
@@ -67,8 +73,12 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin):
              hdfe_stream.cleanup(workdir). Intermediates are always removed.
     save_resid : write the row-level residual file (the largest output;
          default True). With False, resid() is unavailable.
-    keep_intermediates : keep intermediate files and, on errors, the run
-         directory (for debugging only).
+    keep_intermediates : keep the intermediate files, and on errors the run
+         directory. Needed for leave-out (Kline-Saggio-Solvsten) estimation,
+         which reads the sorted rows and cell tables after the fit; see
+         `HDFEResult.leave_out_kss`. Otherwise for debugging. It also widens
+         the pass-0 sort key so the stored row order is a function of the data,
+         which is what makes the leave-out draws reproducible.
     solver : "auto" (default): "explicit" unless S would exceed `max_s_gb`,
              then "stream_cg".
          "explicit": build S = D_o' M_0 D_o once as a sparse matrix and
@@ -100,6 +110,14 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin):
     n_buckets / rows_per_bucket : rows are hash-partitioned by fe[0] into
          buckets so the sort and the cell group_by are bucket-sized.
     batch_rows : rows per chunk when streaming Parquet.
+    scratch_mb : budget, in MB, for the row-blocked scratch the leave-out passes
+         hold (default 32). Those passes want about a dozen float64 columns per
+         row of the chunk, so the chunk is shrunk below `batch_rows` as needed to
+         stay inside this. It bounds memory only -- every random vector involved
+         is keyed on the absolute row ordinal, so results do not depend on it.
+         Raising it trades memory for speed and the default sits at the knee: on
+         a 1.3M-row panel, 32 MB runs the correction in 30s holding 67 MB, while
+         512 MB gets to 20s but holds 669 MB.
     cells_in_memory : load the identifying cells into RAM instead of
          memory-mapping them.
     triple_budget, dense_max_levels : tuning for building S (see
@@ -121,7 +139,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin):
                  n_buckets=None, rows_per_bucket=20_000_000, cells_in_memory=False,
                  triple_budget=5_000_000, dense_max_levels=1000, rhs_block=8,
                  assembly="auto", max_s_gb=None, collin_tol=1e-10, collin_tol_rel=1e-6,
-                 n_threads=None,
+                 n_threads=None, scratch_mb=32,
                  weights=None, weights_type="aweights", stream=None, models=None,
                  verbose=True, logger=None, log_level=logging.INFO, outputs="auto",
                  save_resid=True, keep_intermediates=False):
@@ -158,6 +176,8 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin):
         if outputs not in ("auto", "keep"):
             raise ValueError("outputs must be 'auto' or 'keep'")
         self.outputs, self.save_resid = outputs, save_resid
+        # Also what enables leave-out estimation: it needs the row files and
+        # cell arrays, which are otherwise deleted when the fit finishes.
         self.keep_intermediates = keep_intermediates
         if solver not in ("auto", "explicit", "stream_cg", "within"):
             raise ValueError("solver must be 'auto', 'explicit', 'stream_cg' or 'within'")
@@ -177,6 +197,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin):
         self.keep = [c for c in dict.fromkeys(keep) if c not in fe_src]
         self.tol, self.maxiter = tol, maxiter
         self.batch_rows, self.rgs = batch_rows, row_group_size
+        self.scratch_mb = int(scratch_mb)
         self.n_buckets, self.rows_per_bucket = n_buckets, rows_per_bucket
         self.cells_in_memory = cells_in_memory
         self.triple_budget = triple_budget
