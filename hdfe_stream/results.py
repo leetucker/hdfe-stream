@@ -76,7 +76,8 @@ class HDFEResult:
 
     def with_vcov(self, vcov) -> "HDFEResult":
         """Switch among the vcovs computed in pass 2: 'iid', 'hetero', or a
-        cluster variable given as {'CRV1': var} or 'CRV1:var'."""
+        cluster variable given as {'CRV1': var} or 'CRV1:var' (likewise
+        CRV3, when it was the fit's vcov)."""
         import copy
         key = _vcov_key(vcov)
         if key not in self.all_vcovs:
@@ -335,15 +336,22 @@ def _vcov_key(v):
         return None
     if isinstance(v, dict):
         (kind, var), = v.items()
-        if kind.upper() != "CRV1":
-            raise ValueError(f"only CRV1 clustering is supported, got {kind}")
-        return f"CRV1:{_canon_cluster(var)}"
+        v = f"{kind}:{var}"
     v = str(v)
     if v.lower() in ("iid",):
         return "iid"
     if v.lower() in ("hetero", "hc1"):
         return "hetero"
-    if v.upper().startswith("CRV1:"):
-        return "CRV1:" + _canon_cluster(v.split(":", 1)[1])
-    raise ValueError(f"unsupported vcov {v!r}: use 'iid', 'hetero'/'HC1' or {{'CRV1': var}} "
-                     "(multi-way: {'CRV1': 'a+b'})")
+    kind, _, var = v.partition(":")
+    if kind.upper() == "CRV1" and var:
+        return "CRV1:" + _canon_cluster(var)
+    if kind.upper() == "CRV3" and var:
+        var = _canon_cluster(var)
+        if "+" in var:
+            raise ValueError(f"CRV3 is one-way only, got {var!r}; use CRV1 for "
+                             "multi-way clustering")
+        return "CRV3:" + var
+    if kind.upper() in ("CRV1", "CRV3"):
+        raise ValueError(f"{kind} needs a cluster variable, as in {{'{kind}': 'firm_id'}}")
+    raise ValueError(f"unsupported vcov {v!r}: use 'iid', 'hetero'/'HC1', {{'CRV1': var}} "
+                     "(multi-way: {'CRV1': 'a+b'}) or {'CRV3': var}")

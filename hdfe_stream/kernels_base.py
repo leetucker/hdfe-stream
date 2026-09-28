@@ -375,3 +375,68 @@ def _nb_pass2(starts, codes, offs, w, y, X, beta, gam_y, gam_y0, Z, gam_z, yc,
                 acc_s[t, 3] += wi * (y[i] - yc) * (y[i] - yc)
 
 
+
+
+# --------------------------------------------------------------------------
+# CRV3: the cluster jackknife, by downdating
+#
+# Leaving cluster g out of a (weighted) least-squares fit moves beta by
+#     beta_(-g) - beta = -(A - A_g)^+ s_g,
+# with A = sum w h h' over all rows, A_g the same over g's rows and
+# s_g = sum w e h over g's rows (exact, since sum w e h = 0 over all rows).
+# The pseudo-inverse follows pyfixest's own downdate, so a cluster that holds
+# all of a covariate's variation gives the same answer in both.
+# --------------------------------------------------------------------------
+
+@nb.njit(parallel=True, cache=True)
+def _nb_crv3_groups(starts, w, e, H, A, acc):
+    """acc[t] += d_g d_g' over the groups of a chunk, d_g = (A - A_g)^+ s_g:
+    for clusters that are the fe[0] groups themselves, which a chunk holds
+    whole."""
+    nt, k = acc.shape[0], H.shape[1]
+    G = len(starts) - 1
+    for t in nb.prange(nt):
+        M = np.empty((k, k))
+        sg = np.empty(k)
+        for gi in range(t * G // nt, (t + 1) * G // nt):
+            M[:, :] = A
+            sg[:] = 0.0
+            for i in range(starts[gi], starts[gi + 1]):
+                wi = w[i]
+                for a in range(k):
+                    sg[a] += wi * e[i] * H[i, a]
+                    for b in range(k):
+                        M[a, b] -= wi * H[i, a] * H[i, b]
+            d = np.linalg.pinv(M) @ sg
+            for a in range(k):
+                for b in range(k):
+                    acc[t, a, b] += d[a] * d[b]
+
+
+@nb.njit(cache=True)
+def _nb_crv3_scatter(code, w, e, H, AG, sG):
+    """Per-cluster sums over a chunk's rows, for clusters spread across
+    chunks: AG[c] += w h h', sG[c] += w e h. Serial: rows of one cluster
+    land anywhere, and per-thread copies of AG would cost G x k^2 each."""
+    k = H.shape[1]
+    for i in range(len(code)):
+        c = code[i]
+        wi = w[i]
+        for a in range(k):
+            sG[c, a] += wi * e[i] * H[i, a]
+            for b in range(k):
+                AG[c, a, b] += wi * H[i, a] * H[i, b]
+
+
+@nb.njit(parallel=True, cache=True)
+def _nb_crv3_finish(A, AG, sG, acc):
+    """acc[t] += d_g d_g' over all clusters, from the sums _nb_crv3_scatter
+    collected."""
+    nt, k = acc.shape[0], A.shape[0]
+    G = AG.shape[0]
+    for t in nb.prange(nt):
+        for g in range(t * G // nt, (t + 1) * G // nt):
+            d = np.linalg.pinv(A - AG[g]) @ sG[g]
+            for a in range(k):
+                for b in range(k):
+                    acc[t, a, b] += d[a] * d[b]

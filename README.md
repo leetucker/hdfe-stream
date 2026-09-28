@@ -107,7 +107,9 @@ one column it comes from.
 clustered on any column, any `^` interaction, or several dimensions at once
 (multi-way Cameron–Gelbach–Miller, any number of ways). Ask for several at fit
 time with `cluster=` and switch between them afterwards with `with_vcov()` —
-they are all computed in the one residual pass.
+they are all computed in the one residual pass. CRV3, the cluster jackknife
+(`vcov={"CRV3": var}`), for OLS when every fixed effect is nested within the
+clusters or there are none; see [limitations](#limitations).
 
 **Estimators.** OLS, weighted least squares (`weights=`, analytic or frequency),
 and 2SLS (`y ~ exog | fe | endog ~ instruments`) with a first-stage F.
@@ -461,7 +463,14 @@ pytest
 
 - **Varying slopes only on the streamed dimension**, and only one dimension may
   carry them.
-- **CRV1 only** for clustered errors: no CRV3, no wild bootstrap, no jackknife.
+- **CRV3 only with nested fixed effects.** The cluster jackknife is computed by
+  downdating the fit, which is exact when every fixed effect is nested within
+  the clusters (worker effects clustered by worker, firm × year effects by
+  firm) or there are none. With fixed effects that are not nested, as in an
+  AKM model clustered by worker, the jackknife has to re-estimate the fixed
+  effects once per cluster, and the fit refuses; use CRV1, or pyfixest, which
+  refits. CRV3 is also one-way and OLS only (pyfixest has no IV CRV3 either).
+  No CRV2 and no wild bootstrap.
 - **A converted result cannot recompute its own vcov**, because it holds no
   data. Ask for what you need at fit time via `cluster=`.
 - **Formula support pins a pyfixest range** (`>=0.50,<0.61`), because it uses

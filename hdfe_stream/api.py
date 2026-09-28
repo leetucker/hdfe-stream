@@ -31,7 +31,9 @@ def feols_stream(fml, data, workdir=None, vcov=None, cluster=(), fe_dof="exact",
     workdir : directory under which run directories are created (default:
               the system temporary directory); see StreamingHDFE for the
               outputs=, save_resid= and keep_intermediates= options.
-    vcov    : as in pyfixest; default {'CRV1': <first FE>} like pyfixest.
+    vcov    : as in pyfixest; default {'CRV1': <first FE>} like pyfixest, or
+              iid without fixed effects. {'CRV3': var} (one-way, OLS) needs
+              every fixed effect nested within the clusters, or none.
     cluster : extra cluster specs to compute CRV1 for (one-way or 'a+b').
     **options : passed to StreamingHDFE (stream, weights, weights_type,
               solver, precond, keep, verbose, logger, log_level, ...).

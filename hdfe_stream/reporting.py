@@ -83,12 +83,12 @@ def _fill_pyfixest(obj, r):
     se = r.se
     t = np.divide(r.beta, se, out=np.full_like(r.beta, np.nan), where=se > 0)
     kind = r.vcov_type
-    if kind.startswith("CRV1:"):
-        cv = kind.split(":", 1)[1]
+    if kind.startswith(("CRV1:", "CRV3:")):
+        detail, cv = kind.split(":", 1)
         Gs = list(r.n_clusters[cv])
         # pyfixest reports min(G) for every term of a multi-way vcov
-        vtype, detail, clustervar, G = ("CRV", "CRV1", cv.split("+"),
-                                        Gs if len(Gs) == 1 else [min(Gs)] * len(Gs))
+        vtype, clustervar, G = ("CRV", cv.split("+"),
+                                Gs if len(Gs) == 1 else [min(Gs)] * len(Gs))
     else:
         vtype, detail, clustervar, G = kind, kind, None, None
     crit = stats.t.ppf(0.975, r.df_t)

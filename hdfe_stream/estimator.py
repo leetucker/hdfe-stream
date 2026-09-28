@@ -327,12 +327,16 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
             self.n_components, nb.get_num_threads())
             + " ".join(f"{f}={v:,}" for f, v in self.n_levels.items()))
 
+        # which fixed effects each cluster term nests; checked before the solve
+        # so that a CRV3 request that cannot be met fails early
+        nested = {t: self._nested_dims(t) for t in self.clusters}
+        self._check_crv3(nested)
+
         self._log(f"step 2: solving for {self.m} variables "
                            f"(blocks of {self.rhs_block}), solver={self.solver}")
         gamma, info = self._solve()
         self._log("step 3: assembling normal equations")
         A = self._assemble(gamma)
-        nested = {t: self._nested_dims(t) for t in self.clusters}
         total = sum(self.fe_params.values())   # fe[0]: one per group, or its rank with slopes
         if len(self.fe) < 2:
             n_red = 0                   # one dimension, or none: nothing is redundant
@@ -354,7 +358,9 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         source : Parquet path/glob or a Polars LazyFrame.
         vcov   : default vcov: 'iid', 'hetero'/'HC1', {'CRV1': var} or
                  'CRV1:var'; multi-way clustering as {'CRV1': 'a+b'} (any
-                 number of ways). iid and hetero are always computed; switch
+                 number of ways). {'CRV3': var} is the cluster jackknife
+                 (one-way, OLS), available when every fixed effect is nested
+                 within the clusters or there are none; see `_check_crv3`. iid and hetero are always computed; switch
                  with result.with_vcov(...).
         cluster: further cluster specs to compute CRV1 for, e.g.
                  ["firm_id", "worker_id+firm_id"]. Any column or 'a^b' combination works;
@@ -369,7 +375,8 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         keys = list(dict.fromkeys(["iid", "hetero", default]))
         extra = [_canon_cluster(c) for c in cluster]
         self.cluster_cols = list(dict.fromkeys(
-            c for req in [k.split(":", 1)[1] for k in keys if k.startswith("CRV1:")] + extra
+            c for req in [k.split(":", 1)[1] for k in keys if k.startswith(("CRV1:", "CRV3:"))]
+            + extra
             for part in req.split("+") for c in part.split("^")))
         self._init_run()
         try:

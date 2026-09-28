@@ -12,11 +12,12 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .kernels_base import _nb_assemble, _nb_pass2, _nb_residualize_rows
+from .kernels_base import (_nb_assemble, _nb_crv3_finish, _nb_crv3_groups,
+                           _nb_crv3_scatter, _nb_pass2, _nb_residualize_rows)
 from .kernels_slopes import _nb_pass2_sl, _nb_residualize_rows_sl
 from .report import _warn
 from .results import HDFEResult
-from .utils import _safe, _scatter, _tbl_to_np, iter_group_chunks
+from .utils import _phys_mem_gb, _safe, _scatter, _tbl_to_np, iter_group_chunks
 
 
 def _stack(chunk, columns):
@@ -127,8 +128,10 @@ class _InferenceMixin:
           fe      another FE dimension: its codes, level-sized accumulator
           extra   anything else: factorized in pass 0, level-sized accumulator
         """
-        reqs = [k.split(":", 1)[1] for k in keys if k.startswith("CRV1:")]
-        reqs += [c for c in extra if c not in reqs]
+        reqs = [k.split(":", 1)[1] for k in keys if k.startswith(("CRV1:", "CRV3:"))]
+        reqs = list(dict.fromkeys(reqs + list(extra)))
+        # the requests that also get the cluster jackknife (one term each)
+        self.crv3_reqs = [k.split(":", 1)[1] for k in keys if k.startswith("CRV3:")]
         # with no fixed effects there are no groups to be nested in
         g0 = set(self.fe_cols[self.g_fe]) if self.fe else None
         dim_of = {frozenset(self.fe_cols[d]): d for d in self.o_fe}
@@ -203,6 +206,35 @@ class _InferenceMixin:
                 out.append(d)
         return out
 
+    def _check_crv3(self, nested):
+        """Refuse CRV3 where the jackknife cannot be had from one pass.
+
+        CRV3 re-estimates beta leaving out one cluster at a time. On data with
+        the fixed effects already removed, dropping a cluster's rows gives
+        that re-estimate exactly only if no other cluster's fixed effects
+        depend on those rows -- that is, if every fixed effect is nested
+        within the clusters (or there are none). Otherwise the exact
+        jackknife re-estimates the fixed effects once per cluster, which is
+        pyfixest's approach and not one that scales here.
+        """
+        if not self.crv3_reqs:
+            return
+        if any(model.get("iv") for model in self.models):
+            raise ValueError("CRV3 standard errors are not available for IV (2SLS) "
+                             "models, as in pyfixest; use CRV1")
+        for req in self.crv3_reqs:
+            (term, _, _), = self.cluster_reqs[req]
+            loose = [d for d in self.fe if d not in nested[term]]
+            if loose:
+                raise ValueError(
+                    f"CRV3 standard errors need every fixed effect to be nested within "
+                    f"the clusters, and {', '.join(map(repr, loose))} "
+                    f"{'is' if len(loose) == 1 else 'are'} not nested within {req!r}. "
+                    "With fixed effects that are not nested, only CRV1 is supported: "
+                    "the jackknife would have to re-estimate the fixed effects once "
+                    "per cluster. pyfixest supports CRV3 in this case, by refitting "
+                    "the model for each cluster, if the data fit in memory.")
+
     def _redundant_slopes(self):
         """Slope variables that are a function of another FE dimension (e.g.
         worker trends in `year` alongside year effects). The worker slopes on
@@ -259,13 +291,14 @@ class _InferenceMixin:
         return mask
 
     # --------------------------------------------------------------- step 4
-    def _pass2(self, tag, ycol_name, gamma, yj, xk, beta, zk, Pi):
+    def _pass2(self, tag, ycol_name, gamma, yj, xk, beta, zk, Pi, bread):
         """Row pass for one model: fe[0] effects, residuals, moments, meats;
         writes the residual file and one FE file per dimension.
 
         xk: regressor columns (residuals use X beta); zk, Pi: instrument
         columns and first-stage coefficients, so the scores use Pi' z~
-        (for OLS, zk = xk and Pi = I).
+        (for OLS, zk = xk and Pi = I). bread: the assembled X~' W X~, which
+        the CRV3 downdate needs before the pass rather than after it.
         """
         mdir = self.workdir / "models" / tag
         mdir.mkdir(parents=True, exist_ok=True)
@@ -289,6 +322,24 @@ class _InferenceMixin:
         acc_hc = np.zeros((k, k))
         acc_g = np.zeros((k, k))
         need_seg = any(spec["kind"] == "seg" for spec in self.clusters.values())
+        # CRV3 terms (checked already: OLS, all fixed effects nested). A term
+        # that is the fe[0] groups is jackknifed chunk by chunk; any other
+        # collects per-cluster sums through the pass, G x k^2 of them.
+        crv3 = {}
+        for req in (self.crv3_reqs if k else []):
+            (t, _, _), = self.cluster_reqs[req]
+            spec = self.clusters[t]
+            if spec["kind"] == "seg":
+                crv3[t] = {"acc": np.zeros((nt, k, k))}
+            else:
+                need = spec["G"] * k * (k + 1) * 8 / 1e9
+                if need > 0.25 * _phys_mem_gb():
+                    raise MemoryError(
+                        f"CRV3 by {req!r} needs {need:.1f} GB for per-cluster sums "
+                        f"({spec['G']:,} clusters x {k} covariates squared); use CRV1, "
+                        "or fewer covariates")
+                crv3[t] = {"AG": np.zeros((spec["G"], k, k)), "sG": np.zeros((spec["G"], k))}
+        bread_c = np.ascontiguousarray(bread, dtype=np.float64)
         # OLS: the instruments are the regressors (Pi = I), so they share one
         # array and the scores are the residualized regressors themselves
         ols = list(zk) == list(xk)
@@ -351,6 +402,12 @@ class _InferenceMixin:
                 if not ols:
                     sg = sg @ Pi_c
                 acc_g += sg.T @ sg              # group sums of w e h, from the kernel
+            for t, c3 in crv3.items():
+                if "acc" in c3:
+                    _nb_crv3_groups(starts, w, e, h, bread_c, c3["acc"])
+                else:
+                    _nb_crv3_scatter(ch[self.clusters[t]["code"]].astype(np.int64), w, e, h,
+                                     c3["AG"], c3["sG"])
             if scores or subs:
                 he = np.multiply(h, (w * e)[:, None], out=buf)    # scores w e h
             del h
@@ -420,7 +477,13 @@ class _InferenceMixin:
                 spec["G"] = G_sub[t]
         rss, tss_w, sy, syy = acc_s.sum(axis=0)
         ssy = syy - sy * sy / self.wsum     # weighted total SS around the weighted mean
-        return rss, tss_w, ssy, acc_B, acc_hc, meat, paths
+        jack = {}                           # CRV3: sum over clusters of d_g d_g'
+        for t, c3 in crv3.items():
+            if "acc" not in c3:
+                c3["acc"] = np.zeros((nt, k, k))
+                _nb_crv3_finish(bread_c, c3["AG"], c3["sG"], c3["acc"])
+            jack[t] = c3["acc"].sum(axis=0)
+        return rss, tss_w, ssy, acc_B, acc_hc, meat, jack, paths
 
     # ------------------------------------------------------------ estimation
     def _estimate(self, tag, model, A, gamma, ctx):
@@ -468,8 +531,8 @@ class _InferenceMixin:
         rss_asm = A[yj, yj] - 2 * beta @ Axy + beta @ A[np.ix_(xk, xk)] @ beta if k else A[yj, yj]
 
         self._log(f"pass 2: {fml}")
-        rss, tss_w, ssy, B, meat_hc, meat, paths = self._pass2(tag, yname, gamma, yj, xk,
-                                                               beta, zk, Pi)
+        rss, tss_w, ssy, B, meat_hc, meat, jack, paths = self._pass2(
+            tag, yname, gamma, yj, xk, beta, zk, Pi, bread_asm)
         N, k_fe, nested = self.N, ctx["k_fe"], ctx["nested"]
         # Small-sample factors follow pyfixest's ssc defaults: iid
         # (N-1)/(N-K); hetero N/(N-K); CRV1 G/(G-1)*(N-1)/(N-Kc), with the
@@ -492,6 +555,10 @@ class _InferenceMixin:
             adj = _ratio(Gm, Gm - 1) * _ratio(N - 1, N - Kc)
             Vc = sum(sign * adj * (Binv @ meat[t] @ Binv) for t, sign, _ in terms)
             vc[f"CRV1:{req}"] = (Vc, Gm - 1)
+            if req in self.crv3_reqs:
+                # the jackknife takes the same small-sample factor, as in pyfixest
+                (t, _, _), = terms
+                vc[f"CRV3:{req}"] = (adj * jack[t] if k else np.zeros((0, 0)), Gm - 1)
             n_clusters[req] = Gs
         V, dft = vc[ctx["default"]]
         if np.any(np.diag(V) < 0):
