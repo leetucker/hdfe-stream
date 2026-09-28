@@ -185,23 +185,23 @@ At 5 million workers:
 | pyfixest (MAP, its default) | 888 s | 20.7 GB | — |
 | pyfixest (LSMR) | 150 s | 25.8 GB | — |
 | xhdfe | 126 s | 19.1 GB | — |
-| hdfe_stream (`stream_cg`) | 48 s | 5.6 GB | 3.9 GB |
-| **hdfe_stream (`stream_cg`, low memory)** | **52 s** | **3.6 GB** | 4.0 GB |
+| hdfe_stream (`stream_cg`) | 40 s | 5.4 GB | 3.9 GB |
+| **hdfe_stream (`stream_cg`, low memory)** | **48 s** | **3.7 GB** | 4.0 GB |
 
 ### Reading the figures
 
 **Memory is the point.** At 5 million workers the in-memory libraries peak at
 19–26 GB: pyfixest's LSMR run needed almost all of this machine's 26 GB.
-hdfe_stream peaks at 5.6 GB with its defaults and 3.6 GB with the batch and
+hdfe_stream peaks at 5.4 GB with its defaults and 3.7 GB with the batch and
 bucket sizes turned down ("low memory": `rows_per_bucket=250_000`,
-`batch_rows=200_000`), for about 10% more time and the same answer. What it
+`batch_rows=200_000`), for about 20% more time and the same answer. What it
 spends instead is disk: about 90 bytes per row, 4 GB at 42.5 million rows, freed
 when the fit finishes. The in-memory libraries' peak grows in proportion to the
 data. hdfe_stream's low-memory setting grows far more slowly: 0.8 GB at 25,000
-workers, 1.3 GB at a million, 3.6 GB at five million.
+workers, 1.3 GB at a million, 3.7 GB at five million.
 
 **It is not slower for it.** From about 400,000 workers up, hdfe_stream is the
-fastest configuration measured. At 5 million workers it takes 48 s against
+fastest configuration measured. At 5 million workers it takes 40 s against
 xhdfe's 126 s and pyfixest's 150 s (LSMR) or 888 s (MAP). With AKM panel data,
 reducing rows to worker-firm cells before solving more than pays for the disk
 traffic. The simulated panel has about 8.5 rows per worker and one cell per
@@ -221,7 +221,7 @@ from 400,000 workers up, since many worker effects are the case alternating
 projections struggles with. If you are comparing, compare against LSMR.
 
 **hdfe_stream's `within` solver** uses more memory at scale: 14.7 GB at 5
-million workers, where `stream_cg` and `explicit` stay near 5.5 GB. Prefer
+million workers, where `stream_cg` and `explicit` stay near 5.4 GB. Prefer
 those when memory is the constraint.
 
 ### Many covariates
@@ -258,17 +258,17 @@ Wall time and peak memory ("—": ran out of this machine's 26 GB):
 
 | covariates | pyfixest (MAP) | pyfixest (LSMR) | xhdfe | hdfe_stream | hdfe_stream, sized |
 |---:|---:|---:|---:|---:|---:|
-| 8 | 219 s, 5.7 GB | 17 s, 7.3 GB | 18 s, 9.0 GB | 7 s, 3.0 GB | 8 s, 2.9 GB |
-| 41 | 522 s, 13.1 GB | 56 s, 17.3 GB | 55 s, 18.1 GB | 25 s, 8.0 GB | 25 s, 4.1 GB |
-| 83 | 1,026 s, 24.8 GB | 189 s, 25.4 GB | — | 60 s, 14.6 GB | 50 s, 4.8 GB |
-| 167 | — | — | — | 237 s, 25.5 GB | 125 s, 5.3 GB |
-| 503 | — | — | — | — | **1,190 s, 8.9 GB** |
+| 8 | 219 s, 5.7 GB | 17 s, 7.3 GB | 18 s, 9.0 GB | 7 s, 2.8 GB | 7 s, 2.9 GB |
+| 41 | 522 s, 13.1 GB | 56 s, 17.3 GB | 55 s, 18.1 GB | 21 s, 7.0 GB | 20 s, 3.7 GB |
+| 83 | 1,026 s, 24.8 GB | 189 s, 25.4 GB | — | 71 s, 12.5 GB | 56 s, 4.5 GB |
+| 167 | — | — | — | 114 s, 23.6 GB | 112 s, 5.1 GB |
+| 503 | — | — | — | — | **351 s, 8.6 GB** |
 
 **The in-memory libraries run out first.** Their peak grows with rows ×
 covariates. At 8.5 million rows pyfixest was within 1 GB of this machine's 26 GB
 at 83 indicators and out of memory at 167; xhdfe was already out of memory at
 83. hdfe_stream sized to the
-design goes from 2.9 GB at 8 indicators to 5.3 GB at 167 and 8.9 GB at 503. Of
+design goes from 2.9 GB at 8 indicators to 5.1 GB at 167 and 8.6 GB at 503. Of
 that last figure, about 4.9 GB is the memory-mapped cell table: file pages the
 kernel can drop under pressure. The memory the fit itself allocated peaked at
 4.6 GB (a separate profile, reading the process's anonymous and file-backed
@@ -276,7 +276,7 @@ pages apart).
 
 **Size the batches to the design.** At its defaults hdfe_stream holds a whole
 bucket of up to 20 million rows, with every covariate, while it sorts; that is
-fine for a handful of covariates and not for hundreds (25.5 GB at 167, out of
+fine for a handful of covariates and not for hundreds (23.6 GB at 167, out of
 memory at 503). Every step that holds rows holds all the covariates, so scale
 `rows_per_bucket`, `batch_rows` and `row_group_size` down with the width. The
 benchmark aims at about 1 GB of design per bucket and 250 MB per batch and row
@@ -289,10 +289,15 @@ fit = feols_stream(fml, data, rows_per_bucket=min(20_000_000, int(1e9 // per_row
                    batch_rows=batch, row_group_size=min(500_000, batch))
 ```
 
-**Time grows with the square of the width.** The cross-products are k × k per
-row, so 503 indicators take 20 minutes where 167 take two. hdfe_stream is still
-the fastest configuration at every width measured, but the growth is steep; its
-per-row cross-product loops are not yet handed to BLAS.
+**Time grows with the square of the width.** The cross-products cost k × k per
+row; they are formed chunk by chunk as BLAS matrix products, and 503 indicators
+take 6 minutes where 167 take 2. hdfe_stream is the fastest configuration at
+every width measured.
+
+**Timings on this machine are noisy where memory is tight.** Each point is one
+run. Repeated runs of the default configuration at 83 indicators, which holds
+12.5 GB, took between 53 and 83 s; the sized configuration varied by about 15%.
+The differences between libraries above are far larger than that.
 
 **Disk grows with the width too**, since the working copy of the rows carries
 every covariate: 0.3 GB at 8 indicators, 6 GB at 503.

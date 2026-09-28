@@ -69,42 +69,37 @@ def _nb_diag(starts, codes, n, offs, diag):
 
 
 @nb.njit(parallel=True, cache=True)
-def _nb_assemble_rows(starts, codes, offs, w, V, Gamma, demean, acc):
-    """acc[t] += sum over rows of w v~ v~', with v~ = v - sum_d Gamma_d[level]
-    minus its weighted fe[0]-group mean: the fully residualized
-    cross-products.
+def _nb_residualize_rows(starts, codes, offs, w, V, Gamma, demean, nt):
+    """Overwrite V with the fully residualized design: v - sum_d
+    Gamma_d[level], less its weighted fe[0]-group mean. The cross-products
+    V' W V are then one BLAS product in the caller, rather than k x k scalar
+    updates per row here.
 
     With `demean` False there is no fe[0] (no fixed effects at all) and the
     group mean is zero; `starts` then only splits the rows among threads.
     """
-    nt, D, m = acc.shape[0], codes.shape[1], V.shape[1]
+    D, m = codes.shape[1], V.shape[1]
     G = len(starts) - 1
     for t in nb.prange(nt):
-        q = np.empty(m)
         qg = np.empty(m)
         for gi in range(t * G // nt, (t + 1) * G // nt):
             s, e = starts[gi], starts[gi + 1]
             qg[:] = 0.0
-            if demean:
-                Wg = 0.0
-                for i in range(s, e):
-                    Wg += w[i]
-                    for j in range(m):
-                        v = V[i, j]
-                        for d in range(D):
-                            v -= Gamma[offs[d] + codes[i, d], j]
-                        qg[j] += w[i] * v
-                for j in range(m):
-                    qg[j] /= Wg
+            Wg = 0.0
             for i in range(s, e):
+                Wg += w[i]
                 for j in range(m):
                     v = V[i, j]
                     for d in range(D):
                         v -= Gamma[offs[d] + codes[i, d], j]
-                    q[j] = v - qg[j]
-                for j1 in range(m):
-                    for j2 in range(m):
-                        acc[t, j1, j2] += w[i] * q[j1] * q[j2]
+                    V[i, j] = v
+                    qg[j] += w[i] * v
+            if demean:
+                for j in range(m):
+                    qg[j] /= Wg
+                for i in range(s, e):
+                    for j in range(m):
+                        V[i, j] -= qg[j]
 
 
 @nb.njit(cache=True)
@@ -302,29 +297,27 @@ def _nb_assemble(starts, codes, n, sums, offs, Gamma, acc):
 
 
 @nb.njit(parallel=True, cache=True)
-def _nb_pass2(starts, codes, offs, w, y, X, beta, gam_y, gam_y0, Z, gam_z, Pi, yc,
-              fweights, demean, g_eff, e_out, h_out, acc_s, acc_B, acc_hc, acc_g):
+def _nb_pass2(starts, codes, offs, w, y, X, beta, gam_y, gam_y0, Z, gam_z, yc,
+              demean, g_eff, e_out, zt_out, sg_out, acc_s):
     """Row pass for one chunk of complete fe[0] groups.
 
     Residuals use the regressors X:  e = y - X beta - FEs, with the fe[0]
-    effect the weighted group mean of y - X beta - (other FEs). With `demean`
-    False there is no fe[0] (no fixed effects at all): that effect, and every
-    other group mean, is zero, and `starts` only splits the rows among
-    threads (acc_g is then meaningless). The scores
-    use h = Pi' z~, where z~ are the residualized instruments Z; for OLS,
-    Z = X and Pi = I, so h = x~. Per-thread accumulators:
-      acc_s[t]  = [sum w e^2, sum w y~^2, sum w (y-yc), sum w (y-yc)^2]
-      acc_B[t]  = sum w h h'                     (bread^-1)
-      acc_hc[t] = sum w^2 e^2 h h'  (w e^2 h h' for frequency weights)
-      acc_g[t]  = sum over fe[0] groups of s_g s_g', s_g = sum w h e
+    effect the weighted group mean of y - X beta - (other FEs). zt_out
+    receives the residualized instruments Z (for OLS, Z = X); the caller forms
+    the scores h = Pi' z~ and every k x k sum from them with BLAS. With
+    `demean` False there is no fe[0] (no fixed effects at all): that effect,
+    and every other group mean, is zero, and `starts` only splits the rows
+    among threads. sg_out[g], when it has a row per group, receives the
+    group's sum of w e z~ (the scores for clustering on fe[0], before Pi).
+    Per-thread accumulators:
+      acc_s[t] = [sum w e^2, sum w y~^2, sum w (y-yc), sum w (y-yc)^2]
     """
-    nt, D, k, q = acc_B.shape[0], codes.shape[1], X.shape[1], Z.shape[1]
+    want_sg = sg_out.shape[0] > 0
+    D, k, q = codes.shape[1], X.shape[1], Z.shape[1]
     G = len(starts) - 1
+    nt = acc_s.shape[0]
     for t in nb.prange(nt):
         mz = np.empty(q)
-        zt = np.empty(q)
-        h = np.empty(k)
-        sg = np.empty(k)
         for gi in range(t * G // nt, (t + 1) * G // nt):
             s, e = starts[gi], starts[gi + 1]
             Wg = 0.0
@@ -346,6 +339,7 @@ def _nb_pass2(starts, codes, offs, w, y, X, beta, gam_y, gam_y0, Z, gam_z, Pi, y
                     v = Z[i, j]
                     for d in range(D):
                         v -= gam_z[offs[d] + codes[i, d], j]
+                    zt_out[i, j] = v
                     mz[j] += wi * v
                 mu += wi * u
                 my += wi * yy
@@ -360,7 +354,8 @@ def _nb_pass2(starts, codes, offs, w, y, X, beta, gam_y, gam_y0, Z, gam_z, Pi, y
                 my = 0.0
                 mz[:] = 0.0
             g_eff[gi] = mu
-            sg[:] = 0.0
+            if want_sg:
+                sg_out[gi, :] = 0.0
             for i in range(s, e):
                 wi = w[i]
                 yy = y[i]
@@ -370,26 +365,13 @@ def _nb_pass2(starts, codes, offs, w, y, X, beta, gam_y, gam_y0, Z, gam_z, Pi, y
                 ei = e_out[i] - mu
                 e_out[i] = ei
                 for j in range(q):
-                    v = Z[i, j]
-                    for d in range(D):
-                        v -= gam_z[offs[d] + codes[i, d], j]
-                    zt[j] = v - mz[j]
-                for c in range(k):
-                    hc = 0.0
+                    zt_out[i, j] -= mz[j]
+                if want_sg:
                     for j in range(q):
-                        hc += zt[j] * Pi[j, c]
-                    h[c] = hc
-                    h_out[i, c] = hc
+                        sg_out[gi, j] += wi * ei * zt_out[i, j]
                 acc_s[t, 0] += wi * ei * ei
                 acc_s[t, 1] += wi * yy * yy
                 acc_s[t, 2] += wi * (y[i] - yc)
                 acc_s[t, 3] += wi * (y[i] - yc) * (y[i] - yc)
-                hw = wi if fweights else wi * wi
-                for c1 in range(k):
-                    sg[c1] += wi * h[c1] * ei
-                    for c2 in range(k):
-                        acc_B[t, c1, c2] += wi * h[c1] * h[c2]
-                        acc_hc[t, c1, c2] += hw * ei * ei * h[c1] * h[c2]
-            for c1 in range(k):
-                for c2 in range(k):
-                    acc_g[t, c1, c2] += sg[c1] * sg[c2]
+
+

@@ -67,11 +67,14 @@ Step 2 (solver, per block)   solve  S Gamma = D_o' M_0 V,  S = D_o' M_0 D_o,
                              columns: "explicit" (sparse S built once, block
                              PCG in memory), "stream_cg" (S applied by
                              streaming the cells), or "within".
-Step 3 (numba)               assemble V' M_D V (from cells, or from a row
-                             pass when there are many variables); drop
-                             collinear covariates per model; beta.
-Step 4 (streamed + numba)    per model: stream rows for fe[0] effects,
-                             residuals, RSS and the meat for HC1 / CRV1.
+Step 3 (numba + BLAS)        assemble V' M_D V (from cells, or from a row
+                             pass when there are many variables: numba
+                             residualizes each chunk in place, BLAS forms its
+                             cross-products); drop collinear covariates per
+                             model; beta.
+Step 4 (streamed, numba +    per model: stream rows for fe[0] effects,
+        BLAS)                residuals and RSS (numba), and the bread and the
+                             meat for HC1 / CRV1 (BLAS, chunk by chunk).
 
 Layout
 ------

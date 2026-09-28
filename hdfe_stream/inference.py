@@ -12,11 +12,20 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .kernels_base import _nb_assemble, _nb_assemble_rows, _nb_pass2
-from .kernels_slopes import _nb_assemble_rows_sl, _nb_pass2_sl
+from .kernels_base import _nb_assemble, _nb_pass2, _nb_residualize_rows
+from .kernels_slopes import _nb_pass2_sl, _nb_residualize_rows_sl
 from .report import _warn
 from .results import HDFEResult
 from .utils import _safe, _scatter, _tbl_to_np, iter_group_chunks
+
+
+def _stack(chunk, columns):
+    """The named columns of a chunk as one C-ordered float64 array, built in a
+    single allocation (np.column_stack followed by astype would make two)."""
+    out = np.empty((len(chunk[columns[0]]), len(columns)))
+    for j, c in enumerate(columns):
+        out[:, j] = chunk[c]
+    return out
 
 
 def _ratio(num, den):
@@ -44,24 +53,29 @@ class _InferenceMixin:
     def _assemble(self, gamma):
         """V' M_D V for all variables (m x m)."""
         m, nt = self.m, nb.get_num_threads()
-        acc = np.zeros((nt, m, m))
         if self.assembly == "cells":
+            acc = np.zeros((nt, m, m))
             _nb_assemble(self.starts, self.codes, self.n, self.sums, self.offs, gamma, acc)
             return self.W_within_cell + acc.sum(axis=0)
         self._log("step 3: row pass for V' M_D V")
         wcol = ["w"] if self.weights is not None else []
         tcols = [f"t{j + 1}" for j in range(len(self.slope_vars))]
         cols = [*self.ccols, *wcol, *tcols, *[f"v{j}" for j in range(m)]]
+        acc = np.zeros((m, m))
         for ch, starts, codes in self._row_chunks(cols):
-            V = np.column_stack([ch[f"v{j}"] for j in range(m)]).astype(np.float64)
+            V = _stack(ch, [f"v{j}" for j in range(m)])
             w = (np.ascontiguousarray(ch["w"], dtype=np.float64) if wcol
                  else np.ones(len(V)))
+            # residualize in place, then one BLAS product for the k x k sums
             if tcols:
-                _nb_assemble_rows_sl(starts, codes, self.offs, w, self._slope_matrix(ch), V,
-                                     gamma, acc)
+                _nb_residualize_rows_sl(starts, codes, self.offs, w, self._slope_matrix(ch),
+                                        V, gamma, nt)
             else:
-                _nb_assemble_rows(starts, codes, self.offs, w, V, gamma, not self.no_fe, acc)
-        return acc.sum(axis=0)
+                _nb_residualize_rows(starts, codes, self.offs, w, V, gamma, not self.no_fe, nt)
+            if wcol:
+                V *= np.sqrt(w)[:, None]
+            acc += V.T @ V
+        return acc
 
     def _row_chunks(self, cols):
         """Yield (chunk, starts, codes) over the row files.
@@ -271,9 +285,13 @@ class _InferenceMixin:
         weighted = self.weights is not None
 
         acc_s = np.zeros((nt, 4))
-        acc_B = np.zeros((nt, k, k))
-        acc_hc = np.zeros((nt, k, k))
-        acc_g = np.zeros((nt, k, k))
+        acc_B = np.zeros((k, k))
+        acc_hc = np.zeros((k, k))
+        acc_g = np.zeros((k, k))
+        need_seg = any(spec["kind"] == "seg" for spec in self.clusters.values())
+        # OLS: the instruments are the regressors (Pi = I), so they share one
+        # array and the scores are the residualized regressors themselves
+        ols = list(zk) == list(xk)
         scores = {t: np.zeros((spec["G"], k)) for t, spec in self.clusters.items()
                   if spec["kind"] in ("fe", "extra")}
         subs = {t: spec for t, spec in self.clusters.items() if spec["kind"] == "segsub"}
@@ -292,30 +310,51 @@ class _InferenceMixin:
             y = np.ascontiguousarray(ch[f"v{yj}"], dtype=np.float64)
             n = len(y)
             w = np.ascontiguousarray(ch["w"], dtype=np.float64) if weighted else np.ones(n)
-            X = (np.column_stack([ch[f"v{j}"] for j in xk]).astype(np.float64) if k
-                 else np.zeros((n, 0)))
-            Z = (np.column_stack([ch[f"v{j}"] for j in zk]).astype(np.float64) if q
-                 else np.zeros((n, 0)))
+            X = _stack(ch, [f"v{j}" for j in xk]) if k else np.zeros((n, 0))
+            Z = X if ols else (_stack(ch, [f"v{j}" for j in zk]) if q else np.zeros((n, 0)))
             G = len(starts) - 1
             e = np.empty(n)
-            h = np.empty((n, k))
+            zt = np.empty((n, q))
+            sg = np.empty((G if need_seg else 0, q))
             if tcols:
                 T = self._slope_matrix(ch)
                 g_coef = np.empty((G, self.p))
                 _nb_pass2_sl(starts, codes, self.offs, w, T, y, X, beta_c, gam_y, gam_y0, Z,
-                             gam_z, Pi_c, yc, fweights, g_coef, e, h, acc_s, acc_B, acc_hc, acc_g)
+                             gam_z, yc, g_coef, e, zt, sg, acc_s)
                 # back to the original scale of the slope variables
                 g_eff = g_coef[:, 0] - g_coef[:, 1:] @ self.tmeans
                 g_row = np.einsum("ij,ij->i", T, np.repeat(g_coef, np.diff(starts), axis=0))
             else:
                 g_eff = np.empty(G)
                 _nb_pass2(starts, codes, self.offs, w, y, X, beta_c, gam_y, gam_y0, Z, gam_z,
-                          Pi_c, yc, fweights, not self.no_fe, g_eff, e, h, acc_s, acc_B,
-                          acc_hc, acc_g)
+                          yc, not self.no_fe, g_eff, e, zt, sg, acc_s)
                 g_row = None
             Ng = np.diff(starts)
+
+            # The k x k sums, as BLAS products over the chunk rather than k x k
+            # scalar updates per row, which fall out of cache once k is in the
+            # hundreds. h = Pi' z~ are the scores (for OLS, z~ itself); one
+            # n x k buffer is reused for each weighting in turn.
+            h = zt if ols else zt @ Pi_c
+            del zt
+            buf = np.empty_like(h)
+            if weighted:
+                sw = np.sqrt(w)
+                np.multiply(h, sw[:, None], out=buf)
+                acc_B += buf.T @ buf                              # sum w h h'
+                np.multiply(h, ((sw if fweights else w) * e)[:, None], out=buf)
+            else:
+                acc_B += h.T @ h
+                np.multiply(h, e[:, None], out=buf)
+            acc_hc += buf.T @ buf               # sum w^2 e^2 h h' (w e^2 h h', fweights)
+            if need_seg:
+                if not ols:
+                    sg = sg @ Pi_c
+                acc_g += sg.T @ sg              # group sums of w e h, from the kernel
             if scores or subs:
-                he = h * (w * e)[:, None]
+                he = np.multiply(h, (w * e)[:, None], out=buf)    # scores w e h
+            del h
+            if scores or subs:
                 for t, sc in scores.items():
                     sc += _scatter(ch[self.clusters[t]["code"]].astype(np.int64), he, sc.shape[0])
                 if subs:
@@ -376,12 +415,12 @@ class _InferenceMixin:
         meat.update(meat_sub)
         for t, spec in self.clusters.items():
             if spec["kind"] == "seg":
-                meat[t] = acc_g.sum(axis=0)
+                meat[t] = acc_g
             elif spec["kind"] == "segsub":
                 spec["G"] = G_sub[t]
         rss, tss_w, sy, syy = acc_s.sum(axis=0)
         ssy = syy - sy * sy / self.wsum     # weighted total SS around the weighted mean
-        return rss, tss_w, ssy, acc_B.sum(axis=0), acc_hc.sum(axis=0), meat, paths
+        return rss, tss_w, ssy, acc_B, acc_hc, meat, paths
 
     # ------------------------------------------------------------ estimation
     def _estimate(self, tag, model, A, gamma, ctx):

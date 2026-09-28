@@ -178,16 +178,17 @@ def _group_pinv(T, w, s, e, A, Ainv):
 
 
 @nb.njit(parallel=True, cache=True)
-def _nb_assemble_rows_sl(starts, codes, offs, w, T, V, Gamma, acc):
-    """Row assembly of V' M_D V with the slope projection."""
-    nt, D, m, p = acc.shape[0], codes.shape[1], V.shape[1], T.shape[1]
+def _nb_residualize_rows_sl(starts, codes, offs, w, T, V, Gamma, nt):
+    """_nb_residualize_rows with the slope projection: V is overwritten with
+    v - sum_d Gamma_d[level], less its weighted regression on the group's
+    [1, slopes]. The caller forms V' W V with BLAS."""
+    D, m, p = codes.shape[1], V.shape[1], T.shape[1]
     G = len(starts) - 1
     for t in nb.prange(nt):
         A = np.empty((p, p))
         Ainv = np.empty((p, p))
         c = np.empty((p, m))
         coef = np.empty((p, m))
-        q = np.empty(m)
         for gi in range(t * G // nt, (t + 1) * G // nt):
             s, e = starts[gi], starts[gi + 1]
             _group_pinv(T, w, s, e, A, Ainv)
@@ -197,6 +198,7 @@ def _nb_assemble_rows_sl(starts, codes, offs, w, T, V, Gamma, acc):
                     v = V[i, j]
                     for d in range(D):
                         v -= Gamma[offs[d] + codes[i, d], j]
+                    V[i, j] = v
                     for r in range(p):
                         c[r, j] += w[i] * T[i, r] * v
             for r in range(p):
@@ -208,23 +210,21 @@ def _nb_assemble_rows_sl(starts, codes, offs, w, T, V, Gamma, acc):
             for i in range(s, e):
                 for j in range(m):
                     v = V[i, j]
-                    for d in range(D):
-                        v -= Gamma[offs[d] + codes[i, d], j]
                     for r in range(p):
                         v -= T[i, r] * coef[r, j]
-                    q[j] = v
-                for j1 in range(m):
-                    for j2 in range(m):
-                        acc[t, j1, j2] += w[i] * q[j1] * q[j2]
+                    V[i, j] = v
 
 
 @nb.njit(parallel=True, cache=True)
-def _nb_pass2_sl(starts, codes, offs, w, T, y, X, beta, gam_y, gam_y0, Z, gam_z, Pi, yc,
-                 fweights, g_coef, e_out, h_out, acc_s, acc_B, acc_hc, acc_g):
+def _nb_pass2_sl(starts, codes, offs, w, T, y, X, beta, gam_y, gam_y0, Z, gam_z, yc,
+                 g_coef, e_out, zt_out, sg_out, acc_s):
     """_nb_pass2 with the slope projection; g_coef[g] receives the group's
-    intercept and slopes (in terms of the centered slope variables)."""
-    nt, D, k, q, p = acc_B.shape[0], codes.shape[1], X.shape[1], Z.shape[1], T.shape[1]
+    intercept and slopes (in terms of the centered slope variables), zt_out
+    the residualized instruments and sg_out (when sized) the group score sums."""
+    D, k, q, p = codes.shape[1], X.shape[1], Z.shape[1], T.shape[1]
+    want_sg = sg_out.shape[0] > 0
     G = len(starts) - 1
+    nt = acc_s.shape[0]
     for t in nb.prange(nt):
         A = np.empty((p, p))
         Ainv = np.empty((p, p))
@@ -234,9 +234,6 @@ def _nb_pass2_sl(starts, codes, offs, w, T, y, X, beta, gam_y, gam_y0, Z, gam_z,
         bu = np.empty(p)
         by = np.empty(p)
         bz = np.empty((p, q))
-        zt = np.empty(q)
-        h = np.empty(k)
-        sg = np.empty(k)
         for gi in range(t * G // nt, (t + 1) * G // nt):
             s, e = starts[gi], starts[gi + 1]
             _group_pinv(T, w, s, e, A, Ainv)
@@ -261,6 +258,7 @@ def _nb_pass2_sl(starts, codes, offs, w, T, y, X, beta, gam_y, gam_y0, Z, gam_z,
                     v = Z[i, j]
                     for d in range(D):
                         v -= gam_z[offs[d] + codes[i, d], j]
+                    zt_out[i, j] = v
                     for r in range(p):
                         cz[r, j] += wi * T[i, r] * v
             for r in range(p):
@@ -277,7 +275,8 @@ def _nb_pass2_sl(starts, codes, offs, w, T, y, X, beta, gam_y, gam_y0, Z, gam_z,
                     for r2 in range(p):
                         x += Ainv[r, r2] * cz[r2, j]
                     bz[r, j] = x
-            sg[:] = 0.0
+            if want_sg:
+                sg_out[gi, :] = 0.0
             for i in range(s, e):
                 wi = w[i]
                 yy = y[i]
@@ -289,28 +288,13 @@ def _nb_pass2_sl(starts, codes, offs, w, T, y, X, beta, gam_y, gam_y0, Z, gam_z,
                     ei -= T[i, r] * bu[r]
                 e_out[i] = ei
                 for j in range(q):
-                    v = Z[i, j]
-                    for d in range(D):
-                        v -= gam_z[offs[d] + codes[i, d], j]
+                    v = zt_out[i, j]
                     for r in range(p):
                         v -= T[i, r] * bz[r, j]
-                    zt[j] = v
-                for c in range(k):
-                    hc = 0.0
-                    for j in range(q):
-                        hc += zt[j] * Pi[j, c]
-                    h[c] = hc
-                    h_out[i, c] = hc
+                    zt_out[i, j] = v
+                    if want_sg:
+                        sg_out[gi, j] += wi * ei * v
                 acc_s[t, 0] += wi * ei * ei
                 acc_s[t, 1] += wi * yy * yy
                 acc_s[t, 2] += wi * (y[i] - yc)
                 acc_s[t, 3] += wi * (y[i] - yc) * (y[i] - yc)
-                hw = wi if fweights else wi * wi
-                for c1 in range(k):
-                    sg[c1] += wi * h[c1] * ei
-                    for c2 in range(k):
-                        acc_B[t, c1, c2] += wi * h[c1] * h[c2]
-                        acc_hc[t, c1, c2] += hw * ei * ei * h[c1] * h[c2]
-            for c1 in range(k):
-                for c2 in range(k):
-                    acc_g[t, c1, c2] += sg[c1] * sg[c2]
