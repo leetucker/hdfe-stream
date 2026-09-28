@@ -1,7 +1,8 @@
 # hdfe-stream
 
-Linear regression with several high-dimensional fixed effects, on data that does
-not fit in memory.
+Regression with several high-dimensional fixed effects, on data that does not
+fit in memory: linear (`feols_stream`), and Poisson, logit and probit
+(`fepois_stream`, `feglm_stream`).
 
 ```python
 from hdfe_stream import feols_stream
@@ -112,7 +113,9 @@ they are all computed in the one residual pass. CRV3, the cluster jackknife
 clusters or there are none; see [limitations](#limitations).
 
 **Estimators.** OLS, weighted least squares (`weights=`, analytic or frequency),
-and 2SLS (`y ~ exog | fe | endog ~ instruments`) with a first-stage F.
+and 2SLS (`y ~ exog | fe | endog ~ instruments`) with a first-stage F. Poisson
+(`fepois_stream`, with an offset) and logit and probit (`feglm_stream`), with
+weights; see [below](#poisson-logit-and-probit).
 
 **Multiple models.** Several outcomes (`y1 + y2 ~ ...`), stepwise covariate sets
 (`sw()`, `csw()`) and stepwise fixed-effect sets. Models sharing a fixed-effect
@@ -375,6 +378,7 @@ Runnable, on simulated data, no setup — see [examples/](examples/):
 | [`formulas.py`](examples/formulas.py) | the formula syntax, end to end |
 | [`weights_and_iv.py`](examples/weights_and_iv.py) | weights and 2SLS |
 | [`fewer_fixed_effects.py`](examples/fewer_fixed_effects.py) | one fixed effect, or none |
+| [`glm.py`](examples/glm.py) | Poisson with an offset, logit and probit, separation, and the incidental parameter bias |
 | [`wide_designs.py`](examples/wide_designs.py) | hundreds of covariates, and sizing the batches to them |
 | [`varying_slopes.py`](examples/varying_slopes.py) | worker-specific trends, and the low-level interface |
 | [`out_of_core.py`](examples/out_of_core.py) | memory, disk, solvers, logging |
@@ -397,6 +401,38 @@ with enough mobility to connect the firms into one component. `simulate_rich`
 adds categoricals, non-fixed-effect cluster variables, weights, an IV block and
 missing values; `simulate_trends` adds worker-specific time trends. All are
 deterministic given a `seed`.
+
+## Poisson, logit and probit
+
+```python
+from hdfe_stream import fepois_stream, feglm_stream
+
+pois = fepois_stream("visits ~ x | worker_id + firm_id + year", "data/*.parquet",
+                     offset="log_exposure", workdir="scratch")
+logit = feglm_stream("promoted ~ x | firm_id + year", "data/*.parquet", "logit",
+                     workdir="scratch")
+```
+
+These are fitted by iteratively reweighted least squares, each step a weighted
+version of the linear regression above. Pass 0 sorts the rows once. Each step
+then reads them once, rebuilding every row's linear predictor from the current
+coefficients, and solves the reduced system, starting from the previous step's
+solution.
+
+Nothing row-sized is rewritten between steps, so the disk needed is about what
+OLS needs. A fit takes a few times as long as OLS on the same data, since it
+usually needs 6 to 10 steps. On a 3.4-million-row panel with worker, firm and
+year effects:
+
+- **Poisson:** 12 s, against pyfixest's 46 s.
+- **Logit:** 16 s, against 54 s.
+
+Fixed-effect levels whose effect would be infinite are dropped first: all-zero
+outcomes for Poisson, constant ones for logit and probit. Estimates, standard
+errors and deviance match pyfixest to about 1e-12. The few places where they
+deliberately differ are frequency weights, which here mean repeated rows, and
+logit and probit levels whose outcome is all 1, which are dropped. Both are
+described in **[docs/glm.md](docs/glm.md)**, along with the options and results.
 
 ## Leave-out variance components (KSS)
 
@@ -452,7 +488,9 @@ statistics, the sample kept after dropping missing values, and the exact set of
 coefficient names and dropped collinear terms. Varying slopes have no pyfixest
 equivalent, so they are checked against a brute-force regression with explicit
 worker-by-slope dummies; three-way clustering is checked against an
-inclusion–exclusion sum built from pyfixest's own score matrix.
+inclusion–exclusion sum built from pyfixest's own score matrix. Poisson, logit
+and probit are checked against pyfixest's `fepois` and `feglm`, and their
+frequency weights against pyfixest on the data with each row repeated.
 
 ```bash
 pip install -e ".[test]"
@@ -471,6 +509,13 @@ pytest
   effects once per cluster, and the fit refuses; use CRV1, or pyfixest, which
   refits. CRV3 is also one-way and OLS only (pyfixest has no IV CRV3 either).
   No CRV2 and no wild bootstrap.
+- **Poisson, logit and probit:** no CRV3, IV, varying slopes or leave-out
+  estimation; no detection of separation by the covariates (pyfixest's `"ir"`
+  check), only by the fixed effects; and no correction for the incidental
+  parameter bias of logit and probit with fixed effects estimated from few
+  observations, as in pyfixest and fixest. During the iterations the streamed
+  dimension's effects are held in memory, one float per group per coefficient
+  set. See [docs/glm.md](docs/glm.md#not-available).
 - **A converted result cannot recompute its own vcov**, because it holds no
   data. Ask for what you need at fit time via `cluster=`.
 - **Formula support pins a pyfixest range** (`>=0.50,<0.61`), because it uses

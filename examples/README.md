@@ -24,6 +24,7 @@ your working directory.
 | [`formulas.py`](formulas.py) | Formula syntax: transformations, categoricals, event studies, interacted fixed effects, several models in one call, missing values, collinear terms, and clustering on anything. |
 | [`weights_and_iv.py`](weights_and_iv.py) | Analytic and frequency weights, and 2SLS with a first-stage F. |
 | [`fewer_fixed_effects.py`](fewer_fixed_effects.py) | One fixed effect (a within regression) and none (OLS with an intercept), and `csw0()` adding them one at a time. |
+| [`glm.py`](glm.py) | Poisson with an offset, logit and probit: the separation check, the IRLS diagnostics, the residual file's fitted means, and the incidental parameter bias of a logit with worker effects, against a known coefficient. |
 | [`wide_designs.py`](wide_designs.py) | Hundreds of covariates: a categorical expanded into fine indicators, how the design is built bucket by bucket, and sizing the batches to the width. |
 | [`varying_slopes.py`](varying_slopes.py) | Worker-specific time trends (FEIS), how the streamed dimension is chosen, and the low-level `StreamingHDFE` interface. |
 | [`out_of_core.py`](out_of_core.py) | What is held in memory and what is not, the three solvers, the memory knobs, disk lifecycle, and logging. Read this before pointing the library at something large. |

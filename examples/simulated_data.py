@@ -12,7 +12,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from hdfe_stream.simulate import simulate_rich, simulate_trends
+import numpy as np
+import polars as pl
+
+from hdfe_stream.simulate import simulate_akm, simulate_rich, simulate_trends
 
 OUTPUT = Path(__file__).parent / "output"
 
@@ -55,6 +58,32 @@ def trends_path(n_workers=2_000):
     return _ensure("trends.parquet", lambda: simulate_trends(n_workers=n_workers))
 
 
+def glm_panel_path(n_workers=N_WORKERS):
+    """The base panel with outcomes for Poisson and binary models, whose true
+    coefficient on `x` is 0.3:
+
+      visits    a count, Poisson with mean exposure * exp(0.3 x + worker + firm
+                effects - 1); log_exposure is its offset
+      promoted  0 or 1, logit with index 0.3 x + firm effect - 1, and no worker
+                effect at all
+    """
+    def build():
+        frame = simulate_akm(n_workers=n_workers, keep_effects=True)
+        rng = np.random.default_rng(11)
+        n = frame.height
+        x = rng.normal(size=n)
+        exposure = rng.uniform(0.5, 2.0, n)
+        worker = frame["true_worker_effect"].to_numpy()
+        firm = frame["true_firm_effect"].to_numpy()
+        visits = rng.poisson(exposure * np.exp(0.3 * x + 0.5 * worker + 0.5 * firm - 1))
+        index = 0.3 * x + firm - 1
+        promoted = rng.random(n) < 1 / (1 + np.exp(-index))
+        return frame.with_columns(x=pl.Series(x), log_exposure=pl.Series(np.log(exposure)),
+                                  visits=pl.Series(visits.astype(float)),
+                                  promoted=pl.Series(promoted.astype(float)))
+    return _ensure("glm_panel.parquet", build)
+
+
 def workdir(name):
     """Scratch space for one example's intermediates and result files."""
     path = OUTPUT / "work" / name
@@ -65,4 +94,5 @@ def workdir(name):
 if __name__ == "__main__":
     panel_path()
     trends_path()
+    glm_panel_path()
     print(f"\ndata ready in {OUTPUT}")

@@ -5,6 +5,7 @@ the residual pass, and the per-model result.
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import numba as nb
 import numpy as np
@@ -46,6 +47,10 @@ def _ratio(num, den):
 #
 # Sets, for _PassesMixin: clusters, cmaps and cluster_reqs. _resolve_clusters
 # is called from _pass0_code, before the scan that factorizes the ids.
+#
+# Hooks a subclass may override (StreamingGLM does): _pass2_rows, where pass 2
+# gets each chunk's outcome and weights, and _iid_factor, the scale of the iid
+# vcov.
 
 
 class _InferenceMixin:
@@ -254,19 +259,23 @@ class _InferenceMixin:
         self.slope_redundancy = out
         return out
 
-    def _collinear(self, Axx, idx=None):
+    def _collinear(self, Axx, idx=None, raw=None):
         """pyfixest's collinearity check on the residualized X'X, plus a
         relative check: a variable whose residual sum of squares is below
         collin_tol_rel of its raw (centered) sum of squares is treated as
         absorbed by the fixed effects. The iterative solve leaves noise of
         order sqrt(tol * condition number) in exactly collinear variables,
-        so an absolute test alone can miss them."""
+        so an absolute test alone can miss them.
+
+        `raw` is those raw sums of squares, on the same weighting as Axx;
+        by default the variables' own from pass 0, looked up by `idx`."""
         k = Axx.shape[0]
         if k == 0:
             return np.zeros(0, bool)
         mask = self._collinear_pf(Axx)
-        if idx is not None:
+        if raw is None and idx is not None:
             raw = self.raw_ss[idx]
+        if raw is not None:
             mask |= (raw > 0) & (np.diag(Axx) <= self.collin_tol_rel * raw)
             if mask.any() and not mask.all():   # re-check the rest without them
                 keep = np.flatnonzero(~mask)
@@ -291,6 +300,33 @@ class _InferenceMixin:
         return mask
 
     # --------------------------------------------------------------- step 4
+    def _pass2_rows(self, yj, xk):
+        """Where pass 2 gets each chunk's outcome and weights.
+
+        Returns a function of (chunk, starts, codes) giving y and w, the
+        frequency weights `fw` (None unless fweights: the heteroskedastic
+        meat divides each row's squared score by its frequency), `w_out` for
+        the residual file's weights column (None for none), and `extra`, a
+        function of the residuals giving further residual-file columns, or
+        None. Its attributes: `cols`, the extra row columns it reads, and
+        `weighted`. For OLS these are the variable and the user's weights.
+        """
+        weighted = self.weights is not None
+        fweights = weighted and self.weights_type == "fweights"
+
+        def rows(ch, starts, codes):
+            y = np.ascontiguousarray(ch[f"v{yj}"], dtype=np.float64)
+            w = (np.ascontiguousarray(ch["w"], dtype=np.float64) if weighted
+                 else np.ones(len(y)))
+            return SimpleNamespace(y=y, w=w, fw=w if fweights else None,
+                                   w_out=w if weighted else None, extra=None)
+        rows.cols, rows.weighted = [], weighted
+        return rows
+
+    def _iid_factor(self, rss, N, K):
+        """Scale of the iid vcov, times (X~' W X~)^-1: the residual variance."""
+        return _ratio(rss, N - K)
+
     def _pass2(self, tag, ycol_name, gamma, yj, xk, beta, zk, Pi, bread):
         """Row pass for one model: fe[0] effects, residuals, moments, meats;
         writes the residual file and one FE file per dimension.
@@ -314,8 +350,8 @@ class _InferenceMixin:
         gam_y = gam_y0 - gam_x @ beta                  # FEs of the y-equation
         beta_c = np.ascontiguousarray(beta, dtype=np.float64)
         Pi_c = np.ascontiguousarray(Pi, dtype=np.float64).reshape(q, k)
-        fweights = self.weights is not None and self.weights_type == "fweights"
-        weighted = self.weights is not None
+        rows = self._pass2_rows(yj, xk)
+        weighted = rows.weighted
 
         acc_s = np.zeros((nt, 4))
         acc_B = np.zeros((k, k))
@@ -352,15 +388,16 @@ class _InferenceMixin:
         src = [c for c in self._src_cols() if c not in self.keep]
         tcols = [f"t{j + 1}" for j in range(len(self.slope_vars))]
         cols = list(dict.fromkeys(["gcode", *self.ccols, *ccodes, *src, *self.keep, *tcols,
-                                   *(["w"] if weighted else []), f"v{yj}",
-                                   *[f"v{j}" for j in xk], *[f"v{j}" for j in zk]]))
+                                   *(["w"] if self.weights is not None else []), f"v{yj}",
+                                   *[f"v{j}" for j in xk], *[f"v{j}" for j in zk],
+                                   *rows.cols]))
         g_cols = self.fe_cols[self.g_fe] if self.fe else []
         yc = float(self.means[yj])
         r_writer = g_writer = None
         for ch, starts, codes in self._row_chunks([c for c in cols if c != "gcode"]):
-            y = np.ascontiguousarray(ch[f"v{yj}"], dtype=np.float64)
+            r = rows(ch, starts, codes)
+            y, w = r.y, r.w
             n = len(y)
-            w = np.ascontiguousarray(ch["w"], dtype=np.float64) if weighted else np.ones(n)
             X = _stack(ch, [f"v{j}" for j in xk]) if k else np.zeros((n, 0))
             Z = X if ols else (_stack(ch, [f"v{j}" for j in zk]) if q else np.zeros((n, 0)))
             G = len(starts) - 1
@@ -393,7 +430,10 @@ class _InferenceMixin:
                 sw = np.sqrt(w)
                 np.multiply(h, sw[:, None], out=buf)
                 acc_B += buf.T @ buf                              # sum w h h'
-                np.multiply(h, ((sw if fweights else w) * e)[:, None], out=buf)
+                # w e, or w e / sqrt(fw) with frequency weights (sqrt(w) e
+                # when they are the only weights)
+                me = (w if r.fw is None else sw if r.fw is w else w / np.sqrt(r.fw)) * e
+                np.multiply(h, me[:, None], out=buf)
             else:
                 acc_B += h.T @ h
                 np.multiply(h, e[:, None], out=buf)
@@ -427,8 +467,8 @@ class _InferenceMixin:
             if self.save_resid:
                 out = {c: ch[c] for c in src}
                 out.update({c: ch[c] for c in self.keep})
-                if weighted:
-                    out["weights"] = w
+                if r.w_out is not None:
+                    out["weights"] = r.w_out
                 out[ycol_name] = y
                 # row-level fe[0] contribution (intercept + slopes * variables)
                 if self.fe:
@@ -436,6 +476,8 @@ class _InferenceMixin:
                 for j, f in enumerate(self.o_fe):
                     out[f"fe_{f}"] = gam_y[self.offs[j] + codes[:, j]]
                 out.update({"xb": X @ beta_c, "resid": e})
+                if r.extra is not None:
+                    out.update(r.extra(e))
                 tbl = pa.table(out)
                 if r_writer is None:
                     r_writer = pq.ParquetWriter(paths["resid"], tbl.schema)
@@ -544,7 +586,7 @@ class _InferenceMixin:
         Binv = np.linalg.inv(B) if k else np.zeros((0, 0))
         # a saturated model has no residual df: its variances are undefined,
         # not an error (a fit made only for its effects can be saturated)
-        vc = {"iid": (_ratio(rss, N - K) * Binv, N - K),
+        vc = {"iid": (self._iid_factor(rss, N, K) * Binv, N - K),
               "hetero": (_ratio(N, N - K) * Binv @ meat_hc @ Binv, N - K)}
         n_clusters = {}
         for req, terms in self.cluster_reqs.items():

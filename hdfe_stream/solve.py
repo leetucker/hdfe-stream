@@ -56,27 +56,40 @@ _RHS_ZERO_TOL = 1e-11
 class _SolveMixin:
 
     # --------------------------------------------------------------- step 2
-    def _pcg(self, matvec, precond, b, zero=None):
+    def _pcg(self, matvec, precond, b, zero=None, x0=None):
         """Block PCG: one independent CG per right-hand-side column, run in
         lockstep so every operator application covers all columns.
 
         `zero` marks columns whose right-hand side is numerically zero (see
         `_RHS_ZERO_TOL`); they are returned as the zero solution, which is what
         solves them, and take no part in the iteration.
+
+        `x0` is a starting guess (the GLM passes the previous IRLS step's
+        solution); columns it already solves to `tol` take no iterations.
         """
         bnorm = np.linalg.norm(b, axis=0)
         bnorm[bnorm == 0] = 1.0
-        X = np.zeros_like(b)
-        R = b.copy()
+        if x0 is None:
+            X = np.zeros_like(b)
+            R = b.copy()
+        else:
+            X = np.array(x0, dtype=np.float64, order="C")
+            R = b - matvec(X)
         if zero is not None and zero.any():
+            X[:, zero] = 0.0
             R[:, zero] = 0.0            # solved already: X stays zero
             if zero.all():
                 return X, 0, True, 0.0
+        active = np.ones(b.shape[1], bool) if zero is None else ~zero
+        rel = np.zeros(b.shape[1])
+        if x0 is not None:
+            rel = np.linalg.norm(R, axis=0) / bnorm
+            active &= rel > self.tol
+            if not active.any():
+                return X, 0, True, float(rel.max())
         Z = precond(R)
         P = Z.copy()
         rz = np.einsum("ij,ij->j", R, Z)
-        active = np.ones(b.shape[1], bool) if zero is None else ~zero
-        rel = np.zeros(b.shape[1])
         it = 0
         for it in range(1, self.maxiter + 1):
             AP = matvec(P)
@@ -181,10 +194,11 @@ class _SolveMixin:
                    "S_build_seconds": round(time.time() - t0, 2)}
 
     def _make_block_solver(self):
-        """Return (solve(b, zero) -> (X, iterations, converged, rel), info dict).
+        """Return (solve(b, zero, x0) -> (X, iterations, converged, rel), info
+        dict).
 
-        The `within` solver takes a column range instead and has no `zero`
-        argument; it does its own convergence handling.
+        The `within` solver takes the block's cell sums instead and has no
+        `zero` or `x0` argument; it does its own convergence handling.
         """
         solver = self.solver
         info = {}
@@ -220,7 +234,7 @@ class _SolveMixin:
                     return np.column_stack([M @ R[:, j] for j in range(R.shape[1])])
             else:
                 precond = self._jacobi()
-            return (lambda b, zero=None: self._pcg(matvec, precond, b, zero)), info
+            return (lambda b, zero=None, x0=None: self._pcg(matvec, precond, b, zero, x0)), info
 
         if solver == "stream_cg":
             nt = nb.get_num_threads()
@@ -236,7 +250,7 @@ class _SolveMixin:
                                       self.offs, acc)
                 return acc.sum(axis=0)
             jac = self._jacobi()
-            return (lambda b, zero=None: self._pcg(matvec_s, jac, b, zero)), info
+            return (lambda b, zero=None, x0=None: self._pcg(matvec_s, jac, b, zero, x0)), info
 
         # within: full system on identifying cells, keep the non-streamed blocks
         import within
@@ -247,23 +261,32 @@ class _SolveMixin:
         nvec = np.asarray(self.n)
         off, tot = self._offsets()
 
-        def solve_within(j0, j1):
-            Y = np.asarray(self.sums[:, j0:j1]) / nvec[:, None]
+        def solve_within(sums):
+            Y = np.asarray(sums) / nvec[:, None]
             res = within.solve_batch(design, Y, weights=nvec,
                                      options=within.LsmrOptions(tol=self.tol, maxiter=self.maxiter))
             x, lay = np.asarray(res.x), res.layout
-            Gm = np.zeros((tot, j1 - j0))
+            Gm = np.zeros((tot, Y.shape[1]))
             for t, f in enumerate(self.o_fe, start=1):
                 start, nl_seen = lay.index(t, 0, 0), lay.n_levels(t)
                 Gm[off[f]:off[f] + nl_seen] = x[start:start + nl_seen]
             return Gm, list(res.iterations), bool(all(res.converged)), float("nan")
         return solve_within, info
 
-    def _solve(self):
+    def _solve(self, sums=None, names=None, raw_ss=None, x0=None, in_memory=False):
         """Solve for Gamma (levels x variables) in column blocks; the result
-        is written to a memory-mapped .npy file."""
+        is written to a memory-mapped .npy file.
+
+        By default the variables are the estimator's own, from the cell sums
+        of passes 1/1b. The GLM passes its working regression's instead:
+        `sums` (cells x variables), their `names` and total sums of squares
+        `raw_ss`, the previous step's solution `x0` as a starting guess, and
+        `in_memory` to keep Gamma out of the run directory.
+        """
         off, L = self._offsets()
-        m = self.m
+        if sums is None:
+            sums, names, raw_ss = self.sums, self.var_names, self.raw_ss
+        m = sums.shape[1]
         t0 = time.time()
         if L == 0:
             # No dimension besides the streamed one (or none at all): the
@@ -271,34 +294,41 @@ class _SolveMixin:
             return np.zeros((0, m)), {"solver": "none", "iterations": 0, "converged": True,
                                       "blocks": 0, "seconds": 0.0}
         solve, info = self._make_block_solver()
-        gamma = np.lib.format.open_memmap(self.paths["gamma"], mode="w+",
-                                          dtype=np.float64, shape=(L, m))
+        gamma = (np.empty((L, m)) if in_memory else
+                 np.lib.format.open_memmap(self.paths["gamma"], mode="w+",
+                                           dtype=np.float64, shape=(L, m)))
         its, conv, rel = [], True, 0.0
         fe_spanned = []
         for j0 in range(0, m, self.rhs_block):
             j1 = min(m, j0 + self.rhs_block)
             if info["solver"] == "within":
-                X, it, c, r = solve(j0, j1)
+                X, it, c, r = solve(sums[:, j0:j1])
             else:
                 b = np.zeros((L, j1 - j0))
                 if self.slope_vars:
-                    _nb_rhs_sl(self.starts, self.codes, self.sums[:, j0:j1], self.st, self.ainv,
+                    _nb_rhs_sl(self.starts, self.codes, sums[:, j0:j1], self.st, self.ainv,
                                self.cmat[:, :, j0:j1], self.offs, b)
                 else:
-                    _nb_rhs(self.starts, self.codes, self.n, self.sums[:, j0:j1], self.offs, b)
+                    _nb_rhs(self.starts, self.codes, self.n, sums[:, j0:j1], self.offs, b)
                 # compare each right-hand side against the scale of its own
                 # variable; see _RHS_ZERO_TOL. raw_ss is the variable's total
                 # sum of squares, already computed in pass 0, so this costs
                 # nothing beyond the norm of b itself.
-                scale = np.sqrt(np.maximum(self.raw_ss[j0:j1], 0.0))
+                scale = np.sqrt(np.maximum(raw_ss[j0:j1], 0.0))
                 zero = np.linalg.norm(b, axis=0) <= _RHS_ZERO_TOL * scale
-                fe_spanned += [self.var_names[j0 + k] for k in np.flatnonzero(zero)]
-                X, it, c, r = solve(b, zero)
+                fe_spanned += [names[j0 + k] for k in np.flatnonzero(zero)]
+                X, it, c, r = solve(b, zero, None if x0 is None else x0[:, j0:j1])
             gamma[:, j0:j1] = self._normalize(X)
             its.append(it)
             conv &= c
             rel = max(rel, r)
+        if in_memory:
+            return gamma, self._solve_info(info, its, conv, rel, fe_spanned, t0)
         gamma.flush()
+        return (np.load(self.paths["gamma"], mmap_mode="r"),
+                self._solve_info(info, its, conv, rel, fe_spanned, t0))
+
+    def _solve_info(self, info, its, conv, rel, fe_spanned, t0):
         info.update({"iterations": its if len(its) > 1 else its[0], "converged": conv,
                      "blocks": len(its), "seconds": round(time.time() - t0, 2)})
         if not np.isnan(rel):
@@ -309,7 +339,7 @@ class _SolveMixin:
                       + ", ".join(fe_spanned))
         if not conv:
             _warn(f"solver did not converge within maxiter={self.maxiter}", self.logger)
-        return np.load(self.paths["gamma"], mmap_mode="r"), info
+        return info
 
     def _normalize(self, Gamma):
         """fe[1] effects have obs-weighted mean zero within each connected

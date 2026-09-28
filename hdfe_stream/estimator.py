@@ -139,6 +139,11 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
          full instrument set (excluded instruments and exogenous regressors).
     """
 
+    # Hooks for subclasses (see passes.py): sort each fe[0] group's rows by
+    # cell, and sum the variables per cell in passes 1/1b.
+    cells_contiguous = False
+    cell_sums = True
+
     def __init__(self, y, x, fe, workdir=None, solver="auto", precond="jacobi", keep=(),
                  tol=1e-10, maxiter=5000, batch_rows=2_000_000, row_group_size=500_000,
                  n_buckets=None, rows_per_bucket=20_000_000, cells_in_memory=False,
@@ -337,6 +342,15 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         gamma, info = self._solve()
         self._log("step 3: assembling normal equations")
         A = self._assemble(gamma)
+        ctx = {"k_fe": self._k_fe(fe_dof), "nested": nested, "default": default, "t0": t0,
+               "info": info}
+        self._track_disk()
+        results = [self._estimate(f"m{mi:03d}", model, A, gamma, ctx)
+                   for mi, model in enumerate(self.models)]
+        return results
+
+    def _k_fe(self, fe_dof):
+        """Fixed-effect parameters net of the redundant ones (see `fit`)."""
         total = sum(self.fe_params.values())   # fe[0]: one per group, or its rank with slopes
         if len(self.fe) < 2:
             n_red = 0                   # one dimension, or none: nothing is redundant
@@ -344,13 +358,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
             n_red = self.n_components + len(self.o_fe) - 1
         else:
             n_red = len(self.o_fe)
-        n_red += len(self._redundant_slopes())
-        ctx = {"k_fe": total - n_red, "nested": nested, "default": default, "t0": t0,
-               "info": info}
-        self._track_disk()
-        results = [self._estimate(f"m{mi:03d}", model, A, gamma, ctx)
-                   for mi, model in enumerate(self.models)]
-        return results
+        return total - n_red - len(self._redundant_slopes())
 
     # --------------------------------------------------------------- driver
     def fit(self, source, vcov="iid", cluster=(), fe_dof="exact"):

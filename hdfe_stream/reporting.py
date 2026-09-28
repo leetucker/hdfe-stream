@@ -51,7 +51,7 @@ def _adapter_classes():
                 return pd.Series(self._pvalue, index=self._index(), name="Pr(>|t|)")
 
             def confint(self, alpha=0.05, **_):
-                crit = stats.t.ppf(1 - alpha / 2, self._df_t)
+                crit = _crit(self, 1 - alpha / 2)
                 lo, hi = self._beta_hat - crit * self._se, self._beta_hat + crit * self._se
                 return pd.DataFrame({f"{alpha / 2 * 100:.1f}%": lo,
                                      f"{(1 - alpha / 2) * 100:.1f}%": hi}, index=self._index())
@@ -79,7 +79,17 @@ def _adapter_classes():
     return _ADAPTER_CLASSES["ols"], _ADAPTER_CLASSES["iv"]
 
 
+def _crit(obj, q):
+    """Quantile for confidence intervals: normal for GLMs, t otherwise, as
+    pyfixest has it."""
+    if obj._method != "feols":
+        return stats.norm.ppf(q)
+    return stats.t.ppf(q, obj._df_t)
+
+
 def _fill_pyfixest(obj, r):
+    from .families import get_family
+    method = get_family(r.family).method if r.family else "feols"
     se = r.se
     t = np.divide(r.beta, se, out=np.full_like(r.beta, np.nan), where=se > 0)
     kind = r.vcov_type
@@ -91,7 +101,8 @@ def _fill_pyfixest(obj, r):
                                 Gs if len(Gs) == 1 else [min(Gs)] * len(Gs))
     else:
         vtype, detail, clustervar, G = kind, kind, None, None
-    crit = stats.t.ppf(0.975, r.df_t)
+    glm = method != "feols"
+    crit = stats.norm.ppf(0.975) if glm else stats.t.ppf(0.975, r.df_t)
     obj.__dict__.update({
         "_fml": r.fml, "_depvar": r.depvar,
         # the FE string as written in the formula: maketables matches FE rows
@@ -100,14 +111,16 @@ def _fill_pyfixest(obj, r):
                    if r.fe_names else None),
         "_has_fixef": bool(r.fe_names), "_coefnames": list(r.coefnames), "_k": len(r.coefnames),
         "_beta_hat": np.asarray(r.beta), "_se": se, "_tstat": t,
-        "_pvalue": 2 * stats.t.sf(np.abs(t), r.df_t),
+        "_pvalue": 2 * (stats.norm.sf(np.abs(t)) if glm else stats.t.sf(np.abs(t), r.df_t)),
         "_conf_int": np.vstack([r.beta - crit * se, r.beta + crit * se]),
         "_vcov": r.vcov, "_vcov_type": vtype, "_vcov_type_detail": detail,
         "_clustervar": clustervar, "_G": G, "_df_t": r.df_t,
         "_N": int(r.n_obs) if float(r.n_obs).is_integer() else r.n_obs,
         "_r2": r.r2, "_adj_r2": r.adj_r2, "_r2_adj": r.adj_r2,
         "_r2_within": r.r2_within, "_adj_r2_within": r.adj_r2_within, "_rmse": r.rmse,
-        "_F_stat": None, "deviance": None, "_method": "feols", "_is_iv": r.is_iv,
+        "_F_stat": None, "deviance": r.deviance if glm else None, "_method": method,
+        "_loglik": r.loglik if glm else None, "_pseudo_r2": r.pseudo_r2 if glm else None,
+        "_is_iv": r.is_iv,
         "_f_stat_1st_stage": (r.f_stat_1st_stage[0] if r.is_iv and len(r.f_stat_1st_stage) == 1
                               else None),
         "_use_mundlak": False, "_sample_split_var": None, "_sample_split_value": "all",

@@ -39,6 +39,11 @@ _RESERVED = re.compile(r"w|_bucket|gcode|[vtck]\d+")
 # Reads back from _InferenceMixin: clusters and cmaps. _pass0_code calls
 # _resolve_clusters so the cluster ids are factorized in the same scan as the
 # fixed effects.
+#
+# Hooks a subclass may override (StreamingGLM does): _restrict_sample, which
+# may drop rows from the estimation sample before anything is written;
+# `cells_contiguous`, which sorts each fe[0] group's rows by cell; and
+# `cell_sums`, which passes 1/1b consult before summing the variables per cell.
 
 
 class _PassesMixin:
@@ -64,6 +69,9 @@ class _PassesMixin:
         lf = (lf.select([pl.col(c) for c in src + self.keep] + wexpr + texpr + design)
                 .drop_nulls(src)
                 .filter(pl.all_horizontal(finite)))
+        restrict = self._restrict_sample(lf)
+        if restrict is not None:
+            lf = restrict(lf)
 
         # One scan for counts, means, weight checks and (if the streamed
         # dimension must be chosen by cardinality) HyperLogLog counts.
@@ -125,6 +133,8 @@ class _PassesMixin:
                            .filter(pl.all_horizontal(
                                [self.var_exprs[nm].is_finite() for nm in self.var_names]
                                + others_finite)))
+            if restrict is not None:
+                coded = restrict(coded)
         for name, cols, cc, path in maps:
             self._log(f"pass 0: factorizing {name}")
             lf.select(cols).unique().sort(cols).with_row_index(cc).sink_parquet(path)
@@ -189,9 +199,15 @@ class _PassesMixin:
             #
             # Groups stay contiguous either way, since fe[0] leads the key, so
             # `gcode` does not depend on this.
+            #
+            # A fit that re-reads the rows cell by cell (`cells_contiguous`:
+            # the GLM, whose weights change every iteration) sorts by the
+            # codes as well, so that each cell's rows are one run.
             sort_by = list(g_cols)
             if self.keep_intermediates:
                 sort_by += [*self.ccols, *[f"v{j}" for j in range(self.m)]]
+            elif self.cells_contiguous:
+                sort_by += self.ccols
             bucket = pl.scan_parquet(str(srcdir / "*.parquet"))
             if raw_extra is not None:
                 bucket = bucket.with_columns(design).drop(raw_extra)
@@ -221,8 +237,9 @@ class _PassesMixin:
         the (globally centered) variables, plus within-cell cross-products
         when assembly == 'cells'."""
         self._log(f"pass 1: group_by({self.g_fe}, {', '.join(self.o_fe)}) -> cells")
-        m = self.m
-        z = [(pl.col(f"v{j}") - mu).alias(f"z{j}") for j, mu in enumerate(self.means)]
+        # without `cell_sums` only the cell structure and counts are built
+        m = self.m if self.cell_sums else 0
+        z = [(pl.col(f"v{j}") - mu).alias(f"z{j}") for j, mu in enumerate(self.means[:m])]
         weighted = self.weights is not None
         if weighted:
             z.append(pl.col("w"))
@@ -275,7 +292,7 @@ class _PassesMixin:
         that identify the other effects) as flat binary arrays for memory
         mapping, and build the Jacobi diagonal."""
         self._log("pass 1b: extracting identifying cells")
-        m = self.m
+        m = self.m if self.cell_sums else 0
         off, tot = self._offsets()
         scols = [f"s{j}" for j in range(m)]
         obs = np.zeros(tot)             # weight per level (all cells)
@@ -285,7 +302,7 @@ class _PassesMixin:
         slcols = ([f"sl{a}" for a in range(1, ps + 1)]
                   + [f"sll{a}_{b}" for a in range(1, ps + 1) for b in range(a, ps + 1)]
                   + [f"slz{a}_{j}" for a in range(1, ps + 1) for j in range(m)])
-        kinds = ("codes", "n", "sums") + (("st", "ainv", "cmat") if ps else ())
+        kinds = ("codes", "n") + (("sums",) if m else ()) + (("st", "ainv", "cmat") if ps else ())
         files = {k: open(self.paths["ident"][k], "wb") for k in kinds}
         self.fe0_rank = 0               # fe[0] parameters: sum of per-group ranks
         for ch in iter_group_chunks(self.paths["cells"],
@@ -325,7 +342,8 @@ class _PassesMixin:
             sizes.append(ncells[ncells > 1])
             np.column_stack([ch[cc][keep] for cc in self.ccols]).astype(np.uint32).tofile(files["codes"])
             ch["n"][keep].astype(np.float64).tofile(files["n"])
-            np.column_stack([ch[c][keep] for c in scols]).tofile(files["sums"])
+            if m:
+                np.column_stack([ch[c][keep] for c in scols]).tofile(files["sums"])
             if ps:
                 gk = ncells > 1
                 st[keep].tofile(files["st"])
@@ -352,13 +370,13 @@ class _PassesMixin:
 
     def _load_ident(self):
         """Memory-map the identifying cells (or load them, if cells_in_memory)."""
-        m, D = self.m, len(self.o_fe)
+        m, D = (self.m if self.cell_sums else 0), len(self.o_fe)
         self.starts = np.load(self.paths["ident"]["starts"])
         M = int(self.starts[-1])
         load = np.array if self.cells_in_memory else (lambda a: a)
 
         def mm(key, dtype, shape):
-            if M == 0:
+            if M == 0 or 0 in shape:
                 return np.zeros(shape, dtype)
             return load(np.memmap(self.paths["ident"][key], dtype=dtype, mode="r", shape=shape))
         self.codes = mm("codes", np.uint32, (M, D))
@@ -414,6 +432,13 @@ class _PassesMixin:
             return None
         self.design_evaluated = "per bucket"
         return extra
+
+    def _restrict_sample(self, lf):
+        """A function that drops rows from the estimation sample, applied to
+        the rows before pass 0 writes them, or None to keep them all. `lf`
+        is the filtered design (source columns and the variables as v0, v1,
+        ...). OLS keeps every complete row."""
+        return None
 
     # ------------------------------------------------------------- no FE
     def _no_cells(self):

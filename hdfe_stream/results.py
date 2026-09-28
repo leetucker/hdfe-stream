@@ -52,6 +52,12 @@ class HDFEResult:
     n_clusters: dict = field(default_factory=dict)
     weights: str | None = None
     weights_type: str = "aweights"
+    # GLMs (fepois_stream, feglm_stream): the family, and fit statistics in
+    # place of the least-squares ones (rss, r2 and rmse are then nan)
+    family: str | None = None
+    deviance: float = np.nan
+    loglik: float = np.nan
+    pseudo_r2: float = np.nan
     _run: object = field(default=None, repr=False, compare=False)
     _estimator: object = field(default=None, repr=False, compare=False)
 
@@ -63,9 +69,11 @@ class HDFEResult:
         return dict(zip(self.coefnames, self.beta))
 
     def tidy(self) -> pl.DataFrame:
+        """Coefficient table. p-values use the t distribution with `df_t`
+        degrees of freedom, or the normal for GLMs, as in pyfixest."""
         se = self.se
         t = np.divide(self.beta, se, out=np.full_like(self.beta, np.nan), where=se > 0)
-        p = 2 * stats.t.sf(np.abs(t), self.df_t)
+        p = 2 * (stats.norm.sf(np.abs(t)) if self.family else stats.t.sf(np.abs(t), self.df_t))
         return pl.DataFrame({
             "Coefficient": self.coefnames,
             "Estimate": self.beta,
@@ -148,6 +156,9 @@ class HDFEResult:
         spell, at the cost of more noise (docs/kss_methodological_differences.md
         5.7).
         """
+        if self.family:
+            raise ValueError("leave-out variance components are for linear models; "
+                             f"this is a {self.family} model")
         estimator = self._estimator
         if estimator is None:
             raise RuntimeError(
@@ -248,7 +259,9 @@ class HDFEResult:
 
     def summary_text(self) -> str:
         """The summary() report as a string."""
-        lines = [f"### {self.fml}", f"Streaming HDFE   vcov: {self.vcov_type}",
+        lines = [f"### {self.fml}",
+                 f"Streaming HDFE{f' ({self.family})' if self.family else ''}   "
+                 f"vcov: {self.vcov_type}",
                  "obs: {:,}   ".format(self.n_obs)
                  + "   ".join(f"{k}: {v:,}" for k, v in self.n_levels.items())]
         st = self.diagnostics.get("stream")
@@ -258,10 +271,23 @@ class HDFEResult:
             lines.append(f"identifying {self.fe_names[0]} groups: {self.n_identifying:,}   "
                          f"({self.fe_names[0]} x {self.fe_names[1]}) components: "
                          f"{self.n_components:,}")
-        fit = f"RSS: {self.rss:.6g}   RMSE: {self.rmse:.4g}   R2: {self.r2:.6f}"
-        if self.fe_names:
-            fit = (f"FE dof: {self.k_fe:,}   {fit}   "
-                   f"within R2: {self.r2_within:.6f}")
+        if self.family:
+            fit = (f"deviance: {self.deviance:.8g}   log-likelihood: {self.loglik:.8g}   "
+                   f"pseudo R2: {self.pseudo_r2:.6f}")
+            irls = self.diagnostics.get("irls", {})
+            if irls:
+                fit += (f"   IRLS steps: {irls['iterations']}"
+                        + ("" if irls["converged"] else " (not converged)"))
+            if self.fe_names:
+                fit = f"FE dof: {self.k_fe:,}   {fit}"
+            sep = self.diagnostics.get("separation", {})
+            if sep.get("observations"):
+                lines.append(f"dropped for separation: {sep['observations']:,} observations")
+        else:
+            fit = f"RSS: {self.rss:.6g}   RMSE: {self.rmse:.4g}   R2: {self.r2:.6f}"
+            if self.fe_names:
+                fit = (f"FE dof: {self.k_fe:,}   {fit}   "
+                       f"within R2: {self.r2_within:.6f}")
         lines.append(fit)
         if self.weights:
             lines.append(f"weights: {self.weights} ({self.weights_type})")

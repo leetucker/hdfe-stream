@@ -1,5 +1,7 @@
 """
-hdfe_stream: out-of-core OLS with several high-dimensional fixed effects.
+hdfe_stream: out-of-core OLS with several high-dimensional fixed effects, and
+Poisson, logit and probit (`fepois_stream`, `feglm_stream`) by iteratively
+reweighted least squares over the same passes (see glm.py).
 
     from hdfe_stream import feols_stream
     fit = feols_stream("log_earn ~ age_squared + age_cubed | worker_id + firm_id + year",
@@ -78,13 +80,16 @@ Step 4 (streamed, numba +    per model: stream rows for fe[0] effects,
 
 Layout
 ------
-api.py             `feols_stream`
+api.py             `feols_stream`, `fepois_stream`, `feglm_stream`
 estimator.py       `StreamingHDFE`: options, layout, the driver
+glm.py             `StreamingGLM`: IRLS over the same passes
+families.py        GLM families: Poisson, logit, probit
 passes.py          pass 0/1/1b   (mixin)
 solve.py           step 2        (mixin)
 inference.py       steps 3/4     (mixin)
 kernels_base.py    numba kernels
 kernels_slopes.py  numba kernels, varying slopes
+kernels_glm.py     numba kernels, GLM cell sums and group effects
 formula.py         pyfixest formula -> Polars expressions (input side)
 reporting.py       pyfixest etable/coefplot views (output side)
 feterms.py         'worker_id[t]' / 'firm_id^year' parsing
@@ -94,8 +99,9 @@ report.py          logging / printing
 utils.py           small shared helpers
 """
 
-from .api import feols_stream
+from .api import feglm_stream, fepois_stream, feols_stream
 from .estimator import StreamingHDFE
+from .glm import StreamingGLM
 from .leaveout_se import ComponentSE
 from .leaveout_weakid import WeakIdDiagnostics
 from .leaveout import leave_one_out_connected, leave_out_kss
@@ -106,7 +112,10 @@ from .workspace import cleanup
 
 __all__ = [
     "feols_stream",
+    "fepois_stream",
+    "feglm_stream",
     "StreamingHDFE",
+    "StreamingGLM",
     "HDFEResult",
     "HDFEMulti",
     "etable",
