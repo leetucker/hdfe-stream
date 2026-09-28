@@ -41,9 +41,8 @@ it chose over an alternative.
 
 Each difference is classed as one of:
 
-- **Defect** — this package fails where the references succeed. To be fixed.
 - **Estimand** — changes what is estimated, or the point estimate beyond Monte
-  Carlo error. Candidates for a vignette.
+  Carlo error.
 - **Estimator** — same estimand, a different estimator of it: numbers differ
   within sampling or Monte Carlo error.
 - **Numerical** — a different computational route to the same quantity; results
@@ -51,14 +50,15 @@ Each difference is classed as one of:
 - **Reference issue** — the reference's published code departs from the paper,
   verified here by direct test.
 
-Items marked **⚑ decision** need the package author's call before anything
-changes. Items marked **✓ resolved** record a decision taken and what was done.
+Entries marked **agrees** are not differences. They are listed where the
+references disagree among themselves, so which one this package follows needs
+saying, or where the behavior is easy to get wrong.
 
 ---
 
 ## 1. The estimation sample
 
-### 1.1 Leave-out unit — observation vs match  ·  *Estimand* ✓ resolved
+### 1.1 Leave-out unit — observation vs match  ·  *Estimand; follows the current references*
 
 | | |
 |---|---|
@@ -94,45 +94,39 @@ collapsed row's leverage is its match's, so the rest of the machinery applies
 unchanged; the quadratic forms remain person-year moments. The prototype's
 version (`kss_match`) agrees with xhdfe to 5e-14–5e-12 on two panels; the
 streaming version agrees with the prototype to within Monte Carlo error.
-Standard errors and the weak-ID interval are not available at match level (5.7).
+Standard errors at match level are described in 5.7. The q = 1 interval for the
+covariance is not available at match level (6.9).
 
-### 1.2 Pruning to the leave-one-out connected set — iteration  ·  *Defect* ✓ resolved
+### 1.2 Pruning to the leave-one-out connected set — iteration  ·  *agrees*
 
 | | |
 |---|---|
 | LeaveOutTwoWay | `pruning_unbal_v3.m` loops `while n_of_bad_workers>=1`: remove articulation-point workers, take the largest connected set, recompute |
 | VarianceComponentsHDFE.jl | loops `while nbadfirsts>0` (`prunning_connected_set`) |
-| **hdfe-stream** | *was* one round, with a docstring claiming "It is not iterative -- deleting all the cut vertices at once cannot create new ones"; now loops like the references |
+| **hdfe-stream** | loops like the references: remove articulation-point workers, keep the largest component, repeat until none remain |
 
-That claim was false. A 4-cycle W1–F1–W2–F2–W1 with a firm F3 attached only to
-W1: W1 is a cut vertex; deleting it leaves F1–W2–F2, where W2 is a new one.
-Checked: `leave_one_out_connected` on exactly this panel keeps W2 as the sole
-link between F1 and F2.
+One round is not enough, because deleting cut vertices can create new ones. A
+4-cycle W1–F1–W2–F2–W1 with a firm F3 attached only to W1: W1 is a cut vertex;
+deleting it leaves F1–W2–F2, where W2 is a new one. This panel is a test case.
+Were W2 kept, `leave_out_components` would find leverage 1 and raise "not
+leave-one-out connected".
 
-**Effect.** No silently wrong numbers — `leave_out_components` checks the maximum
-leverage and raises "not leave-one-out connected" — but the pipeline fails on
-networks where the references succeed.
+The pruned sample matches xhdfe's row for row on three panels, with the same
+number of rounds (3, 1, 2). Diagnostics report `pruning_rounds`.
 
-**Status.** Fixed: remove articulation-point workers, keep the largest
-component, repeat until none remain. The pruned sample now matches xhdfe's row
-for row on three panels, with the same number of rounds (3, 1, 2). Diagnostics
-report `pruning_rounds`.
-
-### 1.3 Workers with a single observation  ·  *Defect* ✓ resolved
+### 1.3 Workers with a single observation  ·  *agrees*
 
 | | |
 |---|---|
 | LeaveOutTwoWay (both) | drop them after pruning (`sel=T>1`) |
 | VarianceComponentsHDFE.jl | `drop_single_obs` |
-| **hdfe-stream** | *was* kept; now dropped |
+| **hdfe-stream** | dropped once, before the articulation loop, as in xhdfe |
 
 A worker seen once has leverage exactly 1: the worker effect is determined by that
 observation. A pendant worker is never an articulation point, so pruning alone
-never removes it. Checked on a minimal panel.
-
-**Effect and status.** As 1.2: the leverage check raised. Fixed: they are
-dropped once, before the articulation loop — as in xhdfe, whose sample this
-matches. Diagnostics report `single_observation_workers`.
+never removes it, and the leverage check would raise. Tested on a minimal
+panel. The resulting sample matches xhdfe's. Diagnostics report
+`single_observation_workers`.
 
 ### 1.4 The graph searched for articulation points  ·  *Numerical*
 
@@ -155,7 +149,7 @@ two agree.
 **Effect.** Partialling out treats `b̂` as known, so the leverages omit the
 controls' contribution — an O(k/n) difference for k controls, negligible for a
 handful of year effects. Keeping them follows the paper's formula for the full
-design. **Status:** intentional; documented.
+design.
 
 ### 2.2 Weights  ·  *Estimand for weighted fits*
 
@@ -170,7 +164,6 @@ This is the one feature beyond the MATLAB, Julia and xhdfe references. The
 leverage convention matches pytwoway. At match level user weights compose with
 spell length: a match's weight is its total user weight, and the stayer rule
 (3.2) weights each person-year by its share of it; tested against the prototype. Validated by Monte Carlo against known effects in `prototypes/`.
-**Status:** a vignette candidate, since only pytwoway shares it.
 
 ---
 
@@ -185,29 +178,24 @@ outcome (`y'*Lambda_B*eta_h`). The paper's `yᵢ(yᵢ − xᵢ'β̂₋ᵢ)` is e
 unbiased; demeaning trades an O(1/n) bias for a large variance reduction,
 because `yᵢ` otherwise carries the outcome's whole mean.
 
-### 3.2 Stayers  ·  *Estimand* ✓ resolved
+### 3.2 Stayers  ·  *agrees with LeaveOutTwoWay by default; pytwoway's rule optional*
 
 | | |
 |---|---|
 | LeaveOutTwoWay, VarianceComponentsHDFE.jl, xhdfe — observation level | every observation uses its own `σ̂²ᵢ`, stayers included |
 | same — match level | a stayer's single match cannot be left out, so its variance comes from its own leave-one-*observation*-out residuals, averaged within the match (`sigma_for_stayers.m`) |
 | pytwoway | `Sii_stayers='firm_mean'` (default): stayers get the mean of movers' estimates at their firm |
-| **hdfe-stream** | *was* pytwoway's firm-mean imputation at observation level; now LeaveOutTwoWay's rules at both levels. `stayers="firm_mean"` and `"drop"` remain available at observation level |
+| **hdfe-stream** | LeaveOutTwoWay's rules at both levels: own `σ̂²ᵢ` at observation level (`stayers="own"`, the default) and `sigma_for_stayers.m` at match level. At observation level, `stayers="firm_mean"` (pytwoway's rule) and `"drop"` are available |
 
-**Effect.** The old default mixed two conventions. The imputation exists for data where a
+**Effect of the options.** The firm-mean imputation exists for data where a
 stayer has one observation, as with spell-level data; at observation level a
-stayer seen twice or more has a well-defined leave-out residual. The prototype's
-justification — that the stayer's residual "is degenerate" — is not true at
-observation level. Measured: the imputation moves `var(alpha)` by under 0.1
-standard errors on the simulated panels and leaves `var(psi)` and `cov`
-unchanged, but it would matter more where stayers' error variances differ from
-movers'. It is also the reason the reported estimate differs slightly from
-`se.theta`: the standard errors describe the un-imputed estimator.
-
-**Status.** Resolved by following LeaveOutTwoWay: own `σ̂²ᵢ` at observation
-level (`stayers="own"`, the default), and `sigma_for_stayers.m` at match level.
-With every row using its own estimate, the reported point estimate and
-`se.theta` now describe the same estimator.
+stayer seen twice or more has a well-defined leave-out residual. Measured: the
+imputation moves `var(alpha)` by under 0.1 standard errors on the simulated
+panels and leaves `var(psi)` and `cov` unchanged, but it would matter more where
+stayers' error variances differ from movers'. With it, the reported estimate
+also differs slightly from `se.theta`, because the standard errors describe the
+un-imputed estimator. Under the default every row uses its own estimate, so the
+reported point estimate and `se.theta` describe the same estimator.
 
 **How the match-level rule meets the collapsed fit.** Collapsing to matches is
 what makes the rule necessary: a stayer's one match row has leverage exactly 1.
@@ -226,7 +214,7 @@ Saggio's `improved_JLA.pdf` is used by LeaveOutTwoWay `leave_out_KSS`
 (`leverages.m`), VarianceComponentsHDFE.jl, pytwoway and here. The older
 `leave_out_COMPLETE` uses an earlier projection (`eff_res.m`, "JLL") without it.
 
-### 3.4 Centering at match level  ·  *Estimator* ✓ resolved: reference by default, weighted optional
+### 3.4 Centering at match level  ·  *Estimator, optional: the reference's by default*
 
 | | |
 |---|---|
@@ -305,10 +293,9 @@ spells of varying length:
 - No computational cost: the weighted mean is one more scalar in a pass that
   already happens.
 
-**Status.** Resolved: the default follows the reference, and
+**Status.** The default follows the reference, and
 `centering="weighted"` is available as a documented deviation of the
-*estimator* class: same estimand, lower variance. It is a vignette candidate:
-the algebra of the level term above, and the two variance comparisons.
+*estimator* class: same estimand, lower variance.
 
 ### 3.5 What match-level stayers' variance targets  ·  *Reference property, kept*
 
@@ -325,17 +312,16 @@ covariance, which rest on movers, are not affected.
 
 ## 4. The point estimate
 
-### 4.1 Divisor of the plug-in moments  ·  *Numerical, O(1/n)* ✓ resolved
+### 4.1 Divisor of the plug-in moments  ·  *agrees with `leave_out_KSS`*
 
 | | |
 |---|---|
 | LeaveOutTwoWay `leave_out_KSS`, VarianceComponentsHDFE.jl | `n − 1` in both the plug-in (`cov`) and the bias (`1/dof`, `dof = n−1`) |
-| LeaveOutTwoWay `leave_out_COMPLETE` | `n − 1` in the plug-in, `n` in the bias — inconsistent |
-| **hdfe-stream** | *was* `n` in both; now `n − 1` in both |
+| LeaveOutTwoWay `leave_out_COMPLETE` | `n − 1` in the plug-in, `n` in the bias — inconsistent, an O(1/n) difference |
+| **hdfe-stream** | `n − 1` person-years in the plug-in, the bias and the standard errors, at both leave-out levels |
 
-**Status.** Resolved: `n − 1` person-years in the plug-in, the bias and the
-standard errors, at both leave-out levels. With weights the weight total `W` is
-scaled the same way, `W(n − 1)/n`. The centering of the moments still uses `W`.
+With weights the weight total `W` is scaled the same way, `W(n − 1)/n`. The
+centering of the moments uses `W`.
 
 ### 4.2 Leverages  ·  *Numerical*
 
@@ -378,7 +364,7 @@ whose expectation is `tr(CΩ̃CΩ̃)` for any `z` with identity covariance, with
 Rademacher draws; one application of `C` per draw either way. Default draws:
 the point estimate's (250), not 1,000.
 
-### 5.3 The smoother for `σ̃²`  ·  *Estimator*  (vignette candidate)
+### 5.3 The smoother for `σ̃²`  ·  *Estimator*
 
 | | |
 |---|---|
@@ -389,14 +375,14 @@ the point estimate's (250), not 1,000.
 **Motivation.** The reference's lowess is not streamable. The grid size matches
 the reference's bandwidth: lowess with span `n^(−1/3)` fits each point from
 `n^(2/3)` neighbors, and `n^(1/6)` bins per axis gives cells of that size. The
-interpolation keeps the fit continuous in its regressors, as lowess is — a step
-function made quantities resting on few rows (5.8, 6.5) jump with random-projection
-noise.
+interpolation keeps the fit continuous in its regressors, as lowess is. A step
+function would make quantities resting on few rows, such as `V̂[b̂₁]` (6.4, 6.6),
+jump with random-projection noise.
 
-**Effect.** Coverage of the 95% interval with the final smoother (and own
-`σ̂²` for stayers, `n − 1`), 800 replications: 94.9 / 95.2 / 93.4% (var(psi) /
+**Effect.** Coverage of the 95% interval with this smoother (and own `σ̂²` for
+stayers, `n − 1`), 800 replications: 94.9 / 95.2 / 93.4% (var(psi) /
 var(alpha) / cov, n = 1,540) and 95.0 / 95.0 / 94.6% (n = 5,120), against
-93.9 / 94.7 / 93.1% and 94.6 / 94.9 / 94.4% with a fixed 12 × 12 grid. With
+93.9 / 94.7 / 93.1% and 94.6 / 94.9 / 94.4% with a fixed 12 × 12 grid instead. With
 the weak-ID q = 1 interval on the six-bridge bottleneck, 95.0–97.8% across all
 cells.
 
@@ -442,7 +428,7 @@ KSS §4.2's cross-fit `σ̃²` needs two edge-disjoint paths per observation. No
 reference implements it for the component standard errors, and neither does this
 package.
 
-### 5.7 Standard errors at match level  ·  *Estimator; reference: `leave_out_COMPLETE`, matches (beta)* ✓ resolved
+### 5.7 Standard errors at match level  ·  *Estimator; reference: `leave_out_COMPLETE`, matches (beta)*
 
 **Reference implementation:** LeaveOutTwoWay's `leave_out_COMPLETE.m` with
 `leave_out_level='matches'`. That option is not its default (it leaves out an
@@ -549,10 +535,9 @@ estimates only the diagonal of each spell's error covariance. That is worth
 knowing, because within-spell correlation is what leaving out a match is meant
 to be robust to. `"match"` is the choice when such correlation is plausible.
 
-**Status.** Resolved: `se_variance="person_year"` is the default, following the
+**Status.** `se_variance="person_year"` is the default, following the
 reference implementation, with the differences 1–4 above. `"match"` is an
-option, documented here as going beyond the reference. The algebra of the
-collapsed kernel and of `K` is a vignette candidate.
+option, documented here as going beyond the reference.
 
 ### 5.8 Centering the outcome in the standard errors  ·  *Estimator*
 
@@ -677,23 +662,22 @@ computed for the F statistic.
 
 ---
 
-## 8. Summary for decisions
+## 8. Summary
 
-| # | item | class | status |
+| # | item | class | this package |
 |---|---|---|---|
-| 1.2 | pruning is not iterated | Defect | ✓ fixed; matches xhdfe row for row |
-| 1.3 | single-observation workers kept | Defect | ✓ fixed |
-| 1.1 | no match-level leave-out | Estimand | ✓ added, and the default |
-| 3.2 | stayers imputed from movers (pytwoway's rule) | Estimand | ✓ LeaveOutTwoWay's rules at both levels |
-| 4.1 | divisor `n` rather than `n − 1` | Numerical | ✓ `n − 1` |
-| 3.4 | match-level centering | Estimator | ✓ default follows the reference; `centering="weighted"` is a documented deviation, 1.7–3× less variable; vignette candidate |
-| 5.7 | standard errors at match level | Estimator | ✓ reference: `leave_out_COMPLETE`'s match-level path (beta there), validated through xhdfe's port; default `se_variance="person_year"` as in the reference; differences: outcome centered and the package's smoother (the reference's raw outcome gives zero standard errors on log earnings), no user weights, no cov q = 1 interval; `"match"` offered beyond the reference for spell-correlated errors |
-| 5.8 | outcome centered in the standard errors | Estimator | documented; vignette candidate with 5.7 |
-| 6.9 | no q = 1 interval for cov at match level | Not implemented | reported as unavailable |
+| 1.1 | leave-out unit | Estimand | a match by default, as in `leave_out_KSS`, VarianceComponentsHDFE.jl and xhdfe; an observation optional |
+| 1.2, 1.3 | pruning, single-observation workers | agrees | iterated pruning, singles dropped; matches xhdfe's sample row for row |
+| 3.2 | stayers' `σ̂²` | agrees with LeaveOutTwoWay | its rules at both levels; pytwoway's firm-mean rule optional |
+| 4.1 | divisor of the moments | agrees with `leave_out_KSS` | `n − 1` throughout |
+| 2.2 | analytic weights | Estimand | beyond the MATLAB, Julia and xhdfe references; shared with pytwoway |
+| 3.4 | match-level centering | Estimator | the reference's by default; `centering="weighted"` a documented deviation, 1.7–3× less variable |
+| 5.3 | streamed smoother for `σ̃²` | Estimator | cell means on an `n^(1/6)` × `n^(1/6)` quantile grid, interpolated, in place of lowess |
 | 5.4 | what the smoother averages | agrees | alternative tested, not adopted |
-| 2.2 | analytic weights | Estimand | vignette candidate |
-| 5.3 | streamed smoother for `σ̃²` | Estimator | vignette candidate |
-| 6.2, 6.5–6.8 | weak-ID computation | Estimator / Reference issue | vignette candidate, one document |
+| 5.7 | standard errors at match level | Estimator | reference: `leave_out_COMPLETE`'s match-level path (beta there), validated through xhdfe's port; default `se_variance="person_year"` as in the reference; differences: outcome centered and the package's smoother (the reference's raw outcome gives zero standard errors on log earnings), no user weights, no cov q = 1 interval; `"match"` offered beyond the reference for spell-correlated errors |
+| 5.8 | outcome centered in the standard errors | Estimator | `√w(y − ȳ_w)` throughout, as in the point estimate; the reference's raw outcome carries its level |
+| 6.2, 6.5–6.8 | weak-ID computation | Estimator / Reference issue | deflated trace, the paper's `θ̂₁`, guarded `Σ₁`, exact critical value, interval correct for `λ₁ < 0` |
+| 6.9 | q = 1 interval for cov at match level | not implemented | reported as unavailable |
 
 Everything else is a numerical route to the same quantity, validated against
 dense computation in `prototypes/`.
