@@ -40,7 +40,7 @@ regression is the one `feols_stream` solves, so the GLM reuses its machinery:
 Nothing row-sized is written during the iterations. The linear predictor is
 rebuilt from the coefficients on each read, and what is rewritten each step
 are the cells' weights and sums (memory-mapped, like OLS's identifying
-cells). The disk needed is therefore about what an OLS fit of the same data
+cells). The disk needed is therefore no more than an OLS fit of the same data
 needs.
 
 **Memory.** One difference from OLS: the streamed dimension's effects are
@@ -176,32 +176,143 @@ digits of the coefficients.
 ## Performance
 
 A step costs one read of the sorted rows and one solve of the reduced system.
-A fit typically takes 6 to 10 steps, so it costs a few times what an OLS fit
-of the same data costs.
+A fit typically takes about 10 steps, so it costs several times what an OLS
+fit of the same data costs: 5 to 8 times, in the benchmarks below.
 
 **Solver.** The reduced matrix S depends on the weights, so the `explicit`
-solver has to rebuild it at every step. On the 3.4-million-row panel below,
-each rebuild sorted 23 million entries, and rebuilding took 40% of the fit.
-
-Streaming the cells instead costs one pass over them per conjugate-gradient
-iteration. Each solve starts from the previous step's solution, so the count
-falls from step to step: from 19 at the first step to 6 at the eighth on that
-panel. With `solver="auto"`, the default, S is therefore built for the first
-step only, and `stream_cg` is used after that.
+solver has to rebuild it at every step. Streaming the cells instead costs one
+pass over them per conjugate-gradient iteration, and each solve starts from the
+previous step's solution, so the count falls from step to step: from 19 at the
+first step to 6 at the eighth on one 3.4-million-row panel. With
+`solver="auto"`, the default, S is therefore built for the first step only, and
+`stream_cg` is used after that. From 400,000 to 1,000,000 workers, `explicit`
+takes 28 to 45% longer; at 5,000,000 the two take about the same time.
 
 With `precond="amg"`, which needs S, it is rebuilt at every step. Setting
 `solver=` explicitly applies it to every step.
 
-Wall time on the simulated AKM panel, with a Poisson outcome and a logit
-outcome both driven by the worker and firm effects. The model is
-`y ~ x + age_cubed | worker_id + firm_id + year`, with defaults on both sides,
-except that pyfixest uses its LSMR demeaner. Its default demeaner did not
-converge on this panel.
+## Benchmarks
 
-| rows | `feols_stream` | `fepois_stream` | pyfixest `fepois` | `feglm_stream` logit | pyfixest `feglm` logit |
-|---|---|---|---|---|---|
-| 850,000 | 0.9 s | 3.6 s (8 steps) | 7.9 s | 4.5 s (10 steps) | 12.8 s |
-| 3,400,000 | 3.9 s | 12.4 s (8 steps) | 46.2 s | 15.5 s (10 steps) | 54.2 s |
+Two benchmarks compare `fepois_stream` and `feglm_stream` with pyfixest's
+`fepois` and `feglm`. Both use the simulated AKM panel of the
+[OLS benchmarks](../README.md#benchmarks), with two outcomes simulated from the
+same worker effects, firm effects and age profile as its `log_earn`: a count
+(Poisson) and a binary outcome (logit).
 
-These are single runs on one machine, not the benchmark suite, and they do not
-measure memory. Both libraries' coefficients agree.
+- **Size:** `y ~ age_squared + age_cubed | worker_id + firm_id + year`, from
+  25,000 to 5,000,000 workers (212,000 to 42.5 million rows), with firms =
+  workers / 15.
+- **Covariates:** `y ~ i(age_bin) | worker_id + firm_id` on the
+  1,000,000-worker panel (8.5 million rows), with age bins from five years wide
+  (8 indicators) to one month wide (503).
+
+Both cluster by worker. pyfixest runs with its LSMR demeaner. Its default, MAP,
+stops with "Demeaning failed after 10000 iterations" on these panels at every
+size tried, from 25,000 workers up, for both models. xhdfe fits linear models
+only.
+
+hdfe_stream runs:
+
+- **Size:** at its defaults, with `solver="explicit"`, and with the OLS
+  benchmark's low-memory setting (`rows_per_bucket=250_000`,
+  `batch_rows=200_000`).
+- **Covariates:** at its defaults, and "sized to the design", with bucket,
+  batch and row-group sizes scaled down as the design widens (the rule is in
+  `benchmarks/covariates_benchmark.py`).
+
+Each configuration runs in its own process, and wall time includes reading the
+data. [benchmarks/README.md](../benchmarks/README.md) describes how peak memory
+and disk are measured. The numbers are in
+[glm.csv](../benchmarks/results/glm.csv) and
+[glm_covariates.csv](../benchmarks/results/glm_covariates.csv); the machine has
+8 logical CPUs and 26 GB of memory. To reproduce:
+
+```bash
+python benchmarks/glm_benchmark.py
+python benchmarks/glm_covariates_benchmark.py
+python benchmarks/plot_benchmarks.py
+```
+
+Wherever both libraries finished, the coefficients agree to within 1e-7, the
+tolerance the iterations reach. For logit, pyfixest keeps workers whose
+outcome is 1 in every year, which this package drops (see
+[differences from pyfixest](#differences-from-pyfixest)), so its N is larger:
+8,404,384 against 8,283,651 at 1,000,000 workers.
+
+### Size
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figures/glm_time.dark.svg">
+  <img alt="Poisson and logit regression: wall time against the number of workers, one panel per model, one line per configuration, log-log" src="figures/glm_time.light.svg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figures/glm_memory.dark.svg">
+  <img alt="Poisson and logit regression: peak memory against the number of workers, one panel per model, one line per configuration, log-log" src="figures/glm_memory.light.svg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figures/glm_disk.dark.svg">
+  <img alt="Poisson and logit regression: peak disk use of hdfe_stream against the number of workers, one panel per model, log-log" src="figures/glm_disk.light.svg">
+</picture>
+
+Wall time and peak memory, hdfe_stream at its defaults:
+
+| workers | rows | Poisson: `fepois_stream` | Poisson: pyfixest | logit: `feglm_stream` | logit: pyfixest |
+|---:|---:|---:|---:|---:|---:|
+| 25,000 | 212,000 | 1.8 s, 0.7 GB | 2.9 s, 0.6 GB | 2.1 s, 0.8 GB | 3.4 s, 0.6 GB |
+| 100,000 | 850,000 | 4.9 s, 1.0 GB | 17 s, 1.1 GB | 5.1 s, 1.0 GB | 16 s, 1.1 GB |
+| 400,000 | 3.4 million | 14 s, 1.7 GB | 72 s, 3.3 GB | 18 s, 1.7 GB | 60 s, 3.3 GB |
+| 1,000,000 | 8.5 million | 38 s, 2.4 GB | 219 s, 7.0 GB | 46 s, 2.4 GB | 174 s, 7.3 GB |
+| 5,000,000 | 42.5 million | 276 s, 4.2 GB | out of memory | 309 s, 4.2 GB | out of memory |
+
+- **Time.** From 100,000 workers up, hdfe_stream is 3 to 6 times faster.
+- **Memory.** At 5,000,000 workers pyfixest ran out of this machine's 26 GB,
+  for both models. hdfe_stream peaked at 4.2 GB, or 3.1 to 3.2 GB with the
+  low-memory setting, for 4 to 5% more time. At 25,000 workers pyfixest uses
+  less, as with OLS: an hdfe_stream process costs about 0.7 GB before it has
+  done anything.
+- **Disk.** About 65 bytes per row: 2.7 GB at 42.5 million rows, where OLS on
+  the same design writes 3.9 GB.
+- **Against OLS.** `feols_stream` fits the same design in 7.6 s at 1,000,000
+  workers and 40 s at 5,000,000, so a Poisson or logit fit costs 5 to 8 OLS
+  fits.
+
+### Covariates
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figures/glm_covariates_time.dark.svg">
+  <img alt="Poisson and logit, many covariates: wall time against the number of covariates, one panel per model, one line per configuration, log-log" src="figures/glm_covariates_time.light.svg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figures/glm_covariates_memory.dark.svg">
+  <img alt="Poisson and logit, many covariates: peak memory against the number of covariates, one panel per model, one line per configuration, log-log" src="figures/glm_covariates_memory.light.svg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figures/glm_covariates_disk.dark.svg">
+  <img alt="Poisson and logit, many covariates: peak disk use of hdfe_stream against the number of covariates, one panel per model, log-log" src="figures/glm_covariates_disk.light.svg">
+</picture>
+
+Wall time and peak memory, hdfe_stream sized to the design:
+
+| covariates | Poisson: `fepois_stream` | Poisson: pyfixest | logit: `feglm_stream` | logit: pyfixest |
+|---:|---:|---:|---:|---:|
+| 8 | 31 s, 2.7 GB | 604 s, 9.6 GB | 41 s, 2.7 GB | 462 s, 10.1 GB |
+| 41 | 183 s, 3.6 GB | 2,445 s, 24.2 GB | 202 s, 3.9 GB | 1,724 s, 24.8 GB |
+| 83 | 466 s, 4.1 GB | out of memory | 489 s, 4.1 GB | out of memory |
+| 167 | 803 s, 5.6 GB | out of memory | 499 s, 5.8 GB | out of memory |
+| 503 | 1,890 s, 10.6 GB | out of memory | 1,935 s, 10.6 GB | out of memory |
+
+- **pyfixest** needs about 24 GB at 41 covariates, and runs out of memory from
+  83 up.
+- **hdfe_stream at its defaults** needs more memory as the design widens than
+  when sized to it: 12.7 GB at 83 covariates, 22.8 GB at 167, and more than
+  the machine has at 503. Its batches and buckets hold a fixed number of rows
+  however wide the rows are. For a wide design, size them as the benchmark
+  does, as for OLS.
+- **Disk** grows with the width, to 6.8 GB at 503 covariates, about what OLS
+  writes for the same design (6.0 GB).
+- **Against OLS.** At 503 covariates, sized the same way, OLS takes 351 s and
+  8.6 GB, and the GLM 1,890 s and 10.6 GB.

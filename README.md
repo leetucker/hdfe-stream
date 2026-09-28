@@ -421,11 +421,9 @@ solution.
 
 Nothing row-sized is rewritten between steps, so the disk needed is about what
 OLS needs. A fit takes a few times as long as OLS on the same data, since it
-usually needs 6 to 10 steps. On a 3.4-million-row panel with worker, firm and
-year effects:
-
-- **Poisson:** 12 s, against pyfixest's 46 s.
-- **Logit:** 16 s, against 54 s.
+usually needs 6 to 10 steps. Benchmarks against pyfixest, over the AKM
+benchmark's panel sizes and over the number of covariates, are in
+[docs/glm.md](docs/glm.md#benchmarks).
 
 Fixed-effect levels whose effect would be infinite are dropped first: all-zero
 outcomes for Poisson, constant ones for logit and probit. Estimates, standard

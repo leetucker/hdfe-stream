@@ -296,8 +296,11 @@ class StreamingGLM(StreamingHDFE):
         names = list(model["x"])
         t0 = time.time()
         binary = self.family.name != "poisson"
-        # Two sets of cell buffers: the current step's sums (`slot`) and the
-        # candidate's, which become current when the step is accepted.
+        # Two sets of cell weights: the current step's (`slot`) and the
+        # candidate's, which become current when the step is accepted. The
+        # cell sums, k + 1 columns, are needed only until `_update` has turned
+        # them into coefficients, so the candidate's overwrite them: with many
+        # covariates they are the largest thing the fit holds.
         slot = 0
         cur = _State(init=True)
         agg = self._row_pass(cur, yj, xj, slot, first=True)
@@ -418,9 +421,9 @@ class StreamingGLM(StreamingHDFE):
         out = SimpleNamespace(**vars(agg))
         c = len(sel)
         out.W, out.raw = agg.W[np.ix_(sel, sel)], agg.raw[sel]
-        out.sums_id = self._buffer(("sums_id", slot, c), (self.M_id, c))
+        out.sums_id = self._buffer(("sums_id", c), (self.M_id, c))
         out.sums_id[:] = agg.sums_id[:, sel]
-        out.sums_s = self._buffer(("sums_s", slot, c), (self.G_s, c))
+        out.sums_s = self._buffer(("sums_s", c), (self.G_s, c))
         out.sums_s[:] = agg.sums_s[:, sel]
         return out
 
@@ -509,16 +512,16 @@ class StreamingGLM(StreamingHDFE):
         log-likelihood there, and the cell sums of the next weighted
         least-squares step (column 0 the working response z, then the
         covariates), with the within-cell cross-products and each column's
-        weighted total sum of squares (`raw`). The cell sums go to the
-        buffers of `slot`."""
+        weighted total sum of squares (`raw`). The cell weights go to the
+        buffers of `slot`; the cell sums replace the previous ones."""
         fam, k = self.family, len(xj)
         c = k + 1
         out = SimpleNamespace(dev=0.0, ll=0.0, sy=0.0, sw=0.0, slg=0.0,
                               W=np.zeros((c, c)), sv=np.zeros(c), bss=np.zeros(c), wsum=0.0,
                               n_id=self._buffer(("n_id", slot), (self.M_id,)),
-                              sums_id=self._buffer(("sums_id", slot, c), (self.M_id, c)),
+                              sums_id=self._buffer(("sums_id", c), (self.M_id, c)),
                               n_s=self._buffer(("n_s", slot), (self.G_s,)),
-                              sums_s=self._buffer(("sums_s", slot, c), (self.G_s, c)))
+                              sums_s=self._buffer(("sums_s", c), (self.G_s, c)))
         if first and self.fe:
             self.codes_s = np.zeros((self.G_s, len(self.o_fe)), np.int64)
         cursor = [0, 0, 0]

@@ -110,6 +110,42 @@ def data_path(n_workers):
     return path
 
 
+def glm_data_path(n_workers):
+    """The simulated panel for `n_workers` with a count and a binary outcome,
+    generated once and cached.
+
+    The rows are those of `data_path(n_workers)` (the same simulation and seed),
+    and both outcomes follow the AKM index of log_earn, less its noise and
+    shifted to a sensible scale:
+
+        index   = worker effect + firm effect + 0.08 age_squared - 0.012 age_cubed - 0.4
+        y_count ~ Poisson(exp(index - 0.5))
+        y_binary ~ Bernoulli(1 / (1 + exp(-index)))
+
+    so the true coefficients on age_squared and age_cubed are 0.08 and -0.012
+    for both.
+    """
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    path = DATA_DIR / f"glm_{n_workers}.parquet"
+    if not path.exists():
+        import numpy as np
+        import polars as pl
+        from hdfe_stream.simulate import simulate_akm
+
+        frame = simulate_akm(n_workers=n_workers, keep_effects=True)
+        index = (frame["true_worker_effect"] + frame["true_firm_effect"]
+                 + 0.08 * frame["age_squared"] - 0.012 * frame["age_cubed"]
+                 - 0.4).to_numpy()
+        rng = np.random.default_rng(20260927)
+        frame = frame.drop("true_worker_effect", "true_firm_effect").with_columns(
+            y_count=pl.Series(rng.poisson(np.exp(index - 0.5)).astype(float)),
+            y_binary=pl.Series((rng.random(index.size)
+                                < 1 / (1 + np.exp(-index))).astype(float)))
+        frame.write_parquet(path)
+        print(f"  simulated {frame.height:,} rows -> {path.name}", flush=True)
+    return path
+
+
 def panel_shape(path):
     import polars as pl
 

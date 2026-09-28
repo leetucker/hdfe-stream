@@ -1,0 +1,31 @@
+n_covariates,bin_months,n_workers,family,configuration,order,status,wall_s,read_s,fit_s,peak_memory_mb,import_memory_mb,peak_disk_mb,n_coef,irls_steps
+8,60,1000000,poisson,pyfixest fepois (LSMR),0,ok,603.852,0.33,603.522,9588.9,15.8,0.0,8,
+8,60,1000000,poisson,fepois_stream,1,ok,32.465,0.0,32.465,2696.7,15.7,222.5,8,10
+8,60,1000000,poisson,fepois_stream (sized to the design),2,ok,31.241,0.0,31.241,2687.6,15.8,222.5,8,10
+8,60,1000000,logit,pyfixest feglm logit (LSMR),3,ok,461.795,0.292,461.503,10050.0,15.7,0.0,8,
+8,60,1000000,logit,feglm_stream logit,4,ok,40.887,0.0,40.887,2700.6,15.8,217.6,8,10
+8,60,1000000,logit,feglm_stream logit (sized to the design),5,ok,40.803,0.0,40.803,2704.0,15.7,219.8,8,10
+41,12,1000000,poisson,pyfixest fepois (LSMR),0,ok,2444.534,0.302,2444.232,24245.7,15.8,0.0,41,
+41,12,1000000,poisson,fepois_stream,1,ok,188.418,0.0,188.418,7133.1,15.7,671.3,41,10
+41,12,1000000,poisson,fepois_stream (sized to the design),2,ok,183.325,0.0,183.325,3631.3,15.8,672.4,41,10
+41,12,1000000,logit,pyfixest feglm logit (LSMR),3,ok,1723.671,0.281,1723.391,24794.0,15.6,0.0,41,
+41,12,1000000,logit,feglm_stream logit,4,ok,205.381,0.0,205.381,7128.7,15.7,666.9,41,10
+41,12,1000000,logit,feglm_stream logit (sized to the design),5,ok,202.45,0.0,202.45,3935.7,15.8,669.0,41,10
+83,6,1000000,poisson,pyfixest fepois (LSMR),0,killed (out of memory),,,,,,,,
+83,6,1000000,poisson,fepois_stream,1,ok,525.837,0.0,525.837,12682.6,15.9,1227.2,83,10
+83,6,1000000,poisson,fepois_stream (sized to the design),2,ok,465.572,0.0,465.572,4135.1,15.8,1232.0,83,10
+83,6,1000000,logit,pyfixest feglm logit (LSMR),3,killed (out of memory),,,,,,,,
+83,6,1000000,logit,feglm_stream logit,4,ok,574.898,0.0,574.898,12736.0,15.7,1222.0,83,10
+83,6,1000000,logit,feglm_stream logit (sized to the design),5,ok,489.203,0.0,489.203,4099.9,15.8,1227.4,83,10
+167,3,1000000,poisson,pyfixest fepois (LSMR),0,killed (out of memory),,,,,,,,
+167,3,1000000,poisson,fepois_stream,1,ok,1254.05,0.0,1254.05,22754.5,15.8,2336.4,167,10
+167,3,1000000,poisson,fepois_stream (sized to the design),2,ok,803.292,0.0,803.292,5637.3,15.7,2348.6,167,10
+167,3,1000000,logit,pyfixest feglm logit (LSMR),3,killed (out of memory),,,,,,,,
+167,3,1000000,logit,feglm_stream logit,4,ok,1131.601,0.0,1131.601,22661.0,15.7,2329.0,167,10
+167,3,1000000,logit,feglm_stream logit (sized to the design),5,ok,498.752,0.0,498.752,5819.8,15.8,2340.6,167,10
+503,1,1000000,poisson,pyfixest fepois (LSMR),0,killed (out of memory),,,,,,,,
+503,1,1000000,poisson,fepois_stream,1,killed (out of memory),,,,,,,,
+503,1,1000000,poisson,fepois_stream (sized to the design),2,ok,1890.104,0.0,1890.104,10630.0,15.6,6786.6,503,10
+503,1,1000000,logit,pyfixest feglm logit (LSMR),3,killed (out of memory),,,,,,,,
+503,1,1000000,logit,feglm_stream logit,4,killed (out of memory),,,,,,,,
+503,1,1000000,logit,feglm_stream logit (sized to the design),5,ok,1935.101,0.0,1935.101,10632.4,15.5,6766.7,503,10
