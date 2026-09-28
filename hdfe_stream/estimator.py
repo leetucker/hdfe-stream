@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import shutil
-import tempfile
 import time
 from pathlib import Path
 
@@ -27,7 +26,7 @@ from .report import _log
 from .results import HDFEMulti, _canon_cluster, _vcov_key
 from .solve import _SolveMixin
 from .utils import _norm_vars, _phys_mem_gb, _safe
-from .workspace import _ACTIVE_RUNS, _MARKER, _Run, _dir_bytes
+from .workspace import _ACTIVE_RUNS, _MARKER, _Run, _base_dir, _dir_bytes
 
 
 # The pipeline stages are mixed in from passes.py, solve.py and inference.py;
@@ -66,7 +65,8 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
          effects that outnumber workers in a subsample).
     workdir : directory under which each fit creates its own run directory
          (hdfe_run_<time>_<id>/) for intermediate and result files. Default:
-         the system temporary directory (honors TMPDIR). Put it on a disk
+         the HDFE_STREAM_WORKDIR environment variable if set, else the
+         system temporary directory (honors TMPDIR). Put it on a disk
          with room for several times the input's Parquet size (the sorted
          working copy of the rows is less compressible than typical input;
          about 4-5x in tests); diagnostics["disk_peak_gb"] reports it.
@@ -191,7 +191,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         self.models = models
         self.m = len(self.var_names)
         self.vidx = {nm: j for j, nm in enumerate(self.var_names)}
-        self.base_dir = Path(workdir) if workdir else Path(tempfile.gettempdir())
+        self.base_dir = _base_dir(workdir)
         if outputs not in ("auto", "keep"):
             raise ValueError("outputs must be 'auto' or 'keep'")
         self.outputs, self.save_resid = outputs, save_resid

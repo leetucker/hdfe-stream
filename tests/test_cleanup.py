@@ -14,6 +14,7 @@ from __future__ import annotations
 import gc
 import os
 import socket
+import tempfile
 import time
 from pathlib import Path
 
@@ -215,3 +216,24 @@ def test_concurrent_fits_use_separate_run_directories(rich, workdir):
 def test_invalid_outputs_option_rejected(rich, workdir):
     with pytest.raises(ValueError, match="outputs must be"):
         feols_stream(FML, rich.src, workdir=workdir, outputs="forever")
+
+
+def test_workdir_from_the_environment(rich, tmp_path, monkeypatch):
+    """HDFE_STREAM_WORKDIR stands in for an omitted `workdir`, in fits and in
+    cleanup(); a `workdir` passed to the call takes precedence."""
+    env, passed = tmp_path / "env", tmp_path / "passed"
+    monkeypatch.setenv("HDFE_STREAM_WORKDIR", str(env))
+
+    fit = feols_stream(FML, rich.src, verbose=False, outputs="keep")
+    assert run_of(fit).parent == env
+    fit = feols_stream(FML, rich.src, workdir=passed, verbose=False, outputs="keep")
+    assert run_of(fit).parent == passed
+
+    hdfe_stream.cleanup()
+    assert run_dirs(env) == [] and len(run_dirs(passed)) == 1
+    hdfe_stream.cleanup(passed)
+
+
+def test_workdir_defaults_to_the_temporary_directory(monkeypatch):
+    monkeypatch.delenv("HDFE_STREAM_WORKDIR", raising=False)
+    assert workspace._base_dir() == Path(tempfile.gettempdir())

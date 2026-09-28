@@ -31,7 +31,8 @@ def feols_stream(fml, data, workdir=None, vcov=None, cluster=(), fe_dof="exact",
 
     data    : Parquet path/glob or Polars LazyFrame.
     workdir : directory under which run directories are created (default:
-              the system temporary directory); see StreamingHDFE for the
+              $HDFE_STREAM_WORKDIR if set, else the system temporary
+              directory); see StreamingHDFE for the
               outputs=, save_resid= and keep_intermediates= options.
     vcov    : as in pyfixest; default {'CRV1': <first FE>} like pyfixest, or
               iid without fixed effects. {'CRV3': var} (one-way, OLS) needs

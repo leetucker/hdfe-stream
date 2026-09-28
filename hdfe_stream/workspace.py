@@ -27,6 +27,7 @@ from pathlib import Path
 # --------------------------------------------------------------------------
 
 _MARKER = ".hdfe_stream_run"
+WORKDIR_ENV = "HDFE_STREAM_WORKDIR"
 _ACTIVE_RUNS = set()      # run directories of fits currently running in this process
 
 
@@ -70,9 +71,16 @@ class _Run:
         return self.path.exists()
 
 
+def _base_dir(workdir=None):
+    """The directory run directories go under: `workdir` if given, else
+    $HDFE_STREAM_WORKDIR if set, else the system temporary directory."""
+    return Path(workdir or os.environ.get(WORKDIR_ENV) or tempfile.gettempdir())
+
+
 def cleanup(workdir=None, older_than_hours=None, force=False, dry_run=False):
     """Remove leftover run directories (e.g. from killed processes) in
-    `workdir` (default: the system temporary directory). Only directories
+    `workdir` (default: $HDFE_STREAM_WORKDIR if set, else the system
+    temporary directory). Only directories
     created by hdfe_stream (they carry a marker file) are touched.
 
     Runs of this process are removed unless a fit is still running in them
@@ -83,7 +91,7 @@ def cleanup(workdir=None, older_than_hours=None, force=False, dry_run=False):
     Returns a list of (path, bytes) that were (or, with dry_run, would be)
     removed.
     """
-    base = Path(workdir) if workdir else Path(tempfile.gettempdir())
+    base = _base_dir(workdir)
     host, removed = socket.gethostname(), []
     if not base.exists():
         return removed

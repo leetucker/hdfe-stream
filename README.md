@@ -48,7 +48,11 @@ is larger than the memory you are allowed. Concretely, reach for it when:
 
 You are trading memory for disk, and you need scratch space: about five times
 the size of your Parquet input while the fit runs, and only the result files
-once it finishes. See [benchmarks](#benchmarks) for what that buys.
+once it finishes. See [benchmarks](#benchmarks) for what that buys. Point
+`workdir=` at it, or set the `HDFE_STREAM_WORKDIR` environment variable once
+(for example to a cluster's scratch filesystem) and leave `workdir` out; a
+`workdir` passed to a call takes precedence, and with neither, the system
+temporary directory is used.
 
 ## How it works, in one paragraph
 
