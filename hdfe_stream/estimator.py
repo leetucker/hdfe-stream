@@ -282,10 +282,26 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         for child in self.workdir.iterdir():
             if child.name in ("models", _MARKER):
                 continue
-            if child.is_dir():
-                shutil.rmtree(child, ignore_errors=True)
-            else:
-                child.unlink(missing_ok=True)
+            self._remove(child)
+
+    @staticmethod
+    def _remove(child):
+        """Delete a file or directory. Windows cannot delete a memory-mapped
+        file, and a map can outlive its last named reference until the
+        garbage collector reaches it (a reference cycle, or a traceback), so
+        on failure collect garbage and try again."""
+        for attempt in range(3):
+            try:
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink(missing_ok=True)
+                return
+            except OSError:
+                if attempt == 2:
+                    return          # the run directory's own cleanup tries again
+                gc.collect()
+                time.sleep(0.1 * (attempt + 1))
 
     def _setup_dims(self, g):
         """Fix the streamed dimension g; the others keep the user's order.
