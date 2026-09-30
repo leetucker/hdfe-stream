@@ -32,14 +32,13 @@ WORKDIR_ENV = "HDFE_STREAM_WORKDIR"
 _ACTIVE_RUNS = set()      # run directories of fits currently running in this process
 
 
-def _remove_path(path, attempts=4):
+def _remove_path(path):
     """Delete a file or directory, never raising. Windows refuses to delete a
-    file that is memory-mapped or open, and a map can outlive its last named
-    reference until the garbage collector reaches it. So on failure collect
-    garbage and retry after a short pause (under half a second in all).
-    Elsewhere a failure is final at once."""
+    file that is memory-mapped, and a map can outlive its last named reference
+    until the garbage collector reaches it, so on Windows a failure is retried
+    once after collecting garbage."""
     path = Path(path)
-    for attempt in range(attempts if os.name == "nt" else 1):
+    for attempt in range(2 if os.name == "nt" else 1):
         try:
             if path.is_dir():
                 shutil.rmtree(path)
@@ -51,7 +50,6 @@ def _remove_path(path, attempts=4):
         except OSError as err:
             last = err
             gc.collect()
-            time.sleep(0.05 * 2 ** attempt if attempt < attempts - 1 else 0)
     _debug_cleanup(path, last)
     if path.is_dir():
         shutil.rmtree(path, ignore_errors=True)

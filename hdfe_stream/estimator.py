@@ -351,8 +351,12 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         ctx = {"k_fe": self._k_fe(fe_dof), "nested": nested, "default": default, "t0": t0,
                "info": info}
         self._track_disk()
-        results = [self._estimate(f"m{mi:03d}", model, A, gamma, ctx)
-                   for mi, model in enumerate(self.models)]
+        # a loop, not a comprehension: before Python 3.12 a comprehension is a
+        # function whose closure would hold `gamma` (a memory map) alive
+        # through a traceback, and Windows cannot delete a mapped file
+        results = []
+        for mi, model in enumerate(self.models):
+            results.append(self._estimate(f"m{mi:03d}", model, A, gamma, ctx))
         return results
 
     def _k_fe(self, fe_dof):
