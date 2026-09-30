@@ -32,13 +32,12 @@ WORKDIR_ENV = "HDFE_STREAM_WORKDIR"
 _ACTIVE_RUNS = set()      # run directories of fits currently running in this process
 
 
-def _remove_path(path, attempts=8):
+def _remove_path(path, attempts=4):
     """Delete a file or directory, never raising. Windows refuses to delete a
     file that is memory-mapped or open, and a map can outlive its last named
-    reference until the garbage collector reaches it; a virus scanner or
-    indexer can also hold a just-written file briefly. So on failure collect
-    garbage and retry, with a growing pause (about 3 s in all). Elsewhere a
-    failure is final at once."""
+    reference until the garbage collector reaches it. So on failure collect
+    garbage and retry after a short pause (under half a second in all).
+    Elsewhere a failure is final at once."""
     path = Path(path)
     for attempt in range(attempts if os.name == "nt" else 1):
         try:
@@ -49,11 +48,31 @@ def _remove_path(path, attempts=8):
             return
         except FileNotFoundError:
             return
-        except OSError:
+        except OSError as err:
+            last = err
             gc.collect()
             time.sleep(0.05 * 2 ** attempt if attempt < attempts - 1 else 0)
+    _debug_cleanup(path, last)
     if path.is_dir():
         shutil.rmtree(path, ignore_errors=True)
+
+
+def _debug_cleanup(path, err):
+    """Diagnostic: with HDFE_STREAM_DEBUG_CLEANUP=<file> set, append what could
+    not be deleted and which files this process still has open or mapped."""
+    log = os.environ.get("HDFE_STREAM_DEBUG_CLEANUP")
+    if not log:
+        return
+    lines = [f"could not delete {path}: {err!r}"]
+    try:
+        import psutil
+        proc = psutil.Process()
+        lines += [f"  open: {f.path}" for f in proc.open_files()]
+        lines += [f"  mapped: {m.path}" for m in proc.memory_maps() if str(path.parent) in m.path]
+    except Exception as exc:
+        lines.append(f"  (psutil: {exc!r})")
+    with open(log, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 def _rmtree_quiet(path):
