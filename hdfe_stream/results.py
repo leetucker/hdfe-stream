@@ -4,7 +4,9 @@ expands to several.
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +21,31 @@ from .report import _emit
 
 if TYPE_CHECKING:
     from .leaveout import LeaveOutComponents
+
+
+def _json_safe(x: Any) -> Any:
+    """Convert numpy scalars/arrays, paths and nested containers to plain
+    JSON types; nan and infinity become null (JSON has no such numbers)."""
+    if isinstance(x, dict):
+        return {str(k): _json_safe(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple, set)):
+        return [_json_safe(v) for v in x]
+    if isinstance(x, np.ndarray):
+        return _json_safe(x.tolist())
+    if isinstance(x, np.generic):
+        return _json_safe(x.item())
+    if isinstance(x, float):
+        return x if math.isfinite(x) else None
+    if x is None or isinstance(x, (bool, int, str)):
+        return x
+    return str(x)
+
+
+def _dump_json(obj: Any, path: str | Path | None, indent: int | None) -> str:
+    text = json.dumps(obj, indent=indent, allow_nan=False)
+    if path is not None:
+        Path(path).write_text(text + "\n", encoding="utf-8")
+    return text
 
 
 # --------------------------------------------------------------------------
@@ -309,6 +336,55 @@ class HDFEResult:
         lines.append(str(self.tidy()))
         return "\n".join(lines)
 
+    def summary_dict(self, coefficients: bool = False) -> dict:
+        """The model-level information of summary() as a dict of plain Python
+        types (JSON-ready; nan is None). Fit statistics not defined for the
+        model (e.g. r2 for a GLM) are absent. `coefficients=True` adds the
+        `tidy()` table as a list of row dicts."""
+        st = self.diagnostics.get("stream") or {}
+        d: dict[str, Any] = {
+            "formula": self.fml,
+            "depvar": self.depvar,
+            "family": self.family or "gaussian",
+            "is_iv": self.is_iv,
+            "vcov": self.vcov_type,
+            "df_t": self.df_t,
+            "n_obs": self.n_obs,
+            "fixed_effects": list(self.fe_names),
+            "n_levels": dict(self.n_levels),
+            "n_clusters": dict(self.n_clusters),
+            "streamed_dimension": st.get("dim"),
+            "streamed_reason": st.get("reason") if st.get("dim") is not None else None,
+            "n_identifying": self.n_identifying if len(self.fe_names) >= 2 else None,
+            "n_components": self.n_components if len(self.fe_names) >= 2 else None,
+            "fe_dof": self.k_fe if self.fe_names else None,
+            "weights": self.weights,
+            "weights_type": self.weights_type if self.weights else None,
+            "collinear_dropped": list(self.collin_vars),
+            "solver": self.solver_info,
+        }
+        if self.family:
+            d.update(deviance=self.deviance, loglik=self.loglik, pseudo_r2=self.pseudo_r2,
+                     irls=self.diagnostics.get("irls"),
+                     separation=self.diagnostics.get("separation"))
+        else:
+            d.update(rss=self.rss, rmse=self.rmse, r2=self.r2, adj_r2=self.adj_r2)
+            if self.fe_names:
+                d.update(r2_within=self.r2_within, adj_r2_within=self.adj_r2_within)
+        if self.is_iv:
+            d["first_stage_f"] = {fs.depvar: f for fs, f
+                                  in zip(self.first_stage, self.f_stat_1st_stage)}
+        if coefficients:
+            d["coefficients"] = self.tidy().to_dicts()
+        return _json_safe(d)
+
+    def summary_json(self, path: str | Path | None = None, indent: int | None = 2,
+                     coefficients: bool = False) -> str:
+        """The model-level information of summary() as a JSON string (see
+        `summary_dict`); with `path`, also written there as UTF-8. Reload with
+        `json.loads` or `json.load`."""
+        return _dump_json(self.summary_dict(coefficients), path, indent)
+
     def summary(self, logger: logging.Logger | None = None,
                 level: int = logging.INFO) -> None:
         """Print the report, or write it to `logger` (one record, at `level`)."""
@@ -344,6 +420,16 @@ class HDFEMulti:
 
     def summary_text(self) -> str:
         return "\n\n".join(r.summary_text() for r in self.all_fitted_models.values())
+
+    def summary_dict(self, coefficients: bool = False) -> dict:
+        """`{formula: HDFEResult.summary_dict(...)}` for each model."""
+        return {f: r.summary_dict(coefficients) for f, r in self.all_fitted_models.items()}
+
+    def summary_json(self, path: str | Path | None = None, indent: int | None = 2,
+                     coefficients: bool = False) -> str:
+        """JSON object keyed by formula, each value as `HDFEResult.summary_json`;
+        with `path`, also written there."""
+        return _dump_json(self.summary_dict(coefficients), path, indent)
 
     def summary(self, logger: logging.Logger | None = None, level: int = logging.INFO,
                 per_model: bool = False) -> None:

@@ -4,6 +4,8 @@ lets streaming results go into `pf.etable`, `pf.summary` and `pf.iplot`.
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import polars as pl
 import pytest
@@ -69,6 +71,34 @@ def test_summary_text_reports_the_model(fits):
     assert OLS_FML in text
     for token in ["worker_id", "firm_id", "RSS", "within R2", "solver"]:
         assert token in text, token
+
+
+def test_summary_json_round_trips_the_model_level_fields(fits, tmp_path):
+    res = fits["ols"]
+    path = tmp_path / "fit.json"
+    text = res.summary_json(path)
+    d = json.loads(path.read_text(encoding="utf-8"))
+    assert d == json.loads(text)
+    assert d["formula"] == OLS_FML and d["depvar"] == res.depvar
+    assert d["n_obs"] == res.n_obs and d["n_levels"] == res.n_levels
+    assert d["rss"] == res.rss and d["r2_within"] == res.r2_within
+    assert d["vcov"] == res.vcov_type
+    assert "coefficients" not in d
+
+
+def test_summary_json_can_include_the_coefficient_table(fits):
+    d = json.loads(fits["ols"].summary_json(coefficients=True))
+    assert [r["Coefficient"] for r in d["coefficients"]] == list(fits["ols"].coefnames)
+
+
+def test_summary_json_iv_has_first_stage_f(fits):
+    d = json.loads(fits["iv"].summary_json())
+    assert d["is_iv"] and d["first_stage_f"]
+
+
+def test_multi_summary_json_is_keyed_by_formula(fits):
+    d = json.loads(fits["multi"].summary_json())
+    assert list(d) == list(fits["multi"].all_fitted_models)
 
 
 def test_residuals_and_fixef_are_lazy(fits):

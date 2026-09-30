@@ -133,7 +133,11 @@ those intervals are justified, and the interval that stays valid when they are
 not. See [below](#leave-out-variance-components-kss) and
 [docs/kss.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss.md).
 
-**Output.** Coefficients as a Polars DataFrame (`tidy()`); residuals and
+**Output.** Coefficients as a Polars DataFrame (`tidy()`); the model-level
+information of `summary()` (observations, fixed-effect counts, fit statistics,
+solver) as JSON with `summary_json()`, optionally written to a file with
+`summary_json("fit.json")` (`summary_dict()` returns the same as a dict);
+residuals and
 per-row fixed effects as lazy Polars scans, so aggregates like a variance
 decomposition run as a streaming pass; estimated effects per dimension via
 `fixef()`. `to_pyfixest()` converts a result into a pyfixest model for

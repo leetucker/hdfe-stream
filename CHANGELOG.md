@@ -11,3 +11,5 @@ First release.
 - AKM variance decomposition and leave-out (KSS) bias correction with
   standard errors and weak-identification diagnostics.
 - Reporting through pyfixest (`to_pyfixest()`, `etable`).
+- `summary_json()` and `summary_dict()`: the model-level information of
+  `summary()` as JSON or a dict, for saving to disk.

@@ -279,6 +279,10 @@ def test_results_and_reporting(glm_panel):
         pf.etable([view, ref])
         text = res.summary_text()
         assert "poisson" in text and "deviance" in text and "RSS" not in text
+        import json
+        d = json.loads(res.summary_json())
+        assert d["family"] == "poisson" and d["deviance"] == res.deviance
+        assert "rss" not in d and d["irls"]["iterations"] >= 1
         # the residual file: fitted = exp(eta), resid = y - fitted, and eta is
         # the sum of its parts
         out = res.resid().collect()
