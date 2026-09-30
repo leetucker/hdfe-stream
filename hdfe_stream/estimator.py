@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import gc
 import logging
-import shutil
 import time
 import traceback
 from pathlib import Path
@@ -30,7 +29,7 @@ from .report import _log
 from .results import HDFEMulti, HDFEResult, _canon_cluster, _vcov_key
 from .solve import _SolveMixin
 from .utils import _norm_vars, _phys_mem_gb, _safe
-from .workspace import _ACTIVE_RUNS, _MARKER, _Run, _base_dir, _dir_bytes
+from .workspace import _ACTIVE_RUNS, _MARKER, _Run, _base_dir, _dir_bytes, _remove_path
 
 
 # The pipeline stages are mixed in from passes.py, solve.py and inference.py;
@@ -282,26 +281,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         for child in self.workdir.iterdir():
             if child.name in ("models", _MARKER):
                 continue
-            self._remove(child)
-
-    @staticmethod
-    def _remove(child):
-        """Delete a file or directory. Windows cannot delete a memory-mapped
-        file, and a map can outlive its last named reference until the
-        garbage collector reaches it (a reference cycle, or a traceback), so
-        on failure collect garbage and try again."""
-        for attempt in range(3):
-            try:
-                if child.is_dir():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink(missing_ok=True)
-                return
-            except OSError:
-                if attempt == 2:
-                    return          # the run directory's own cleanup tries again
-                gc.collect()
-                time.sleep(0.1 * (attempt + 1))
+            _remove_path(child)
 
     def _setup_dims(self, g):
         """Fix the streamed dimension g; the others keep the user's order.

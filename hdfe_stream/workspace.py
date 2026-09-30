@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import shutil
 import socket
@@ -31,9 +32,33 @@ WORKDIR_ENV = "HDFE_STREAM_WORKDIR"
 _ACTIVE_RUNS = set()      # run directories of fits currently running in this process
 
 
+def _remove_path(path, attempts=8):
+    """Delete a file or directory, never raising. Windows refuses to delete a
+    file that is memory-mapped or open, and a map can outlive its last named
+    reference until the garbage collector reaches it; a virus scanner or
+    indexer can also hold a just-written file briefly. So on failure collect
+    garbage and retry, with a growing pause (about 3 s in all). Elsewhere a
+    failure is final at once."""
+    path = Path(path)
+    for attempt in range(attempts if os.name == "nt" else 1):
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink(missing_ok=True)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            gc.collect()
+            time.sleep(0.05 * 2 ** attempt if attempt < attempts - 1 else 0)
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def _rmtree_quiet(path):
     _ACTIVE_RUNS.discard(str(path))
-    shutil.rmtree(path, ignore_errors=True)
+    _remove_path(path)
 
 
 def _pid_alive(pid):
