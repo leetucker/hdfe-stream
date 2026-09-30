@@ -33,7 +33,7 @@ def run_dirs(workdir):
 
 
 def files_in(run):
-    return sorted(str(p.relative_to(run)) for p in Path(run).rglob("*") if p.is_file())
+    return sorted(p.relative_to(run).as_posix() for p in Path(run).rglob("*") if p.is_file())
 
 
 def run_of(fit):

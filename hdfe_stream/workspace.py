@@ -36,6 +36,30 @@ def _rmtree_quiet(path):
     shutil.rmtree(path, ignore_errors=True)
 
 
+def _pid_alive(pid):
+    """Whether a process with this pid exists on this host (or is owned by
+    someone else, which counts as alive). Signal 0 is not usable on Windows,
+    where os.kill would terminate the process."""
+    if os.name == "nt":
+        import ctypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        handle = kernel32.OpenProcess(0x1000, False, pid)   # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.get_last_error() == 5             # access denied: it exists
+        code = ctypes.c_ulong()
+        ok = kernel32.GetExitCodeProcess(ctypes.c_void_p(handle), ctypes.byref(code))
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
+        return bool(ok) and code.value == 259               # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _dir_bytes(path):
     total = 0
     for root, _, files in os.walk(path):
@@ -115,13 +139,8 @@ def cleanup(workdir: str | Path | None = None,
             if h != host:
                 continue
             if pid > 0:
-                try:
-                    os.kill(pid, 0)
+                if _pid_alive(pid):
                     continue                # process still running
-                except ProcessLookupError:
-                    pass
-                except PermissionError:
-                    continue                # exists, owned by someone else
         size = _dir_bytes(d)
         if not dry_run:
             _rmtree_quiet(str(d))

@@ -7,9 +7,11 @@ mixins; each of those files documents the attributes it reads and sets.
 
 from __future__ import annotations
 
+import gc
 import logging
 import shutil
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -398,8 +400,12 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         self._init_run()
         try:
             results = self._fit_passes(source, keys, extra, default, fe_dof, t0)
-        except BaseException:
-            # nothing from a failed fit is kept (unless debugging)
+        except BaseException as exc:
+            # nothing from a failed fit is kept (unless debugging). The
+            # traceback's frames still hold memory maps of the intermediates,
+            # and Windows cannot delete a mapped file, so release them first.
+            traceback.clear_frames(exc.__traceback__)
+            gc.collect()
             self._release_intermediates()
             if not self.keep_intermediates:
                 self._run.cleanup()
