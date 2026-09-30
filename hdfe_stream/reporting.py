@@ -7,6 +7,7 @@ is required by `feols_stream`, and leans on pyfixest internals.
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 import numpy as np
@@ -107,10 +108,11 @@ def _fill_pyfixest(obj, r):
     crit = stats.norm.ppf(0.975) if glm else stats.t.ppf(0.975, r.df_t)
     obj.__dict__.update({
         "_fml": r.fml, "_depvar": r.depvar,
-        # the FE string as written in the formula: maketables matches FE rows
-        # across models by the text between '+' signs, spaces included
-        "_fixef": ((r.fml.split("|")[1].strip() if "|" in r.fml else " + ".join(r.fe_names))
-                   if r.fe_names else None),
+        # the FE string as written in the formula, without spaces: maketables
+        # matches FE rows across models by the text between '+' signs, spaces
+        # included, so "a + b + c" and "a + b" would not share their "b" row
+        "_fixef": (_fixef_string(r.fml.split("|")[1] if "|" in r.fml
+                                 else " + ".join(r.fe_names)) if r.fe_names else None),
         "_has_fixef": bool(r.fe_names), "_coefnames": list(r.coefnames), "_k": len(r.coefnames),
         "_beta_hat": np.asarray(r.beta), "_se": se, "_tstat": t,
         "_pvalue": 2 * (stats.norm.sf(np.abs(t)) if glm else stats.t.sf(np.abs(t), r.df_t)),
@@ -139,6 +141,36 @@ def _to_pyfixest(r):
     return (iv if r.is_iv else ols)(r)
 
 
+def _fixef_string(text: str) -> str:
+    """'a + b ^ c' -> 'a+b^c'."""
+    return "+".join("^".join(c.strip() for c in part.split("^")) for part in text.split("+"))
+
+
+_TEX_SPECIAL = {"\\": r"\textbackslash{}", "&": r"\&", "%": r"\%", "#": r"\#",
+                "_": r"\_", "^": r"\^{}"}
+
+
+def _tex_escape(text: str) -> str:
+    return "".join(_TEX_SPECIAL.get(c, c) for c in text)
+
+
+def _tex_labels(models: list, labels: dict | None, felabels: dict | None) -> tuple[dict, dict]:
+    """LaTeX-escaped labels for every variable and fixed-effect name in
+    `models`, under the caller's own. maketables writes names into LaTeX
+    unescaped, so an underscore would set the next character as a subscript."""
+    names, fes = set(), set()
+    for m in models:
+        names.update(getattr(m, "_coefnames", None) or [])
+        if getattr(m, "_depvar", None):
+            names.add(m._depvar)
+        fx = getattr(m, "_fixef", None)
+        if fx and fx != "0":
+            fes.update(x for x in fx.split("+") if x)
+    auto = {n: _tex_escape(n) for n in names | fes if _tex_escape(n) != n}
+    fe_auto = {n: _tex_escape(n) for n in fes if _tex_escape(n) != n}
+    return {**auto, **(labels or {})}, {**fe_auto, **(felabels or {})}
+
+
 def etable(models: Any, **kwargs: Any) -> Any:
     """pf.etable for streaming results (HDFEResult, HDFEMulti, or a list that
     may mix them with ordinary pyfixest models). kwargs go to pf.etable."""
@@ -153,4 +185,13 @@ def etable(models: Any, **kwargs: Any) -> Any:
             out.append(m.to_pyfixest())
         else:
             out.append(m)
+    # the same spelling of fixed effects across models, so their rows merge
+    for k, m in enumerate(out):
+        fx = getattr(m, "_fixef", None)
+        if isinstance(fx, str) and fx != _fixef_string(fx):
+            out[k] = copy.copy(m)
+            out[k]._fixef = _fixef_string(fx)
+    if kwargs.get("type") == "tex":
+        kwargs["labels"], kwargs["felabels"] = _tex_labels(
+            out, kwargs.get("labels"), kwargs.get("felabels"))
     return pf.etable(out, **kwargs)

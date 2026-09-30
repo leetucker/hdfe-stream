@@ -45,11 +45,10 @@ print(etable(multi, type="df").to_string())
 # A model that fits in memory is quicker with pyfixest; a big one needs
 # hdfe_stream. They can go in the same table, and on the same data they agree.
 #
-# One thing to know: pf.etable lines up fixed-effect rows by the literal text
-# between the '+' signs, so the same dimension in a different position in the
-# formula becomes a separate row. That is pyfixest's own behavior -- it happens
-# between two pyfixest models too -- so keep the fixed-effect side spelled the
-# same way across models you want to compare.
+# `etable` also normalizes the spacing of the fixed-effect side, so "a + b" and
+# "a+b" share a row. (pf.etable itself matches rows on the literal text between
+# the '+' signs, spaces included.) A dimension spelled differently, or in a
+# different position within an interaction, is still a separate row.
 FML = "log_earn ~ age_squared + age_cubed | worker_id + firm_id + year"
 in_memory = pf.feols(FML, data=pl.read_parquet(data).to_pandas(),
                      vcov={"CRV1": "worker_id"}, fixef_rm="none")

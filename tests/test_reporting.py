@@ -101,6 +101,20 @@ def test_multi_summary_json_is_keyed_by_formula(fits):
     assert list(d) == list(fits["multi"].all_fitted_models)
 
 
+def test_etable_merges_fixed_effect_rows_across_spellings(fits):
+    from hdfe_stream import etable
+    df = etable([fits["ols"], fits["iv"]], type="df")
+    fe = [i for i in df.index if "firm_id" in str(i)]
+    assert len(fe) == 1, list(df.index)
+
+
+def test_etable_tex_escapes_underscores(fits):
+    from hdfe_stream import etable
+    tex = etable([fits["ols"], fits["iv"]], type="tex")
+    assert "worker\\_id" in tex and "worker_id" not in tex
+    assert "log\\_earn" in tex
+
+
 def test_residuals_and_fixef_are_lazy(fits):
     """Both come back as Polars LazyFrames, so nothing is read until collect."""
     res = fits["ols"]
