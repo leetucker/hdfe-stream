@@ -47,30 +47,10 @@ def _remove_path(path):
             return
         except FileNotFoundError:
             return
-        except OSError as err:
-            last = err
+        except OSError:
             gc.collect()
-    _debug_cleanup(path, last)
     if path.is_dir():
         shutil.rmtree(path, ignore_errors=True)
-
-
-def _debug_cleanup(path, err):
-    """Diagnostic: with HDFE_STREAM_DEBUG_CLEANUP=<file> set, append what could
-    not be deleted and which files this process still has open or mapped."""
-    log = os.environ.get("HDFE_STREAM_DEBUG_CLEANUP")
-    if not log:
-        return
-    lines = [f"could not delete {path}: {err!r}"]
-    try:
-        import psutil
-        proc = psutil.Process()
-        lines += [f"  open: {f.path}" for f in proc.open_files()]
-        lines += [f"  mapped: {m.path}" for m in proc.memory_maps() if str(path.parent) in m.path]
-    except Exception as exc:
-        lines.append(f"  (psutil: {exc!r})")
-    with open(log, "a", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
 
 
 def _rmtree_quiet(path):
