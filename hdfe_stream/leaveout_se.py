@@ -84,7 +84,7 @@ class ComponentSE:
     # formed with, and the 2x2 covariance of (b1, theta1)
     weak: dict = None
 
-    def summary(self):
+    def summary(self) -> str:
         lines = [f"leave-out standard errors ({self.n_draws} draws)",
                  f"{'component':<20}{'estimate':>12}{'se':>11}"
                  f"{'se (cons.)':>12}{'trace share':>13}",

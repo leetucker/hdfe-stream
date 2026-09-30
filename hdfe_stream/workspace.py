@@ -77,7 +77,9 @@ def _base_dir(workdir=None):
     return Path(workdir or os.environ.get(WORKDIR_ENV) or tempfile.gettempdir())
 
 
-def cleanup(workdir=None, older_than_hours=None, force=False, dry_run=False):
+def cleanup(workdir: str | Path | None = None,
+            older_than_hours: float | None = None, force: bool = False,
+            dry_run: bool = False) -> list[tuple[str, int]]:
     """Remove leftover run directories (e.g. from killed processes) in
     `workdir` (default: $HDFE_STREAM_WORKDIR if set, else the system
     temporary directory). Only directories

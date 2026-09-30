@@ -7,6 +7,8 @@ is required by `feols_stream`, and leans on pyfixest internals.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 from scipy import stats
 
@@ -137,7 +139,7 @@ def _to_pyfixest(r):
     return (iv if r.is_iv else ols)(r)
 
 
-def etable(models, **kwargs):
+def etable(models: Any, **kwargs: Any) -> Any:
     """pf.etable for streaming results (HDFEResult, HDFEMulti, or a list that
     may mix them with ordinary pyfixest models). kwargs go to pf.etable."""
     import pyfixest as pf

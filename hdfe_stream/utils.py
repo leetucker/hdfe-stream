@@ -7,11 +7,14 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import Iterator, Sequence
 
 import numpy as np
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+from ._types import PathLike
 
 
 def _phys_mem_gb():
@@ -26,7 +29,8 @@ def _safe(name):
     return re.sub(r"[^A-Za-z0-9_.-]", "_", name.replace("^", "_x_"))
 
 
-def iter_group_chunks(paths, columns, batch_rows=2_000_000):
+def iter_group_chunks(paths: PathLike | Sequence[PathLike], columns: Sequence[str],
+                      batch_rows: int = 2_000_000) -> Iterator[dict[str, np.ndarray]]:
     """Yield dicts of numpy arrays from Parquet file(s) sorted by `gcode`.
 
     Every yielded chunk contains *complete* fe[0] groups: rows of the last

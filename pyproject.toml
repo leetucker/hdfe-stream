@@ -1,24 +1,48 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "hdfe-stream"
 version = "0.1.0"
+description = "Out-of-core regression with several high-dimensional fixed effects: OLS, Poisson, logit and probit, with AKM/KSS variance decompositions"
+readme = "README.md"
+authors = [{ name = "Lee Tucker" }]
+keywords = ["econometrics", "fixed effects", "high-dimensional", "out-of-core", "AKM", "KSS", "pyfixest"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
+]
 requires-python = ">=3.10"
 dependencies = [
-    "polars>=1.9",
+    "polars>=1.37",
     "numpy>=1.24",
     "numba>=0.59",
     "pyarrow>=14.0",
     "scipy>=1.11",
 ]
 
+[project.urls]
+Homepage = "https://github.com/leetucker/hdfe-stream"
+Source = "https://github.com/leetucker/hdfe-stream"
+Issues = "https://github.com/leetucker/hdfe-stream/issues"
+Documentation = "https://github.com/leetucker/hdfe-stream/tree/main/docs"
+Changelog = "https://github.com/leetucker/hdfe-stream/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 within = ["within-py>=0.3.0"]
-amg = ["pyamg>=5.0"]
+amg = ["pyamg>=5.1"]
 formula = [
-    "pyfixest>=0.50.0,<0.61.0",
+    "pyfixest>=0.60.0,<0.61.0",
     "formulaic>=1.0",
     "pandas>=2.0",
 ]
@@ -29,11 +53,15 @@ benchmark = [
     "hdfe-stream[formula]",
     "matplotlib>=3.7",
 ]
-# the test suite compares against pyfixest, so it needs the formula extra
+# the test suite compares against pyfixest and exercises the optional solvers,
+# so it needs every extra
 test = [
     "pytest>=7.0",
-    "hdfe-stream[formula]",
+    "hdfe-stream[all]",
 ]
+
+[tool.setuptools.package-data]
+hdfe_stream = ["py.typed"]
 
 [tool.setuptools.packages.find]
 include = ["hdfe_stream*"]

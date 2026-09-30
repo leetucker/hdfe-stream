@@ -1,0 +1,8 @@
+include README.md CHANGELOG.md
+graft tests
+graft docs
+prune benchmarks
+prune prototypes
+prune examples
+prune logs
+global-exclude __pycache__ *.py[cod]

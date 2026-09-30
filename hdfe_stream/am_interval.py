@@ -34,7 +34,7 @@ from __future__ import annotations
 import numpy as np
 
 
-def am_cdf(z, kappa):
+def am_cdf(z: float, kappa: float) -> float:
     """P(rho(kappa) <= z) for q = 1."""
     from scipy import integrate, stats
 
@@ -53,7 +53,7 @@ def am_cdf(z, kappa):
     return float(value)
 
 
-def am_critical_value(kappa, alpha=0.05):
+def am_critical_value(kappa: float, alpha: float = 0.05) -> float:
     """z_{alpha, kappa} for q = 1: between sqrt(chi2_1) and sqrt(chi2_2)."""
     from scipy import optimize, stats
 
@@ -68,14 +68,15 @@ def am_critical_value(kappa, alpha=0.05):
                                  xtol=1e-13, rtol=1e-13))
 
 
-def curvature(lam1, sigma):
+def curvature(lam1: float, sigma: np.ndarray) -> float:
     """KSS's q = 1 curvature from lambda_1 and the 2x2 covariance."""
     v_b, v_t, cov = float(sigma[0, 0]), float(sigma[1, 1]), float(sigma[0, 1])
     rho2 = cov * cov / (v_b * v_t)
     return 2.0 * abs(lam1) * v_b / np.sqrt(v_t * (1.0 - rho2))
 
 
-def am_interval(lam1, b1, theta1, sigma, alpha=0.05, grid=4096):
+def am_interval(lam1: float, b1: float, theta1: float, sigma: np.ndarray,
+                alpha: float = 0.05, grid: int = 4096) -> tuple[float, float, dict[str, float]]:
     """(lower, upper, info) for the q = 1 weak-identification interval.
 
     `sigma` is the 2x2 covariance of (b1-hat, theta1-hat), which must be

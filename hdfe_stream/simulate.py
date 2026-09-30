@@ -28,6 +28,8 @@ dependencies.
 
 from __future__ import annotations
 
+from typing import Any, Iterable
+
 import numpy as np
 import polars as pl
 
@@ -36,9 +38,11 @@ __all__ = ["simulate_akm", "simulate_rich", "simulate_trends"]
 DEFAULT_YEARS = range(2005, 2015)
 
 
-def simulate_akm(n_workers=50_000, n_firms=None, years=DEFAULT_YEARS,
-                 p_move=0.08, p_obs=0.85, sd_worker=0.4, sd_firm=0.25,
-                 sd_noise=0.3, seed=0, keep_effects=False):
+def simulate_akm(n_workers: int = 50_000, n_firms: int | None = None,
+                 years: Iterable[int] = DEFAULT_YEARS, p_move: float = 0.08,
+                 p_obs: float = 0.85, sd_worker: float = 0.4, sd_firm: float = 0.25,
+                 sd_noise: float = 0.3, seed: Any = 0,
+                 keep_effects: bool = False) -> pl.DataFrame:
     """An AKM panel: one row per worker-year actually observed.
 
     Parameters
@@ -124,7 +128,8 @@ def simulate_akm(n_workers=50_000, n_firms=None, years=DEFAULT_YEARS,
     return df.sample(fraction=1.0, shuffle=True, seed=seed)
 
 
-def simulate_rich(n_workers=50_000, n_firms=None, seed=0, extra_seed=9, **kwargs):
+def simulate_rich(n_workers: int = 50_000, n_firms: int | None = None, seed: Any = 0,
+                  extra_seed: Any = 9, **kwargs: Any) -> pl.DataFrame:
     """`simulate_akm` plus the columns that exercise the wider feature set.
 
     Adds, on top of the base panel:
@@ -176,7 +181,8 @@ def simulate_rich(n_workers=50_000, n_firms=None, seed=0, extra_seed=9, **kwargs
     )
 
 
-def simulate_trends(n_workers=600, n_firms=60, seed=3, **kwargs):
+def simulate_trends(n_workers: int = 600, n_firms: int = 60, seed: Any = 3,
+                    **kwargs: Any) -> pl.DataFrame:
     """`simulate_akm` plus worker-specific time trends, for FEIS models.
 
     Each worker gets their own linear and quadratic trend in `t` (the year as
@@ -229,9 +235,11 @@ if __name__ == "__main__":
           f"{df['year'].n_unique()} years")
 
 
-def simulate_bottleneck(n_bridge=6, firms_per_block=8, movers_per_block=150,
-                        stayers_per_firm=8, block_gap=0.5, sd_worker=0.4,
-                        sd_firm=0.3, sd_noise=0.15, seed=0, keep_effects=False):
+def simulate_bottleneck(n_bridge: int = 6, firms_per_block: int = 8,
+                        movers_per_block: int = 150, stayers_per_firm: int = 8,
+                        block_gap: float = 0.5, sd_worker: float = 0.4,
+                        sd_firm: float = 0.3, sd_noise: float = 0.15, seed: Any = 0,
+                        keep_effects: bool = False) -> pl.DataFrame:
     """A panel whose AKM variance components are weakly identified.
 
     Two blocks of firms with plenty of mobility inside each and only `n_bridge`

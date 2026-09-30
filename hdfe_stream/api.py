@@ -3,26 +3,33 @@ formula out of core."""
 
 from __future__ import annotations
 
+from typing import Any, Sequence
+
 import polars as pl
+
+from ._types import PathLike, Source, Vcov
 
 from .estimator import StreamingHDFE
 from .feterms import _parse_fe_term
 from .glm import StreamingGLM
 from .report import _log
 from .formula import _plan_formula, _pyfixest_formula_api
-from .results import HDFEMulti, _vcov_key
+from .results import HDFEMulti, HDFEResult, _vcov_key
 
 
 class _FormulaEstimator:
-    def __init__(self, fml, workdir, options):
+    def __init__(self, fml: str, workdir: PathLike | None, options: dict[str, Any]) -> None:
         self.fml, self.workdir, self.options = fml, workdir, options
 
-    def fit(self, data, vcov=None, cluster=(), fe_dof="exact"):
+    def fit(self, data: Source, vcov: Vcov | None = None, cluster: Sequence[str] | str = (),
+            fe_dof: str = "exact") -> HDFEResult | HDFEMulti:
         return feols_stream(self.fml, data, self.workdir, vcov=vcov, cluster=cluster,
                             fe_dof=fe_dof, **self.options)
 
 
-def feols_stream(fml, data, workdir=None, vcov=None, cluster=(), fe_dof="exact", **options):
+def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,
+                 vcov: Vcov | None = None, cluster: Sequence[str] | str = (),
+                 fe_dof: str = "exact", **options: Any) -> HDFEResult | HDFEMulti:
     """
     Out-of-core OLS with high-dimensional fixed effects from a pyfixest-style
     formula, e.g. "y ~ x1 + i(year, treat, ref=2010) | worker_id + firm_id^year".
@@ -90,9 +97,11 @@ def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options):
     return results[0] if len(results) == 1 else HDFEMulti(results)
 
 
-def fepois_stream(fml, data, workdir=None, vcov=None, cluster=(), fe_dof="exact",
-                  offset=None, iwls_tol=1e-8, iwls_maxiter=25, separation_check=True,
-                  **options):
+def fepois_stream(fml: str, data: Source, workdir: PathLike | None = None,
+                  vcov: Vcov | None = None, cluster: Sequence[str] | str = (),
+                  fe_dof: str = "exact", offset: str | pl.Expr | None = None,
+                  iwls_tol: float = 1e-8, iwls_maxiter: int = 25,
+                  separation_check: bool = True, **options: Any) -> HDFEResult | HDFEMulti:
     """
     Out-of-core Poisson regression (log link) with high-dimensional fixed
     effects, from a pyfixest-style formula, e.g.
@@ -122,8 +131,10 @@ def fepois_stream(fml, data, workdir=None, vcov=None, cluster=(), fe_dof="exact"
                          separation_check=separation_check))
 
 
-def feglm_stream(fml, data, family, workdir=None, vcov=None, cluster=(), fe_dof="exact",
-                 iwls_tol=1e-8, iwls_maxiter=25, separation_check=True, **options):
+def feglm_stream(fml: str, data: Source, family: str, workdir: PathLike | None = None,
+                 vcov: Vcov | None = None, cluster: Sequence[str] | str = (),
+                 fe_dof: str = "exact", iwls_tol: float = 1e-8, iwls_maxiter: int = 25,
+                 separation_check: bool = True, **options: Any) -> HDFEResult | HDFEMulti:
     """
     Out-of-core logit or probit regression with high-dimensional fixed
     effects, from a pyfixest-style formula: `family` is "logit" or "probit".

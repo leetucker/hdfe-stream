@@ -8,12 +8,17 @@ import logging
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Iterable
 
 import numpy as np
 import polars as pl
 from scipy import stats
 
+from ._types import Vcov
 from .report import _emit
+
+if TYPE_CHECKING:
+    from .leaveout import LeaveOutComponents
 
 
 # --------------------------------------------------------------------------
@@ -62,7 +67,7 @@ class HDFEResult:
     _estimator: object = field(default=None, repr=False, compare=False)
 
     @property
-    def se(self):
+    def se(self) -> np.ndarray:
         return np.sqrt(np.diag(self.vcov))
 
     def coef(self) -> dict:
@@ -82,7 +87,7 @@ class HDFEResult:
             "Pr(>|t|)": p,
         }, schema_overrides={"Coefficient": pl.Utf8})
 
-    def with_vcov(self, vcov) -> "HDFEResult":
+    def with_vcov(self, vcov: Vcov) -> "HDFEResult":
         """Switch among the vcovs computed in pass 2: 'iid', 'hetero', or a
         cluster variable given as {'CRV1': var} or 'CRV1:var' (likewise
         CRV3, when it was the fit's vcov)."""
@@ -96,7 +101,7 @@ class HDFEResult:
         out.vcov, out.vcov_type, out.df_t = v, key, dft
         return out
 
-    def to_pyfixest(self):
+    def to_pyfixest(self) -> Any:
         """A pyfixest Feols (Feiv for IV) view of this result, for
         pf.etable, pf.summary, pf.coefplot, ... Only the stored results are
         available; methods that need the data (predict, re-computing vcov,
@@ -104,11 +109,14 @@ class HDFEResult:
         from .reporting import _to_pyfixest   # reporting imports this module
         return _to_pyfixest(self)
 
-    def leave_out_kss(self, n_draws=250, seed=0, block=None, psi=None,
-                      leave_out="match", stayers=None, se=False, se_draws=None,
-                      se_trace=True, diagnose=None, diagnose_draws=64,
-                      weak_interval=True, confidence=0.95, centering="reference",
-                      se_variance="person_year"):
+    def leave_out_kss(self, n_draws: int = 250, seed: int = 0, block: int | None = None,
+                      psi: str | None = None, leave_out: str = "match",
+                      stayers: str | None = None, se: bool = False,
+                      se_draws: int | None = None, se_trace: bool = True,
+                      diagnose: bool | None = None, diagnose_draws: int = 64,
+                      weak_interval: bool = True, confidence: float = 0.95,
+                      centering: str = "reference",
+                      se_variance: str = "person_year") -> LeaveOutComponents:
         """Kline-Saggio-Solvsten leave-out variance components for this fit.
 
         This is the secondary way in, for when you want the regression in its
@@ -233,11 +241,11 @@ class HDFEResult:
         return self._scan(self.paths["resid"], "residual")
 
     @property
-    def files_dir(self):
+    def files_dir(self) -> Path | None:
         """Directory holding this model's result files."""
         return self.paths.get("dir")
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """Delete this model's result files (and its first-stage files for
         IV); the run directory goes once no model files remain."""
         for fs in self.first_stage:
@@ -301,23 +309,24 @@ class HDFEResult:
         lines.append(str(self.tidy()))
         return "\n".join(lines)
 
-    def summary(self, logger=None, level=logging.INFO):
+    def summary(self, logger: logging.Logger | None = None,
+                level: int = logging.INFO) -> None:
         """Print the report, or write it to `logger` (one record, at `level`)."""
         _emit(self.summary_text(), logger, level)
 
 class HDFEMulti:
     """Results of a formula that expands to several models."""
 
-    def __init__(self, results):
+    def __init__(self, results: Iterable[HDFEResult]) -> None:
         self.all_fitted_models = {r.fml: r for r in results}
 
-    def fetch_model(self, i) -> HDFEResult:
+    def fetch_model(self, i: int) -> HDFEResult:
         return list(self.all_fitted_models.values())[i]
 
     def to_pyfixest(self) -> list:
         return [r.to_pyfixest() for r in self]
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """Delete the result files of all models."""
         for r in self:
             r.cleanup()
@@ -336,7 +345,8 @@ class HDFEMulti:
     def summary_text(self) -> str:
         return "\n\n".join(r.summary_text() for r in self.all_fitted_models.values())
 
-    def summary(self, logger=None, level=logging.INFO, per_model=False):
+    def summary(self, logger: logging.Logger | None = None, level: int = logging.INFO,
+                per_model: bool = False) -> None:
         """Print all reports, or write them to `logger`: one record in total,
         or one per model with per_model=True."""
         if logger is not None and per_model:

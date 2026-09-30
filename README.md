@@ -131,7 +131,7 @@ connected set, Johnson–Lindenstrauss leverages, weights, standard errors with
 95% intervals (`se=True`), KSS's weak-identification diagnostic saying whether
 those intervals are justified, and the interval that stays valid when they are
 not. See [below](#leave-out-variance-components-kss) and
-[docs/kss.md](docs/kss.md).
+[docs/kss.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss.md).
 
 **Output.** Coefficients as a Polars DataFrame (`tidy()`); residuals and
 per-row fixed effects as lazy Polars scans, so aggregates like a variance
@@ -165,26 +165,26 @@ python benchmarks/plot_benchmarks.py
 ```
 
 The numbers behind the figures are in
-[benchmarks/results/akm.csv](benchmarks/results/akm.csv), and
-[benchmarks/README.md](benchmarks/README.md) says how each is measured. In
+[benchmarks/results/akm.csv](https://github.com/leetucker/hdfe-stream/blob/main/benchmarks/results/akm.csv), and
+[benchmarks/README.md](https://github.com/leetucker/hdfe-stream/blob/main/benchmarks/README.md) says how each is measured. In
 brief: wall time includes reading the data, because pyfixest and xhdfe need it in
 memory before they can start and hdfe_stream reads it itself — that difference is
 the comparison, not an artifact. Peak memory is `VmHWM` for the whole process,
 including about 0.5 GB of imports. Each configuration runs in its own process.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/akm_time.dark.svg">
-  <img alt="AKM regression: wall time against the number of workers, one line per configuration, log-log" src="docs/figures/akm_time.light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/akm_time.dark.svg">
+  <img alt="AKM regression: wall time against the number of workers, one line per configuration, log-log" src="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/akm_time.light.svg">
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/akm_memory.dark.svg">
-  <img alt="AKM regression: peak memory against the number of workers, one line per configuration, log-log" src="docs/figures/akm_memory.light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/akm_memory.dark.svg">
+  <img alt="AKM regression: peak memory against the number of workers, one line per configuration, log-log" src="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/akm_memory.light.svg">
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/akm_disk.dark.svg">
-  <img alt="AKM regression: peak disk use of hdfe_stream against the number of workers, log-log" src="docs/figures/akm_disk.light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/akm_disk.dark.svg">
+  <img alt="AKM regression: peak disk use of hdfe_stream against the number of workers, log-log" src="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/akm_disk.light.svg">
 </picture>
 
 At 5 million workers:
@@ -241,7 +241,7 @@ indicators, `log_earn ~ i(age_bin) | worker_id + firm_id`, clustered by worker,
 in bins from five years wide (8 indicators) down to one month (503). hdfe_stream
 runs at its defaults and "sized to the design", with bucket, batch and row-group
 sizes scaled down as the design widens (the rule is below). The numbers are in
-[benchmarks/results/covariates.csv](benchmarks/results/covariates.csv); every
+[benchmarks/results/covariates.csv](https://github.com/leetucker/hdfe-stream/blob/main/benchmarks/results/covariates.csv); every
 configuration that finished agrees with every other to within 1e-8.
 
 ```bash
@@ -249,18 +249,18 @@ python benchmarks/covariates_benchmark.py
 ```
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/covariates_memory.dark.svg">
-  <img alt="Many covariates: peak memory against the number of covariates, one line per configuration, log-log" src="docs/figures/covariates_memory.light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/covariates_memory.dark.svg">
+  <img alt="Many covariates: peak memory against the number of covariates, one line per configuration, log-log" src="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/covariates_memory.light.svg">
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/covariates_time.dark.svg">
-  <img alt="Many covariates: wall time against the number of covariates, one line per configuration, log-log" src="docs/figures/covariates_time.light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/covariates_time.dark.svg">
+  <img alt="Many covariates: wall time against the number of covariates, one line per configuration, log-log" src="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/covariates_time.light.svg">
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/covariates_disk.dark.svg">
-  <img alt="Many covariates: peak disk use of hdfe_stream against the number of covariates, log-log" src="docs/figures/covariates_disk.light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/covariates_disk.dark.svg">
+  <img alt="Many covariates: peak disk use of hdfe_stream against the number of covariates, log-log" src="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/covariates_disk.light.svg">
 </picture>
 
 Wall time and peak memory ("—": ran out of this machine's 26 GB):
@@ -320,7 +320,7 @@ the low-level `StreamingHDFE`, an expression that needs the whole column
 is built before partitioning instead, with a warning: the estimates are the
 same, the memory is not. Define such a column in the input LazyFrame to avoid
 it. `result.diagnostics["design_evaluated"]` says which happened.
-[examples/wide_designs.py](examples/wide_designs.py) puts this together.
+[examples/wide_designs.py](https://github.com/leetucker/hdfe-stream/blob/main/examples/wide_designs.py) puts this together.
 
 ### Trading memory for time
 
@@ -349,12 +349,12 @@ array (levels × variables), and
 back to `stream_cg` by itself.
 
 Leave-out estimation has a memory knob of its own, `scratch_mb`; see
-[docs/kss.md](docs/kss.md#performance).
+[docs/kss.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss.md#performance).
 
 Measured on an Intel Core Ultra 7 258V, 8 cores, 26 GB RAM, Linux (WSL2);
 Python 3.13.5, polars 1.44.2, numpy 2.5.3, numba 0.67.0, scipy 1.18.1,
 pyfixest 0.60.0, xhdfe 2.28.0 (CPU backend). The exact versions are in
-[benchmarks/results/machine.json](benchmarks/results/machine.json). Numba
+[benchmarks/results/machine.json](https://github.com/leetucker/hdfe-stream/blob/main/benchmarks/results/machine.json). Numba
 kernels are compiled on first use and cached to disk; the benchmark runs a
 warm-up fit so compilation is not charged to any configuration.
 
@@ -373,21 +373,21 @@ the dimension carrying varying slopes, else the highest approximate cardinality.
 
 ## Examples
 
-Runnable, on simulated data, no setup — see [examples/](examples/):
+Runnable, on simulated data, no setup — see [examples/](https://github.com/leetucker/hdfe-stream/blob/main/examples/):
 
 | | |
 |---|---|
-| [`quickstart.py`](examples/quickstart.py) | fit a model and read the results |
-| [`akm_variance.py`](examples/akm_variance.py) | the variance decomposition, in a streaming pass |
-| [`formulas.py`](examples/formulas.py) | the formula syntax, end to end |
-| [`weights_and_iv.py`](examples/weights_and_iv.py) | weights and 2SLS |
-| [`fewer_fixed_effects.py`](examples/fewer_fixed_effects.py) | one fixed effect, or none |
-| [`glm.py`](examples/glm.py) | Poisson with an offset, logit and probit, separation, and the incidental parameter bias |
-| [`wide_designs.py`](examples/wide_designs.py) | hundreds of covariates, and sizing the batches to them |
-| [`varying_slopes.py`](examples/varying_slopes.py) | worker-specific trends, and the low-level interface |
-| [`out_of_core.py`](examples/out_of_core.py) | memory, disk, solvers, logging |
-| [`reporting.py`](examples/reporting.py) | tables and plots via pyfixest |
-| [`leave_out_kss.py`](examples/leave_out_kss.py) | the KSS bias correction, checked against the effects the data was built from |
+| [`quickstart.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/quickstart.py) | fit a model and read the results |
+| [`akm_variance.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/akm_variance.py) | the variance decomposition, in a streaming pass |
+| [`formulas.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/formulas.py) | the formula syntax, end to end |
+| [`weights_and_iv.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/weights_and_iv.py) | weights and 2SLS |
+| [`fewer_fixed_effects.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/fewer_fixed_effects.py) | one fixed effect, or none |
+| [`glm.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/glm.py) | Poisson with an offset, logit and probit, separation, and the incidental parameter bias |
+| [`wide_designs.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/wide_designs.py) | hundreds of covariates, and sizing the batches to them |
+| [`varying_slopes.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/varying_slopes.py) | worker-specific trends, and the low-level interface |
+| [`out_of_core.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/out_of_core.py) | memory, disk, solvers, logging |
+| [`reporting.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/reporting.py) | tables and plots via pyfixest |
+| [`leave_out_kss.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/leave_out_kss.py) | the KSS bias correction, checked against the effects the data was built from |
 
 ## Simulated data
 
@@ -427,14 +427,14 @@ Nothing row-sized is rewritten between steps, so the disk needed is about what
 OLS needs. A fit takes a few times as long as OLS on the same data, since it
 usually needs 6 to 10 steps. Benchmarks against pyfixest, over the AKM
 benchmark's panel sizes and over the number of covariates, are in
-[docs/glm.md](docs/glm.md#benchmarks).
+[docs/glm.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/glm.md#benchmarks).
 
 Fixed-effect levels whose effect would be infinite are dropped first: all-zero
 outcomes for Poisson, constant ones for logit and probit. Estimates, standard
 errors and deviance match pyfixest to about 1e-12. The few places where they
 deliberately differ are frequency weights, which here mean repeated rows, and
 logit and probit levels whose outcome is all 1, which are dropped. Both are
-described in **[docs/glm.md](docs/glm.md)**, along with the options and results.
+described in **[docs/glm.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/glm.md)**, along with the options and results.
 
 ## Leave-out variance components (KSS)
 
@@ -458,12 +458,12 @@ leave-one-out connected set, leaves out a worker–firm match by default, and
 approximates leverages by random projection. It supports weights, standard
 errors, and KSS's weak-identification diagnostic and q = 1 interval.
 
-**[docs/kss.md](docs/kss.md)** covers the options, the standard errors and their
+**[docs/kss.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss.md)** covers the options, the standard errors and their
 measured coverage, weak identification, validation, reproducibility, and
-[performance against xhdfe](docs/kss.md#performance): at 5 million workers,
+[performance against xhdfe](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss.md#performance): at 5 million workers,
 5.3 GB of memory against xhdfe's 20 GB, with standard errors in 46 minutes
 where xhdfe's did not finish in three hours.
-**[docs/kss_methodological_differences.md](docs/kss_methodological_differences.md)**
+**[docs/kss_methodological_differences.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss_methodological_differences.md)**
 lists every way this implementation differs from LeaveOutTwoWay,
 VarianceComponentsHDFE.jl, xhdfe and pytwoway, with the motivation and measured
 effect of each.
@@ -479,7 +479,7 @@ identity.
 
 The exception is leave-out estimation, which uses random projection and random
 draws. Its results are reproducible from the seed but not deterministic;
-[docs/kss.md](docs/kss.md#reproducibility) says exactly what they depend on and
+[docs/kss.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss.md#reproducibility) says exactly what they depend on and
 what to report in a paper.
 
 ## Correctness
@@ -517,7 +517,7 @@ pytest
   parameter bias of logit and probit with fixed effects estimated from few
   observations, as in pyfixest and fixest. During the iterations the streamed
   dimension's effects are held in memory, one float per group per coefficient
-  set. See [docs/glm.md](docs/glm.md#not-available).
+  set. See [docs/glm.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/glm.md#not-available).
 - **A converted result cannot recompute its own vcov**, because it holds no
   data. Ask for what you need at fit time via `cluster=`.
 - **Formula support pins a pyfixest range** (`>=0.50,<0.61`), because it uses
@@ -535,4 +535,4 @@ pytest
   as their Lemma 5 provides for). Under weak identification it supplies the
   q = 1 interval, not KSS's q > 1 generalization. Leaving out a match, as it
   does by default, var(alpha) has no standard error and the covariance no q = 1
-  interval. See [docs/kss.md](docs/kss.md#what-it-does-not-do-yet).
+  interval. See [docs/kss.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss.md#what-it-does-not-do-yet).

@@ -39,14 +39,20 @@ KSS report that the error *falls* with sample size at fixed p, and use p in the
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from ._types import PathLike, Source
 from .report import _log
 
 from .results import HDFEResult
+
+if TYPE_CHECKING:
+    import polars as pl
 
 # Number of per-row running sums the algorithm keeps.
 _N_MOMENTS = 5
@@ -65,10 +71,10 @@ class JLALeverages:
     diagnostics: dict = field(default_factory=dict)
 
     @property
-    def n_rows(self):
+    def n_rows(self) -> int:
         return len(self.leverage)
 
-    def summary(self):
+    def summary(self) -> str:
         d = self.diagnostics
         return (f"JLA leverages: {self.n_rows:,} rows, {self.n_draws} draws in "
                 f"{d.get('blocks', '?')} block(s)\n"
@@ -288,7 +294,7 @@ class LeaveOutSet:
     firms: np.ndarray             # surviving levels of the other dimension
     diagnostics: dict = field(default_factory=dict)
 
-    def summary(self):
+    def summary(self) -> str:
         d = self.diagnostics
         return (
             "leave-one-out connected set\n"
@@ -304,7 +310,8 @@ class LeaveOutSet:
             f"  components before pruning: {d['components_before']:,}")
 
 
-def leave_one_out_connected(data, worker="worker_id", firm="firm_id"):
+def leave_one_out_connected(data: Source, worker: str = "worker_id",
+                            firm: str = "firm_id") -> LeaveOutSet:
     """Prune a panel to the largest leave-one-out connected set.
 
     Leave-out estimation needs every fixed effect to stay estimable when any
@@ -434,11 +441,11 @@ class TraceEstimate:
     n_draws: int
     diagnostics: dict = field(default_factory=dict)
 
-    def as_dict(self):
+    def as_dict(self) -> dict[str, float]:
         return {"var(psi)": self.var_psi, "var(alpha)": self.var_alpha,
                 "cov(psi, alpha)": self.cov}
 
-    def summary(self):
+    def summary(self) -> str:
         d = self.diagnostics
         return (f"bias terms from {self.n_draws} Hutchinson draws in "
                 f"{d.get('blocks', '?')} block(s)\n"
@@ -607,7 +614,7 @@ class LeaveOutComponents:
     fit: object = None
     match_fit: object = None
 
-    def tidy(self):
+    def tidy(self) -> pl.DataFrame:
         """The three components as a Polars DataFrame."""
         import polars as pl
 
@@ -619,7 +626,7 @@ class LeaveOutComponents:
             "leave_out": [self.leave_out[k] for k in keys],
         })
 
-    def summary(self):
+    def summary(self) -> str:
         d = self.diagnostics
         lines = [f"leave-out variance components ({d['psi']} and {d['alpha']})"]
         if d.get("leave_out") == "match":
@@ -1135,12 +1142,16 @@ def _check_leave_out(leave_out, se, stayers=None, centering="reference",
             "match uses LeaveOutTwoWay's within-match rule")
 
 
-def leave_out_kss(fml, data, workdir=None, *, psi=None, n_draws=250, seed=0,
-                  block=None, prune=True, leave_out="match", stayers=None,
-                  se=False, se_draws=None, se_trace=True, diagnose=None,
-                  diagnose_draws=64, weak_interval=True, confidence=0.95,
-                  centering="reference", se_variance="person_year", verbose=True,
-                  logger=None, **options):
+def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
+                  psi: str | None = None, n_draws: int = 250, seed: int = 0,
+                  block: int | None = None, prune: bool = True,
+                  leave_out: str = "match", stayers: str | None = None,
+                  se: bool = False, se_draws: int | None = None, se_trace: bool = True,
+                  diagnose: bool | None = None, diagnose_draws: int = 64,
+                  weak_interval: bool = True, confidence: float = 0.95,
+                  centering: str = "reference", se_variance: str = "person_year",
+                  verbose: bool = True, logger: logging.Logger | None = None,
+                  **options: Any) -> LeaveOutComponents:
     """Kline-Saggio-Solvsten leave-out variance components, end to end.
 
         lo = leave_out_kss("log_earn ~ age_squared | worker_id + firm_id",

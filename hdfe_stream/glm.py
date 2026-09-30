@@ -50,6 +50,7 @@ nothing. See `separation_check`.
 from __future__ import annotations
 
 import time
+from typing import Any, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -59,6 +60,7 @@ import numpy as np
 import polars as pl
 from scipy import special
 
+from ._types import Variables
 from .estimator import StreamingHDFE
 from .families import get_family
 from .inference import _stack
@@ -119,8 +121,10 @@ class StreamingGLM(StreamingHDFE):
     cells_contiguous = True
     cell_sums = False
 
-    def __init__(self, y, x, fe, family="poisson", offset=None, iwls_tol=1e-8,
-                 iwls_maxiter=25, separation_check=True, **options):
+    def __init__(self, y: Variables, x: Variables | None, fe: Sequence[str],
+                 family: str = "poisson", offset: str | pl.Expr | None = None,
+                 iwls_tol: float = 1e-8, iwls_maxiter: int = 25,
+                 separation_check: bool = True, **options: Any) -> None:
         ys = _norm_vars(y)
         if len(ys) != 1:
             raise ValueError("StreamingGLM takes one dependent variable; "

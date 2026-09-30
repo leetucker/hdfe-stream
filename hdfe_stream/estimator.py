@@ -11,10 +11,12 @@ import logging
 import shutil
 import time
 from pathlib import Path
+from typing import Any, Sequence
 
 import numba as nb
 import polars as pl
 
+from ._types import PathLike, Source, Variables, Vcov
 from .feterms import _parse_fe_term
 from .inference import _InferenceMixin
 from .inverse import _InverseMixin
@@ -23,7 +25,7 @@ from .leaveout_se import _StandardErrorMixin
 from .leaveout_weakid import _WeakIdMixin
 from .passes import _PassesMixin
 from .report import _log
-from .results import HDFEMulti, _canon_cluster, _vcov_key
+from .results import HDFEMulti, HDFEResult, _canon_cluster, _vcov_key
 from .solve import _SolveMixin
 from .utils import _norm_vars, _phys_mem_gb, _safe
 from .workspace import _ACTIVE_RUNS, _MARKER, _Run, _base_dir, _dir_bytes
@@ -144,15 +146,21 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
     cells_contiguous = False
     cell_sums = True
 
-    def __init__(self, y, x, fe, workdir=None, solver="auto", precond="jacobi", keep=(),
-                 tol=1e-10, maxiter=5000, batch_rows=2_000_000, row_group_size=500_000,
-                 n_buckets=None, rows_per_bucket=20_000_000, cells_in_memory=False,
-                 triple_budget=5_000_000, dense_max_levels=1000, rhs_block=8,
-                 assembly="auto", max_s_gb=None, collin_tol=1e-10, collin_tol_rel=1e-6,
-                 n_threads=None, scratch_mb=32,
-                 weights=None, weights_type="aweights", stream=None, models=None,
-                 verbose=True, logger=None, log_level=logging.INFO, outputs="auto",
-                 save_resid=True, keep_intermediates=False):
+    def __init__(self, y: Variables, x: Variables | None, fe: Sequence[str],
+                 workdir: PathLike | None = None, solver: str = "auto",
+                 precond: str = "jacobi", keep: Sequence[str] = (),
+                 tol: float = 1e-10, maxiter: int = 5000, batch_rows: int = 2_000_000,
+                 row_group_size: int = 500_000, n_buckets: int | None = None,
+                 rows_per_bucket: int = 20_000_000, cells_in_memory: bool = False,
+                 triple_budget: int = 5_000_000, dense_max_levels: int = 1000,
+                 rhs_block: int = 8, assembly: str = "auto", max_s_gb: float | None = None,
+                 collin_tol: float = 1e-10, collin_tol_rel: float = 1e-6,
+                 n_threads: int | None = None, scratch_mb: int = 32,
+                 weights: str | pl.Expr | None = None, weights_type: str = "aweights",
+                 stream: str | None = None, models: list[dict[str, Any]] | None = None,
+                 verbose: bool = True, logger: logging.Logger | None = None,
+                 log_level: int = logging.INFO, outputs: str = "auto",
+                 save_resid: bool = True, keep_intermediates: bool = False) -> None:
         ys, xs = _norm_vars(y), _norm_vars(x if x is not None else [])
         self.var_names = list(ys) + [k for k in xs if k not in ys]
         self.var_exprs = {**xs, **ys}
@@ -361,7 +369,8 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         return total - n_red - len(self._redundant_slopes())
 
     # --------------------------------------------------------------- driver
-    def fit(self, source, vcov="iid", cluster=(), fe_dof="exact"):
+    def fit(self, source: Source, vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
+            fe_dof: str = "exact") -> HDFEResult | HDFEMulti:
         """
         source : Parquet path/glob or a Polars LazyFrame.
         vcov   : default vcov: 'iid', 'hetero'/'HC1', {'CRV1': var} or
@@ -408,7 +417,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         return results[0] if len(results) == 1 else HDFEMulti(results)
 
     @classmethod
-    def from_formula(cls, fml, workdir=None, **options):
+    def from_formula(cls, fml: str, workdir: PathLike | None = None, **options: Any) -> Any:
         """Estimator for a pyfixest-style formula; call .fit(data, vcov=...)."""
         from .api import _FormulaEstimator      # api imports this module
         return _FormulaEstimator(fml, workdir, options)

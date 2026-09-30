@@ -103,11 +103,11 @@ class WeakIdDiagnostics:
     lead_vectors: tuple = field(default=None, repr=False)
 
     @property
-    def weakly_identified(self):
+    def weakly_identified(self) -> list[str]:
         """Components for which the normal interval is not justified (q >= 1)."""
         return [name for name in COMPONENTS if self.q[name] >= 1]
 
-    def summary(self):
+    def summary(self) -> str:
         lines = [f"weak-identification diagnostic (KSS threshold "
                  f"{self.threshold:g} on lambda^2 / sum lambda^2)",
                  f"{'component':<18}{'lam1^2/sum':>11}{'lam2^2/sum':>11}"

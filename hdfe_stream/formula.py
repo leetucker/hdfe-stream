@@ -33,6 +33,12 @@ def _pyfixest_formula_api():
     try:
         from pyfixest.estimation.formula.model_matrix import create_model_matrix
         from pyfixest.estimation.formula.parse import Formula
+    except ModuleNotFoundError as err:
+        if (err.name or "").split(".")[0] not in ("pyfixest", "formulaic", "pandas"):
+            raise
+        raise ImportError(
+            "formula support needs pyfixest; install it with "
+            "`pip install hdfe-stream[formula]`, or use StreamingHDFE directly") from err
     except ImportError as err:  # internal API; pin the pyfixest version
         raise ImportError(
             "formula support uses pyfixest's formula parser "
