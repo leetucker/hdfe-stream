@@ -14,6 +14,7 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from ._columns import GCODE
 from ._types import PathLike
 
 
@@ -46,7 +47,7 @@ def iter_group_chunks(paths: PathLike | Sequence[PathLike], columns: Sequence[st
         tbl = pa.Table.from_batches([batch])
         if carry is not None:
             tbl = pa.concat_tables([carry, tbl])
-        g = tbl.column("gcode").to_numpy()
+        g = tbl.column(GCODE).to_numpy()
         cut = int(np.searchsorted(g, g[-1], side="left"))
         if cut == 0:  # the whole buffer is one group; keep accumulating
             carry = tbl

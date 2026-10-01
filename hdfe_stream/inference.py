@@ -13,6 +13,7 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from ._columns import GCODE, WCOL, kcol, tcol, vcol
 from .kernels_base import (_nb_assemble, _nb_crv3_finish, _nb_crv3_groups,
                            _nb_crv3_scatter, _nb_pass2, _nb_residualize_rows)
 from .kernels_slopes import _nb_pass2_sl, _nb_residualize_rows_sl
@@ -64,13 +65,13 @@ class _InferenceMixin:
             _nb_assemble(self.starts, self.codes, self.n, self.sums, self.offs, gamma, acc)
             return self.W_within_cell + acc.sum(axis=0)
         self._log("step 3: row pass for V' M_D V")
-        wcol = ["w"] if self.weights is not None else []
-        tcols = [f"t{j + 1}" for j in range(len(self.slope_vars))]
-        cols = [*self.ccols, *wcol, *tcols, *[f"v{j}" for j in range(m)]]
+        wcol = [WCOL] if self.weights is not None else []
+        tcols = [tcol(j + 1) for j in range(len(self.slope_vars))]
+        cols = [*self.ccols, *wcol, *tcols, *[vcol(j) for j in range(m)]]
         acc = np.zeros((m, m))
         for ch, starts, codes in self._row_chunks(cols):
-            V = _stack(ch, [f"v{j}" for j in range(m)])
-            w = (np.ascontiguousarray(ch["w"], dtype=np.float64) if wcol
+            V = _stack(ch, [vcol(j) for j in range(m)])
+            w = (np.ascontiguousarray(ch[WCOL], dtype=np.float64) if wcol
                  else np.ones(len(V)))
             # residualize in place, then one BLAS product for the k x k sums
             if tcols:
@@ -102,8 +103,8 @@ class _InferenceMixin:
                 starts = np.unique(np.linspace(0, n, min(n, pieces) + 1).astype(np.int64))
                 yield ch, starts, np.zeros((n, 0), np.int64)
             return
-        for ch in iter_group_chunks(self.paths["rows"], ["gcode", *cols], self.batch_rows):
-            gc = ch["gcode"]
+        for ch in iter_group_chunks(self.paths["rows"], [GCODE, *cols], self.batch_rows):
+            gc = ch[GCODE]
             starts = np.concatenate(([0], np.flatnonzero(gc[1:] != gc[:-1]) + 1, [len(gc)]))
             codes = (np.column_stack([ch[cc] for cc in self.ccols]).astype(np.int64)
                      if self.ccols else np.zeros((len(gc), 0), np.int64))
@@ -111,11 +112,11 @@ class _InferenceMixin:
 
     def _slope_matrix(self, ch):
         """T = [1, centered slope variables] for a chunk of rows."""
-        n = len(ch["gcode"])
+        n = len(ch[GCODE])
         T = np.empty((n, self.p))
         T[:, 0] = 1.0
         for j, mu in enumerate(self.tmeans):
-            T[:, j + 1] = ch[f"t{j + 1}"] - mu
+            T[:, j + 1] = ch[tcol(j + 1)] - mu
         return T
 
     # ------------------------------------------------------- clusters / dof
@@ -145,7 +146,7 @@ class _InferenceMixin:
         def cmap(cols):
             name = "^".join(cols)
             if name not in self.cmaps:
-                self.cmaps[name] = {"cols": list(cols), "code": f"k{len(self.cmaps)}",
+                self.cmaps[name] = {"cols": list(cols), "code": kcol(len(self.cmaps)),
                                     "map": str(self.workdir / f"cluster_{_safe(name)}.parquet")}
             return name
 
@@ -155,7 +156,7 @@ class _InferenceMixin:
                 return key
             cs = set(cols)
             if g0 is not None and cs == g0:
-                spec = {"kind": "seg", "dim": self.g_fe, "code": "gcode"}
+                spec = {"kind": "seg", "dim": self.g_fe, "code": GCODE}
             elif g0 is not None and cs > g0:
                 xcols = [c for c in cols if c not in g0]
                 xdim = dim_of.get(frozenset(xcols))
@@ -202,7 +203,7 @@ class _InferenceMixin:
             q = [pl.col(ccol).min().alias("lo"), pl.col(ccol).max().alias("hi")]
             chk = (pl.col("lo") != pl.col("hi")).any()
             if d == self.g_fe:      # bucket by bucket: rows are bucketed by fe[0]
-                ok = not any(pl.scan_parquet(f).group_by("gcode").agg(q).select(chk)
+                ok = not any(pl.scan_parquet(f).group_by(GCODE).agg(q).select(chk)
                              .collect(engine="streaming").item() for f in self.paths["rows"])
             else:
                 ok = not (pl.scan_parquet(self.paths["rows"]).group_by(dcol).agg(q).select(chk)
@@ -251,7 +252,7 @@ class _InferenceMixin:
             for d in self.o_fe:
                 spread = (pl.scan_parquet(self.paths["rows"])
                           .group_by(self.code_of[d])
-                          .agg((pl.col(f"t{j + 1}").max() - pl.col(f"t{j + 1}").min()).alias("r"))
+                          .agg((pl.col(tcol(j + 1)).max() - pl.col(tcol(j + 1)).min()).alias("r"))
                           .select(pl.col("r").max()).collect(engine="streaming").item())
                 if spread == 0:
                     out.append((v, d))
@@ -315,8 +316,8 @@ class _InferenceMixin:
         fweights = weighted and self.weights_type == "fweights"
 
         def rows(ch, starts, codes):
-            y = np.ascontiguousarray(ch[f"v{yj}"], dtype=np.float64)
-            w = (np.ascontiguousarray(ch["w"], dtype=np.float64) if weighted
+            y = np.ascontiguousarray(ch[vcol(yj)], dtype=np.float64)
+            w = (np.ascontiguousarray(ch[WCOL], dtype=np.float64) if weighted
                  else np.ones(len(y)))
             return SimpleNamespace(y=y, w=w, fw=w if fweights else None,
                                    w_out=w if weighted else None, extra=None)
@@ -386,20 +387,20 @@ class _InferenceMixin:
         G_sub = {t: 0 for t in subs}
         ccodes = [spec["code"] for spec in self.clusters.values() if spec["kind"] != "seg"]
         src = [c for c in self._src_cols() if c not in self.keep]
-        tcols = [f"t{j + 1}" for j in range(len(self.slope_vars))]
-        cols = list(dict.fromkeys(["gcode", *self.ccols, *ccodes, *src, *self.keep, *tcols,
-                                   *(["w"] if self.weights is not None else []), f"v{yj}",
-                                   *[f"v{j}" for j in xk], *[f"v{j}" for j in zk],
+        tcols = [tcol(j + 1) for j in range(len(self.slope_vars))]
+        cols = list(dict.fromkeys([GCODE, *self.ccols, *ccodes, *src, *self.keep, *tcols,
+                                   *([WCOL] if self.weights is not None else []), vcol(yj),
+                                   *[vcol(j) for j in xk], *[vcol(j) for j in zk],
                                    *rows.cols]))
         g_cols = self.fe_cols[self.g_fe] if self.fe else []
         yc = float(self.means[yj])
         r_writer = g_writer = None
-        for ch, starts, codes in self._row_chunks([c for c in cols if c != "gcode"]):
+        for ch, starts, codes in self._row_chunks([c for c in cols if c != GCODE]):
             r = rows(ch, starts, codes)
             y, w = r.y, r.w
             n = len(y)
-            X = _stack(ch, [f"v{j}" for j in xk]) if k else np.zeros((n, 0))
-            Z = X if ols else (_stack(ch, [f"v{j}" for j in zk]) if q else np.zeros((n, 0)))
+            X = _stack(ch, [vcol(j) for j in xk]) if k else np.zeros((n, 0))
+            Z = X if ols else (_stack(ch, [vcol(j) for j in zk]) if q else np.zeros((n, 0)))
             G = len(starts) - 1
             e = np.empty(n)
             zt = np.empty((n, q))

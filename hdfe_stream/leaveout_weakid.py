@@ -51,6 +51,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ._columns import GCODE, vcol
 from .kernels_inverse import _nb_group_sums, _nb_rademacher, _nb_reduce_rows
 from .kernels_se import _nb_readout
 from .leaveout_se import COMPONENTS
@@ -504,7 +505,7 @@ class _WeakIdMixin:
                 X_cov = self._covariate_matrix(chunk, L["columns"], len(w))
                 _nb_reduce_rows(starts, codes, self.offs, w, X_cov, xi, acc,
                                 acc_x)
-                first = int(chunk["gcode"][0])
+                first = int(chunk[GCODE][0])
                 _nb_group_sums(starts, w, xi, gsum[first:first + len(starts) - 1])
             zeta = [acc.sum(axis=0), acc_x.sum(axis=0), gsum]
             y = self.apply_inverse(zeta[0], zeta[1], zeta[2],
@@ -700,14 +701,14 @@ class _WeakIdMixin:
         V[b1] = sum_i x1bar_i^2 sigma2-tilde_i. Both are linear in the rows and
         the ratio is free of u1's scale, so one pass and no normalization.
         """
-        depcol = f"v{self.vidx[result.depvar]}"
+        depcol = vcol(self.vidx[result.depvar])
         y_bar = self._outcome_mean(depcol)
         wanted = tuple(dict.fromkeys(tuple(L["columns"]) + (depcol,)))
         num = np.zeros(3)
         den = np.zeros(3)
         for ordinal, chunk, starts, codes, w in self._chunks(wanted):
             X = self._covariate_matrix(chunk, L["columns"], len(w))
-            first = int(chunk["gcode"][0])
+            first = int(chunk[GCODE][0])
             rows = np.empty((len(w), 3))
             _nb_readout(starts, codes, self.offs, X,
                         np.ascontiguousarray(u[0]), np.ascontiguousarray(u[1]),

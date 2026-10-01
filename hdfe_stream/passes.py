@@ -4,22 +4,17 @@ and find connected components.
 
 from __future__ import annotations
 
-import re
 import shutil
 from pathlib import Path
 
 import numpy as np
 import polars as pl
 
+from ._columns import BUCKET, GCODE, PREFIX, WCOL, check_source, tcol, vcol
 from .kernels_base import _nb_components, _nb_diag
 from .kernels_slopes import _nb_diag_sl
 from .report import _warn
 from .utils import _row_wise, _segments, iter_group_chunks
-
-# names pass 0 gives its own columns; a raw column carried through the
-# partition must not share one
-_RESERVED = re.compile(r"w|_bucket|gcode|[vtck]\d+")
-
 
 # Shared-state contract with the other mixins
 # -------------------------------------------
@@ -52,6 +47,7 @@ class _PassesMixin:
     def _pass0_code(self, source, keys, extra):
         lf = source if isinstance(source, pl.LazyFrame) else pl.scan_parquet(source)
         schema = lf.collect_schema()
+        check_source(schema.names())
         if self.row_id in schema:
             raise ValueError(f"the data already has a column named {self.row_id!r}, which "
                              "the estimator uses for each row's position in the source; "
@@ -67,14 +63,14 @@ class _PassesMixin:
             raise ValueError(f"columns not found in data: {missing}")
         m = self.m
         source = lf
-        wexpr = [self.weights.alias("w")] if self.weights is not None else []
-        texpr = [pl.col(v).cast(pl.Float64).alias(f"t{j + 1}")
+        wexpr = [self.weights.alias(WCOL)] if self.weights is not None else []
+        texpr = [pl.col(v).cast(pl.Float64).alias(tcol(j + 1))
                  for j, v in enumerate(self.slope_vars)]
-        design = [self.var_exprs[nm].alias(f"v{j}") for j, nm in enumerate(self.var_names)]
-        others_finite = [pl.col(f"t{j + 1}").is_finite() for j in range(len(self.slope_vars))]
+        design = [self.var_exprs[nm].alias(vcol(j)) for j, nm in enumerate(self.var_names)]
+        others_finite = [pl.col(tcol(j + 1)).is_finite() for j in range(len(self.slope_vars))]
         if self.weights is not None:
-            others_finite.append(pl.col("w").is_finite())
-        finite = [pl.col(f"v{j}").is_finite() for j in range(m)] + others_finite
+            others_finite.append(pl.col(WCOL).is_finite())
+        finite = [pl.col(vcol(j)).is_finite() for j in range(m)] + others_finite
         lf = (lf.select([pl.col(c) for c in src + self.keep] + wexpr + texpr + design)
                 .drop_nulls(src)
                 .filter(pl.all_horizontal(finite)))
@@ -90,9 +86,9 @@ class _PassesMixin:
 
         # One scan for counts, means, weight checks and (if the streamed
         # dimension must be chosen by cardinality) HyperLogLog counts.
-        wstats = ([pl.col("w").sum().alias("wsum"), pl.col("w").min().alias("wmin")]
+        wstats = ([pl.col(WCOL).sum().alias("wsum"), pl.col(WCOL).min().alias("wmin")]
                   if self.weights is not None else [])
-        tstats = [pl.col(f"t{j + 1}").mean() for j in range(len(self.slope_vars))]
+        tstats = [pl.col(tcol(j + 1)).mean() for j in range(len(self.slope_vars))]
         need_card = self.stream is None and not self.slopes and len(self.fe_user) > 1
         card = []
         if need_card:
@@ -103,8 +99,8 @@ class _PassesMixin:
         self._log("pass 0: scanning data (counts, means"
                   + (", approximate cardinalities)" if need_card else ")"))
         mom = (lf.select([pl.len().alias("n")] + wstats + tstats + card
-                         + [pl.col(f"v{j}").mean() for j in range(m)]
-                         + [pl.col(f"v{j}").var().alias(f"var{j}") for j in range(m)])
+                         + [pl.col(vcol(j)).mean() for j in range(m)]
+                         + [pl.col(vcol(j)).var().alias(f"var{j}") for j in range(m)])
                  .collect(engine="streaming"))
         approx = {d: mom[f"__card_{d}"].item() for d in self.fe_user} if need_card else {}
         g, why = self._choose_stream(approx)
@@ -113,7 +109,7 @@ class _PassesMixin:
         self._log(f"pass 0: streaming {g} ({why})" if g is not None
                   else "pass 0: no fixed effects (ordinary least squares)")
         self._resolve_clusters(keys, extra)
-        self.tmeans = np.array([mom[f"t{j + 1}"].item() for j in range(len(self.slope_vars))])
+        self.tmeans = np.array([mom[tcol(j + 1)].item() for j in range(len(self.slope_vars))])
         self.n_obs = mom["n"].item()
         if self.n_obs == 0:
             raise ValueError("no complete observations"
@@ -126,7 +122,7 @@ class _PassesMixin:
             raise ValueError("weights must be strictly positive")
         self.wsum = mom["wsum"].item() if self.weights is not None else float(self.n_obs)
         self.N = self.wsum if self.weights_type == "fweights" else self.n_obs
-        self.means = np.array([mom[f"v{j}"].item() for j in range(m)])
+        self.means = np.array([mom[vcol(j)].item() for j in range(m)])
         self.raw_ss = np.array([(mom[f"var{j}"].item() or 0.0) * max(self.n_obs - 1, 1)
                                 for j in range(m)])
         P = self.n_buckets or max(1, -(-self.n_obs // self.rows_per_bucket))
@@ -182,8 +178,8 @@ class _PassesMixin:
         key = pl.col(g_cols[0]) if len(g_cols) == 1 else pl.struct(g_cols)
         self._log(f"pass 0: hash-partitioning rows into {P} {self.g_fe} buckets")
         shutil.rmtree(self.paths["partitioned"], ignore_errors=True)
-        (coded.with_columns(_bucket=(key.hash(seed=20260921) % P).cast(pl.UInt32))
-              .sink_parquet(pl.PartitionBy(self.paths["partitioned"], key="_bucket",
+        (coded.with_columns((key.hash(seed=20260921) % P).cast(pl.UInt32).alias(BUCKET))
+              .sink_parquet(pl.PartitionBy(self.paths["partitioned"], key=BUCKET,
                                            include_key=False)))
 
         # Sort each bucket by fe[0] and assign dense codes that keep
@@ -194,7 +190,7 @@ class _PassesMixin:
         offset = 0
         self.paths["rows"] = []
         for bkt in range(P):
-            srcdir = Path(self.paths["partitioned"]) / f"_bucket={bkt}"
+            srcdir = Path(self.paths["partitioned"]) / f"{BUCKET}={bkt}"
             if not srcdir.exists():
                 continue
             out = str(self.workdir / f"rows_b{bkt:04d}.parquet")
@@ -225,7 +221,7 @@ class _PassesMixin:
             # codes as well, so that each cell's rows are one run.
             sort_by = list(g_cols)
             if self.keep_intermediates:
-                sort_by += [*self.ccols, *[f"v{j}" for j in range(self.m)]]
+                sort_by += [*self.ccols, *[vcol(j) for j in range(self.m)]]
             elif self.cells_contiguous:
                 sort_by += self.ccols
             bucket = pl.scan_parquet(str(srcdir / "*.parquet"))
@@ -233,10 +229,10 @@ class _PassesMixin:
                 bucket = bucket.with_columns(design).drop(raw_extra)
             (bucket
                .sort(sort_by)
-               .with_columns(gcode=(new_group.cast(pl.UInt32).cum_sum() - 1 + offset)
-                             .cast(pl.UInt32))
+               .with_columns((new_group.cast(pl.UInt32).cum_sum() - 1 + offset)
+                             .cast(pl.UInt32).alias(GCODE))
                .sink_parquet(out, row_group_size=self.rgs))
-            offset = pl.scan_parquet(out).select(pl.col("gcode").max()).collect().item() + 1
+            offset = pl.scan_parquet(out).select(pl.col(GCODE).max()).collect().item() + 1
             self.paths["rows"].append(out)
         self.n_levels = {self.g_fe: offset, **self.n_levels}
         self._track_disk()
@@ -259,13 +255,13 @@ class _PassesMixin:
         self._log(f"pass 1: group_by({self.g_fe}, {', '.join(self.o_fe)}) -> cells")
         # without `cell_sums` only the cell structure and counts are built
         m = self.m if self.cell_sums else 0
-        z = [(pl.col(f"v{j}") - mu).alias(f"z{j}") for j, mu in enumerate(self.means[:m])]
+        z = [(pl.col(vcol(j)) - mu).alias(f"z{j}") for j, mu in enumerate(self.means[:m])]
         weighted = self.weights is not None
         if weighted:
-            z.append(pl.col("w"))
-        wz = (lambda e: pl.col("w") * e) if weighted else (lambda e: e)
+            z.append(pl.col(WCOL))
+        wz = (lambda e: pl.col(WCOL) * e) if weighted else (lambda e: e)
         # "n" is the cell's weight sum (its count when unweighted); "cnt" the count
-        aggs = [(pl.col("w").sum() if weighted else pl.len().cast(pl.Float64)).alias("n"),
+        aggs = [(pl.col(WCOL).sum() if weighted else pl.len().cast(pl.Float64)).alias("n"),
                 pl.len().cast(pl.UInt32).alias("cnt")]
         aggs += [wz(pl.col(f"z{j}")).sum().alias(f"s{j}") for j in range(m)]
         if self.assembly == "cells":
@@ -276,7 +272,7 @@ class _PassesMixin:
             # slope variables centered at their means (keeps the per-group
             # p x p systems well conditioned); moments needed for the
             # within-group regression on [1, slopes]
-            z += [(pl.col(f"t{j + 1}") - mu).alias(f"u{j + 1}") for j, mu in enumerate(self.tmeans)]
+            z += [(pl.col(tcol(j + 1)) - mu).alias(f"u{j + 1}") for j, mu in enumerate(self.tmeans)]
             aggs += [wz(pl.col(f"u{a}")).sum().alias(f"sl{a}") for a in range(1, ps + 1)]
             aggs += [wz(pl.col(f"u{a}") * pl.col(f"u{b}")).sum().alias(f"sll{a}_{b}")
                      for a in range(1, ps + 1) for b in range(a, ps + 1)]
@@ -286,10 +282,10 @@ class _PassesMixin:
         for rows in self.paths["rows"]:
             out = rows.replace("rows_b", "cells_b")
             (pl.scan_parquet(rows)
-               .select("gcode", *self.ccols, *z)
-               .group_by("gcode", *self.ccols)
+               .select(GCODE, *self.ccols, *z)
+               .group_by(GCODE, *self.ccols)
                .agg(aggs)
-               .sort("gcode", *self.ccols)
+               .sort(GCODE, *self.ccols)
                .sink_parquet(out, row_group_size=self.rgs))
             self.paths["cells"].append(out)
 
@@ -326,13 +322,13 @@ class _PassesMixin:
         files = {k: open(self.paths["ident"][k], "wb") for k in kinds}
         self.fe0_rank = 0               # fe[0] parameters: sum of per-group ranks
         for ch in iter_group_chunks(self.paths["cells"],
-                                    ["gcode", *self.ccols, "n", "cnt", *scols, *slcols],
+                                    [GCODE, *self.ccols, "n", "cnt", *scols, *slcols],
                                     self.batch_rows):
             for f, cc in zip(self.o_fe, self.ccols):
                 sl = slice(off[f], off[f] + self.n_levels[f])
                 obs[sl] += np.bincount(ch[cc], weights=ch["n"], minlength=self.n_levels[f])
                 cnt[sl] += np.bincount(ch[cc], weights=ch["cnt"], minlength=self.n_levels[f])
-            starts, local = _segments(ch["gcode"])
+            starts, local = _segments(ch[GCODE])
             ncells = np.diff(np.append(starts, len(local)))
             keep = ncells[local] > 1
             if ps:
@@ -444,11 +440,9 @@ class _PassesMixin:
                               for r in self.var_exprs[name].meta.root_names())
         extra = [r for r in roots if r not in taken]
         missing = [r for r in extra if r not in schema]
-        clash = [r for r in extra if _RESERVED.fullmatch(r)]
-        if missing or clash:
-            # missing: let the eager path raise Polars' own error;
-            # clash: a raw column would collide with an internal one
-            self.design_evaluated += f" (column names {missing or clash})"
+        if missing:
+            # let the eager path raise Polars' own error
+            self.design_evaluated += f" (column names {missing})"
             return None
         self.design_evaluated = "per bucket"
         return extra
@@ -495,8 +489,8 @@ class _PassesMixin:
             changed = False
             for d in self.fe_user:
                 on = self.fe_cols[d]
-                bad = (cur.group_by(on).agg(pl.len().alias("__n"))
-                          .filter(pl.col("__n") == 1).select(on)
+                bad = (cur.group_by(on).agg(pl.len().alias(f"{PREFIX}n"))
+                          .filter(pl.col(f"{PREFIX}n") == 1).select(on)
                           .collect(engine="streaming"))
                 if bad.height:
                     found.setdefault(d, []).append(bad)

@@ -24,6 +24,7 @@ from contextlib import contextmanager
 import numba as nb
 import numpy as np
 
+from ._columns import GCODE, WCOL, vcol
 from .kernels_inverse import (_nb_center_rows, _nb_project_coef, _nb_project_rows,
                               _nb_rademacher, _nb_reduce_rows, _nb_spread_groups)
 from .utils import iter_group_chunks
@@ -67,7 +68,7 @@ class _InverseMixin:
 
     def _row_columns(self):
         weighted = self.weights is not None
-        cols = ["gcode", *self.ccols] + (["w"] if weighted else [])
+        cols = [GCODE, *self.ccols] + ([WCOL] if weighted else [])
         return cols, weighted
 
     def _covariate_columns(self, covariates):
@@ -76,7 +77,7 @@ class _InverseMixin:
         if missing:
             raise ValueError(f"not variables of this fit: {missing}; "
                              f"available: {list(self.vidx)}")
-        return [f"v{self.vidx[c]}" for c in covariates]
+        return [vcol(self.vidx[c]) for c in covariates]
 
     @staticmethod
     def _covariate_matrix(chunk, columns, n_rows):
@@ -86,12 +87,12 @@ class _InverseMixin:
 
     def _chunk_layout(self, chunk):
         """(starts, codes, w) for a chunk already in hand."""
-        gcode = chunk["gcode"]
+        gcode = chunk[GCODE]
         n_rows = len(gcode)
         starts = np.concatenate(
             ([0], np.flatnonzero(gcode[1:] != gcode[:-1]) + 1, [n_rows]))
         codes = np.column_stack([chunk[c] for c in self.ccols]).astype(np.int64)
-        w = (np.ascontiguousarray(chunk["w"], dtype=np.float64)
+        w = (np.ascontiguousarray(chunk[WCOL], dtype=np.float64)
              if self.weights is not None else np.ones(n_rows))
         return starts, codes, w
 
@@ -106,12 +107,12 @@ class _InverseMixin:
         cols = list(dict.fromkeys([*cols, *extra_columns]))
         ordinal = 0
         for chunk in iter_group_chunks(self.paths["rows"], cols, self.batch_rows):
-            gcode = chunk["gcode"]
+            gcode = chunk[GCODE]
             n_rows = len(gcode)
             starts = np.concatenate(
                 ([0], np.flatnonzero(gcode[1:] != gcode[:-1]) + 1, [n_rows]))
             codes = np.column_stack([chunk[c] for c in self.ccols]).astype(np.int64)
-            w = (np.ascontiguousarray(chunk["w"], dtype=np.float64) if weighted
+            w = (np.ascontiguousarray(chunk[WCOL], dtype=np.float64) if weighted
                  else np.ones(n_rows))
             yield ordinal, chunk, starts, codes, w
             ordinal += n_rows
@@ -317,7 +318,7 @@ class _InverseMixin:
             rho = self._spread(streamed, chunk, starts, w, n_vectors)
             X = self._covariate_matrix(chunk, columns, len(w))
             rows = np.empty_like(rho)
-            first = int(chunk["gcode"][0])
+            first = int(chunk[GCODE][0])
             groups = U_streamed[first:first + len(starts) - 1]
             _nb_project_coef(starts, codes, self.offs, w, X, C, rho, U, rows, groups)
             if sink is not None:
@@ -386,7 +387,7 @@ class _InverseMixin:
         out = np.zeros(n_groups, np.int64)
         comp = np.asarray(self.comp)
         for _, chunk, starts, codes, _w in self._chunks():
-            gcodes = chunk["gcode"][starts[:-1]]
+            gcodes = chunk[GCODE][starts[:-1]]
             out[gcodes] = comp[codes[starts[:-1], 0]]
         return out
 
@@ -409,7 +410,7 @@ class _InverseMixin:
 
     def _spread(self, streamed, chunk, starts, w, n_vectors):
         """The streamed block as per-row values, divided by the group weight."""
-        first = int(chunk["gcode"][0])
+        first = int(chunk[GCODE][0])
         block = np.ascontiguousarray(streamed[first:first + len(starts) - 1])
         out = np.empty((len(w), n_vectors))
         _nb_spread_groups(starts, w, block, out)

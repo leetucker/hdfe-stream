@@ -17,6 +17,7 @@ from typing import Any, Sequence
 import numba as nb
 import polars as pl
 
+from ._columns import GCODE, PREFIX, ccol
 from ._types import PathLike, Source, Variables, Vcov
 from .feterms import _parse_fe_term
 from .inference import _InferenceMixin
@@ -24,7 +25,7 @@ from .inverse import _InverseMixin
 from .leaveout import _ComponentsMixin, _LeaveOutMixin, _TraceMixin
 from .leaveout_se import _StandardErrorMixin
 from .leaveout_weakid import _WeakIdMixin
-from .passes import _RESERVED, _PassesMixin
+from .passes import _PassesMixin
 from .report import _log
 from .results import HDFEMulti, HDFEResult, _canon_cluster, _vcov_key
 from .solve import _SolveMixin
@@ -246,8 +247,9 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                          ("cells" if self.m <= 8 and not self.slopes and not self.no_fe
                           else "rows"))
         fe_src = {c for d in self.fe_user for c in self.fe_cols[d]}
-        if _RESERVED.fullmatch(row_id):
-            raise ValueError(f"row_id={row_id!r} is a name the estimator uses internally")
+        if row_id.startswith(PREFIX):
+            raise ValueError(f"row_id={row_id!r} starts with {PREFIX!r}, which is reserved "
+                             "for the estimator's own columns")
         self.row_id = row_id
         self.keep = [row_id] + [c for c in dict.fromkeys(keep)
                                 if c not in fe_src and c != row_id]
@@ -314,9 +316,9 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         With no fixed effects g is None and every list is empty."""
         self.fe = [] if g is None else [g] + [d for d in self.fe_user if d != g]
         self.g_fe, self.o_fe = (self.fe[0] if self.fe else None), self.fe[1:]
-        self.ccols = [f"c{d}" for d in range(1, len(self.fe))]   # code columns
+        self.ccols = [ccol(d) for d in range(1, len(self.fe))]   # code columns
         self.code_of = {d: cc for d, cc in zip(self.o_fe, self.ccols)}
-        self.code_of[self.g_fe] = "gcode"
+        self.code_of[self.g_fe] = GCODE
         self.paths["maps"] = {d: str(self.workdir / f"map_{_safe(d)}.parquet") for d in self.o_fe}
 
     def _choose_stream(self, approx):

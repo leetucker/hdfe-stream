@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from ._columns import GCODE
 from ._types import PathLike, Source
 from .report import _log
 
@@ -567,7 +568,7 @@ class _TraceMixin:
             starts, codes, w = self._chunk_layout(chunk)
             X = self._covariate_matrix(chunk, columns, len(w))
             reduce_rows(starts, codes, self.offs, w, X, weighted, acc, acc_x)
-            first = int(chunk["gcode"][0])
+            first = int(chunk[GCODE][0])
             group_sums(starts, w, weighted,
                        v_groups[first:first + len(starts) - 1])
 
@@ -583,7 +584,7 @@ class _TraceMixin:
         # Z' Q u2, for all three forms, in one pass
         moments = np.zeros((n_threads, size, 8))
         for _, chunk, starts, codes, w in self._chunks():
-            first = int(chunk["gcode"][0])
+            first = int(chunk[GCODE][0])
             n_chunk_groups = len(starts) - 1
             trace_moments(starts, codes, psi_column, psi_offset, w,
                           Z_levels, Z_groups[first:first + n_chunk_groups],
@@ -1041,14 +1042,14 @@ class _ComponentsMixin:
         codes_out = np.empty(self.row_count(), np.int64)
 
         for ordinal, chunk, starts, codes, _w in self._chunks():
-            first = int(chunk["gcode"][0])
+            first = int(chunk[GCODE][0])
             group_distinct(starts, codes, column,
                            distinct[first:first + len(starts) - 1])
             codes_out[ordinal:ordinal + len(codes)] = codes[:, column]
 
         movers = np.empty(len(codes_out), bool)
         for ordinal, chunk, starts, _codes, _w in self._chunks():
-            gcode = np.asarray(chunk["gcode"])
+            gcode = np.asarray(chunk[GCODE])
             movers[ordinal:ordinal + len(gcode)] = distinct[gcode] > 1
         return movers, codes_out
 

@@ -16,6 +16,7 @@ import numpy as np
 import polars as pl
 from scipy import stats
 
+from ._columns import PREFIX, check_source
 from ._types import Vcov
 from .report import _emit
 
@@ -300,6 +301,7 @@ class HDFEResult:
             raise ValueError("this result holds no reference to its source (it was "
                              "converted, or fitted without one)")
         source, row_id = spec["source"], spec["row_id"]
+        check_source(source.collect_schema().names())
         names = ("in_sample", "dropped_because")
         clash = [c for c in (row_id, *names) if c in source.collect_schema()]
         if clash:
@@ -315,7 +317,7 @@ class HDFEResult:
         flags = {}
         for kind, tables in spec["tables"].items():
             for d, table in tables.items():
-                flag = f"__{kind}_{len(flags)}"
+                flag = f"{PREFIX}{kind}_{len(flags)}"
                 frame = frame.join(table.lazy().with_columns(pl.lit(True).alias(flag)),
                                    on=spec["fe_cols"][d], how="left")
                 flags.setdefault(kind, []).append(flag)

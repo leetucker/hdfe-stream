@@ -17,6 +17,7 @@ import polars as pl
 import pytest
 import scipy.sparse as sp
 
+from hdfe_stream._columns import GCODE, vcol
 from hdfe_stream import StreamingHDFE as _StreamingHDFE
 from hdfe_stream.simulate import simulate_akm, simulate_bottleneck
 
@@ -483,7 +484,7 @@ def covariate_fit(tmp_path_factory):
     est.fit(str(path))
     est.reload_intermediates()
 
-    x_columns = tuple(f"v{est.vidx[n]}" for n in xs)
+    x_columns = tuple(vcol(est.vidx[n]) for n in xs)
     seen = {c: [] for c in tuple(FE) + x_columns}
     est.project_rows(est.rademacher(), 1,
                      lambda o, ch, out: [seen[c].append(np.asarray(ch[c]))
@@ -627,7 +628,7 @@ def trace_case(tmp_path_factory):
     gcodes = []
 
     def sink(ordinal, chunk, out):
-        gcodes.append(np.asarray(chunk["gcode"]))
+        gcodes.append(np.asarray(chunk[GCODE]))
         for c in FE:
             seen[c].append(np.asarray(chunk[c]))
 

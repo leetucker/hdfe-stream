@@ -60,6 +60,7 @@ import numpy as np
 import polars as pl
 from scipy import special
 
+from ._columns import PREFIX, WCOL, vcol
 from ._types import Variables
 from .estimator import StreamingHDFE
 from .families import get_family
@@ -69,6 +70,7 @@ from .kernels_glm import _nb_cell_moments, _nb_group_effects
 from .report import _warn
 from .utils import _norm_vars
 
+LO, HI = f"{PREFIX}lo", f"{PREFIX}hi"      # per-level outcome range, in the separation check
 _OFFSET = "__offset__"          # the offset's variable name in the row files
 _MAX_HALVINGS = 30
 
@@ -163,7 +165,7 @@ class StreamingGLM(StreamingHDFE):
     # ------------------------------------------------------------ sample
     def _restrict_sample(self, lf):
         """Check the outcome, and drop the separated fixed-effect levels."""
-        y = pl.col(f"v{self.vidx[self.yname]}")
+        y = pl.col(vcol(self.vidx[self.yname]))
         chk = (lf.select(n=pl.len(), lo=y.min(), hi=y.max(),
                          other=((y != 0) & (y != 1)).sum(), zeros=(y == 0).sum())
                  .collect(engine="streaming"))
@@ -180,7 +182,7 @@ class StreamingGLM(StreamingHDFE):
         binary = self.family.name != "poisson"
         if not binary and chk["zeros"].item() == 0:
             return None
-        separated = (pl.col("lo") == pl.col("hi")) if binary else (pl.col("hi") == 0)
+        separated = (pl.col(LO) == pl.col(HI)) if binary else (pl.col(HI) == 0)
         cols = list(dict.fromkeys(c for d in self.fe_user for c in self.fe_cols[d]))
         cur = lf.select([pl.col(c) for c in cols] + [y])
         found = {}
@@ -188,7 +190,7 @@ class StreamingGLM(StreamingHDFE):
             changed = False
             for d in self.fe_user:
                 on = self.fe_cols[d]
-                bad = (cur.group_by(on).agg(lo=y.min(), hi=y.max())
+                bad = (cur.group_by(on).agg(y.min().alias(LO), y.max().alias(HI))
                           .filter(separated).select(on).collect(engine="streaming"))
                 if bad.height:
                     found.setdefault(d, []).append(bad)
@@ -455,11 +457,11 @@ class StreamingGLM(StreamingHDFE):
 
     # ------------------------------------------------------------ row pass
     def _columns(self, yj, xj):
-        cols = [*self.ccols, f"v{yj}", *[f"v{j}" for j in xj]]
+        cols = [*self.ccols, vcol(yj), *[vcol(j) for j in xj]]
         if self.weights is not None:
-            cols.append("w")
+            cols.append(WCOL)
         if self.offset_name is not None:
-            cols.append(f"v{self.vidx[_OFFSET]}")
+            cols.append(vcol(self.vidx[_OFFSET]))
         return list(dict.fromkeys(cols))
 
     def _chunk_layout(self, starts, codes, cursor):
@@ -489,11 +491,11 @@ class StreamingGLM(StreamingHDFE):
         return lay
 
     def _chunk_data(self, ch, yj, xj):
-        y = np.ascontiguousarray(ch[f"v{yj}"], dtype=np.float64)
-        X = _stack(ch, [f"v{j}" for j in xj]) if xj else np.zeros((len(y), 0))
-        f = (np.ascontiguousarray(ch["w"], dtype=np.float64) if self.weights is not None
+        y = np.ascontiguousarray(ch[vcol(yj)], dtype=np.float64)
+        X = _stack(ch, [vcol(j) for j in xj]) if xj else np.zeros((len(y), 0))
+        f = (np.ascontiguousarray(ch[WCOL], dtype=np.float64) if self.weights is not None
              else None)
-        off = (np.ascontiguousarray(ch[f"v{self.vidx[_OFFSET]}"], dtype=np.float64)
+        off = (np.ascontiguousarray(ch[vcol(self.vidx[_OFFSET])], dtype=np.float64)
                if self.offset_name is not None else None)
         return y, X, f, off
 
@@ -603,7 +605,7 @@ class StreamingGLM(StreamingHDFE):
                 y=z, w=W if f is None else W * f, fw=f if fweights else None, w_out=f,
                 extra=lambda e: {p.yname: y, "eta": eta_f, "fitted": mu_f, "resid": y - mu_f,
                                  "resid_working": e})
-        rows.cols = ([f"v{self.vidx[_OFFSET]}"] if self.offset_name is not None else [])
+        rows.cols = ([vcol(self.vidx[_OFFSET])] if self.offset_name is not None else [])
         rows.weighted = True
         return rows
 

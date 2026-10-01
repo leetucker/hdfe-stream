@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
+from hdfe_stream._columns import GCODE, WCOL, vcol
 from hdfe_stream import StreamingHDFE
 from hdfe_stream.simulate import simulate_akm
 
@@ -55,7 +56,7 @@ def collect(est, n_vectors, seed, fe):
     """
     columns = tuple(c for d in fe for c in d.split("^"))
     if est.weights is not None:
-        columns += ("w",)
+        columns += (WCOL,)
     vectors = est.rademacher(seed=seed)
     projected, drawn, ids = [], [], {c: [] for c in columns}
 
@@ -107,7 +108,7 @@ def test_projection_matches_dense_when_weighted(panel_path, tmp_path, fe):
 
     est = fitted(str(path), tmp_path / "w", fe, weights="wa")
     projected, drawn, ids, _ = collect(est, 4, 11, fe)
-    _, P = dense_projection(ids, fe, weights=ids["w"])
+    _, P = dense_projection(ids, fe, weights=ids[WCOL])
     reference = P @ drawn
     assert np.abs(projected - reference).max() / np.abs(reference).max() < 1e-10
 
@@ -305,7 +306,7 @@ def project_with(rich_path, workdir, xs, fe, covariates, **options):
     est.reload_intermediates()
 
     fe_columns = tuple(c for d in fe for c in d.split("^"))
-    x_columns = tuple(f"v{est.vidx[n]}" for n in xs)
+    x_columns = tuple(vcol(est.vidx[n]) for n in xs)
     got, drawn = [], []
     seen = {c: [] for c in fe_columns + x_columns}
     vectors = est.rademacher(seed=4)
@@ -372,9 +373,9 @@ def test_projection_with_covariates_and_weights(rich_path, tmp_path):
     est.reload_intermediates()
 
     fe_cols = ("worker_id", "firm_id")
-    x_cols = tuple(f"v{est.vidx[n]}" for n in ("age_squared", "x2"))
+    x_cols = tuple(vcol(est.vidx[n]) for n in ("age_squared", "x2"))
     got, drawn = [], []
-    seen = {c: [] for c in fe_cols + x_cols + ("w",)}
+    seen = {c: [] for c in fe_cols + x_cols + (WCOL,)}
     vectors = est.rademacher(seed=4)
 
     def sink(ordinal, chunk, out):
@@ -383,13 +384,13 @@ def test_projection_with_covariates_and_weights(rich_path, tmp_path):
         for c in seen:
             seen[c].append(np.asarray(chunk[c]))
 
-    est.project_rows(vectors, 3, sink, extra_columns=fe_cols + x_cols + ("w",),
+    est.project_rows(vectors, 3, sink, extra_columns=fe_cols + x_cols + (WCOL,),
                      covariates=("age_squared", "x2"))
     got, drawn = np.vstack(got), np.vstack(drawn)
     seen = {c: np.concatenate(v) for c, v in seen.items()}
 
     A, _ = dense_with_covariates(seen, fe_cols, x_cols, True)
-    w = seen["w"]
+    w = seen[WCOL]
     P = A @ np.linalg.pinv(A.T @ (w[:, None] * A), hermitian=True) @ A.T @ np.diag(w)
     reference = P @ drawn
     assert np.abs(got - reference).max() / np.abs(reference).max() < 1e-8
@@ -454,13 +455,13 @@ def coefficient_case(rich_path, workdir, xs, fe, **options):
     est.reload_intermediates()
 
     fe_columns = tuple(c for d in fe for c in d.split("^"))
-    x_columns = tuple(f"v{est.vidx[n]}" for n in xs)
-    wanted = fe_columns + x_columns + (("w",) if options.get("weights") else ())
+    x_columns = tuple(vcol(est.vidx[n]) for n in xs)
+    wanted = fe_columns + x_columns + ((WCOL,) if options.get("weights") else ())
     seen = {c: [] for c in wanted}
     gcodes = []
 
     def sink(ordinal, chunk, out):
-        gcodes.append(np.asarray(chunk["gcode"]))
+        gcodes.append(np.asarray(chunk[GCODE]))
         for c in wanted:
             seen[c].append(np.asarray(chunk[c]))
 
@@ -488,7 +489,7 @@ def test_apply_inverse_matches_the_dense_pseudo_inverse(rich_path, tmp_path,
     est, seen, gcode, x_columns = coefficient_case(
         rich_path, tmp_path / "coef", xs, fe, **options)
     A, S = dense_full_design(est, seen, gcode, fe, x_columns,
-                             seen.get("w") if options.get("weights") else None)
+                             seen.get(WCOL) if options.get("weights") else None)
 
     rng = np.random.default_rng(3)
     _, total_levels = est._offsets()

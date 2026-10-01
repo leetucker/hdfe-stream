@@ -565,3 +565,5 @@ pytest
   q = 1 interval, not KSS's q > 1 generalization. Leaving out a match, as it
   does by default, var(alpha) has no standard error and the covariance no q = 1
   interval. See [docs/kss.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss.md#what-it-does-not-do-yet).
+- **Column names starting with `__hdfe_` are reserved** for the estimator's own
+  columns, and a source that has one is refused. Any other name is safe.

@@ -55,6 +55,7 @@ from dataclasses import dataclass, field
 import numba as nb
 import numpy as np
 
+from ._columns import GCODE, WCOL, vcol
 from .kernels_inverse import _nb_group_sums, _nb_reduce_rows
 from .kernels_se import _nb_bii_moments, _nb_cov_cross, _nb_readout
 from .report import _log
@@ -124,7 +125,7 @@ class _StandardErrorMixin:
             ones = np.ones((len(w), 1))
             empty = np.zeros((len(w), 0))
             _nb_reduce_rows(starts, codes, self.offs, w, empty, ones, acc, acc_x)
-            first = int(chunk["gcode"][0])
+            first = int(chunk[GCODE][0])
             _nb_group_sums(starts, w, ones,
                            groups[first:first + len(starts) - 1])
         levels = acc.sum(axis=0)[:, 0]
@@ -159,7 +160,7 @@ class _StandardErrorMixin:
         """
         if self.weights is None:
             return np.ones(n)
-        return np.ascontiguousarray(chunk["w"], dtype=np.float64)
+        return np.ascontiguousarray(chunk[WCOL], dtype=np.float64)
 
     def _outcome_mean(self, depcol):
         """The weight-weighted mean of the outcome, in one bounded pass."""
@@ -254,7 +255,7 @@ class _StandardErrorMixin:
                         vectors(ordinal, len(w), size) * inv[:, None])
                     X = self._covariate_matrix(chunk, L["columns"], len(w))
                     _nb_reduce_rows(starts, codes, self.offs, w, X, q, acc, acc_x)
-                    first = int(chunk["gcode"][0])
+                    first = int(chunk[GCODE][0])
                     _nb_group_sums(starts, w, q,
                                    gsum[first:first + len(starts) - 1])
                 levels = acc.sum(axis=0)
@@ -279,7 +280,7 @@ class _StandardErrorMixin:
                 for ordinal, chunk, starts, codes, w in self._chunks(L["columns"]):
                     X = self._covariate_matrix(chunk, L["columns"], len(w))
                     rows = np.empty((len(w), 2 * size))
-                    first = int(chunk["gcode"][0])
+                    first = int(chunk[GCODE][0])
                     _nb_readout(starts, codes, self.offs, X, U_l, U_c,
                                 U_g[first:first + len(starts) - 1], rows)
                     root, _inv = self._inverse_root(w)
@@ -342,7 +343,7 @@ class _StandardErrorMixin:
         U_levels = np.ascontiguousarray(U_levels)
         U_groups = np.ascontiguousarray(U_groups)
         for _ordinal, chunk, starts, codes, w in self._chunks():
-            first = int(chunk["gcode"][0])
+            first = int(chunk[GCODE][0])
             span = slice(first, first + len(starts) - 1)
             _nb_cov_cross(starts, codes, L["psi_column"], L["psi_offset"], w,
                           U_levels, U_groups[span], cross_psi,
@@ -377,14 +378,14 @@ class _StandardErrorMixin:
                 * inv[:, None])
             X = self._covariate_matrix(chunk, L["columns"], len(w))
             _nb_reduce_rows(starts, codes, self.offs, w, X, stack, acc, acc_x)
-            first = int(chunk["gcode"][0])
+            first = int(chunk[GCODE][0])
             _nb_group_sums(starts, w, stack, gsum[first:first + len(starts) - 1])
         U_l, U_c, U_g = self.apply_inverse(acc.sum(axis=0), acc_x.sum(axis=0),
                                            gsum, covariates=covariates)
         out = self._row_store(self.row_count(), 3, tag, in_memory)
         for ordinal, chunk, starts, codes, w in self._chunks(L["columns"]):
             X = self._covariate_matrix(chunk, L["columns"], len(w))
-            first = int(chunk["gcode"][0])
+            first = int(chunk[GCODE][0])
             base = np.empty((len(w), 3))
             _nb_readout(starts, codes, self.offs, X, U_l, U_c,
                         U_g[first:first + len(starts) - 1], base)
@@ -458,7 +459,7 @@ class _StandardErrorMixin:
     def _eigen_rows(self, U, chunk, starts, codes, w, columns):
         """sqrt(w_i) x_i' u for each column of the coefficient triple U."""
         X = self._covariate_matrix(chunk, columns, len(w))
-        first = int(chunk["gcode"][0])
+        first = int(chunk[GCODE][0])
         rows = np.empty((len(w), U[2].shape[1]))
         _nb_readout(starts, codes, self.offs, X, np.ascontiguousarray(U[0]),
                     np.ascontiguousarray(U[1]),
@@ -513,7 +514,7 @@ class _StandardErrorMixin:
                     u_dot[k] += np.asarray(rank_two[0][k][span]) @ vk
                     one_dot[k] += vk.sum(axis=0)
             _nb_reduce_rows(starts, codes, self.offs, w, X, stack, acc, acc_x)
-            first = int(chunk["gcode"][0])
+            first = int(chunk[GCODE][0])
             _nb_group_sums(starts, w, stack,
                            gsum[first:first + len(starts) - 1])
         levels, cov_block = acc.sum(axis=0), acc_x.sum(axis=0)
@@ -537,7 +538,7 @@ class _StandardErrorMixin:
         # pass 3: read everything back and assemble
         for ordinal, chunk, starts, codes, w in self._chunks(wanted):
             X = self._covariate_matrix(chunk, L["columns"], len(w))
-            first = int(chunk["gcode"][0])
+            first = int(chunk[GCODE][0])
             n_chunk = len(starts) - 1
             base = np.empty((len(w), wide * size))
             _nb_readout(starts, codes, self.offs, X, U0_l, U0_c,
@@ -658,7 +659,7 @@ class _StandardErrorMixin:
 
         # The outcome is already a column of the row files, so it is read per
         # chunk rather than held: one more row-sized array avoided.
-        depcol = f"v{self.vidx[result.depvar]}"
+        depcol = vcol(self.vidx[result.depvar])
         y_bar = self._outcome_mean(depcol)
 
         first = np.zeros(3)
@@ -785,7 +786,7 @@ class _StandardErrorMixin:
         lams = np.array([float(weak_id.eigenvalues[n][0])
                          if weak_id.eigenvalues[n] else 0.0 for n in COMPONENTS])
         U = weak_id.lead_vectors
-        depcol = f"v{self.vidx[result.depvar]}"
+        depcol = vcol(self.vidx[result.depvar])
         y_bar = self._outcome_mean(depcol)
         wanted = tuple(dict.fromkeys(tuple(L["columns"]) + (depcol,)))
 
