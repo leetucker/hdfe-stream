@@ -10,7 +10,6 @@ import polars as pl
 from ._types import PathLike, Source, Vcov
 
 from .estimator import StreamingHDFE
-from .feterms import _parse_fe_term
 from .glm import StreamingGLM
 from .report import _log
 from .formula import _plan_formula, _pyfixest_formula_api
@@ -21,14 +20,14 @@ class _FormulaEstimator:
     def __init__(self, fml: str, workdir: PathLike | None, options: dict[str, Any]) -> None:
         self.fml, self.workdir, self.options = fml, workdir, options
 
-    def fit(self, data: Source, vcov: Vcov | None = None, cluster: Sequence[str] | str = (),
+    def fit(self, data: Source, vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
             fe_dof: str = "exact") -> HDFEResult | HDFEMulti:
         return feols_stream(self.fml, data, self.workdir, vcov=vcov, cluster=cluster,
                             fe_dof=fe_dof, **self.options)
 
 
 def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,
-                 vcov: Vcov | None = None, cluster: Sequence[str] | str = (),
+                 vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
                  fe_dof: str = "exact", **options: Any) -> HDFEResult | HDFEMulti:
     """
     Out-of-core OLS with high-dimensional fixed effects from a pyfixest-style
@@ -41,12 +40,14 @@ def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,
               $HDFE_STREAM_WORKDIR if set, else the system temporary
               directory); see StreamingHDFE for the
               outputs=, save_resid= and keep_intermediates= options.
-    vcov    : as in pyfixest; default {'CRV1': <first FE>} like pyfixest, or
-              iid without fixed effects. {'CRV3': var} (one-way, OLS) needs
-              every fixed effect nested within the clusters, or none.
+    vcov    : as in pyfixest; default 'iid', also as in pyfixest. {'CRV3': var}
+              (one-way, OLS) needs every fixed effect nested within the
+              clusters, or none.
     cluster : extra cluster specs to compute CRV1 for (one-way or 'a+b').
-    **options : passed to StreamingHDFE (stream, weights, weights_type,
-              solver, precond, keep, verbose, logger, log_level, ...).
+    **options : passed to StreamingHDFE (fixef_rm, stream, weights,
+              weights_type, solver, precond, keep, verbose, logger, log_level,
+              ...). fixef_rm='singleton' (the default, as in pyfixest) drops
+              singleton observations; 'none' keeps them.
 
     Varying slopes on the streamed dimension: "y ~ x | worker_id[t] + firm_id".
     The worker FE file then has fe_worker_id (intercept) and fe_worker_id[t] (slope)
@@ -78,12 +79,8 @@ def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options):
     results = []
     try:
         for fe, g in groups.items():
-            # pyfixest's default: cluster by the first fixed effect as written,
-            # or iid when there is none
-            default = {"CRV1": _parse_fe_term(fe[0])[0]} if fe else "iid"
             for est in estimators(fe, g):
-                res = est.fit(lf, vcov=vcov if vcov is not None else default, cluster=cluster,
-                              fe_dof=fe_dof)
+                res = est.fit(lf, vcov=vcov, cluster=cluster, fe_dof=fe_dof)
                 results += list(res) if isinstance(res, HDFEMulti) else [res]
     except BaseException:
         # a later fit failed: don't leave the earlier fits' files behind
@@ -98,7 +95,7 @@ def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options):
 
 
 def fepois_stream(fml: str, data: Source, workdir: PathLike | None = None,
-                  vcov: Vcov | None = None, cluster: Sequence[str] | str = (),
+                  vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
                   fe_dof: str = "exact", offset: str | pl.Expr | None = None,
                   iwls_tol: float = 1e-8, iwls_maxiter: int = 25,
                   separation_check: bool = True, **options: Any) -> HDFEResult | HDFEMulti:
@@ -132,7 +129,7 @@ def fepois_stream(fml: str, data: Source, workdir: PathLike | None = None,
 
 
 def feglm_stream(fml: str, data: Source, family: str, workdir: PathLike | None = None,
-                 vcov: Vcov | None = None, cluster: Sequence[str] | str = (),
+                 vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
                  fe_dof: str = "exact", iwls_tol: float = 1e-8, iwls_maxiter: int = 25,
                  separation_check: bool = True, **options: Any) -> HDFEResult | HDFEMulti:
     """

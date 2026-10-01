@@ -21,7 +21,7 @@ from hdfe_stream import HDFEMulti  # noqa: E402
 from hdfe_stream import feols_stream  # noqa: E402
 
 # (formula, vcov, extra options). vcov=None exercises the default, which -- as
-# in pyfixest -- clusters on the first fixed-effect dimension.
+# in pyfixest -- is iid.
 CASES = [
     # plain covariates
     ("log_earn ~ age_squared + age_cubed | worker_id + firm_id + year", None, {}),
@@ -61,12 +61,6 @@ CASES = [
 IDS = [f"{i}" for i in range(len(CASES))]
 
 
-def default_vcov(fml):
-    """What `feols_stream` uses when vcov is not given: CRV1 on the first FE."""
-    first_fe = fml.split("|")[1].split("+")[0].strip()
-    return {"CRV1": first_fe}
-
-
 class Fitted:
     """Lazily fits each case once and caches it, so the tests below can each
     look at a different aspect without paying for a refit."""
@@ -79,10 +73,9 @@ class Fitted:
         if index not in self._cache:
             fml, vcov, options = CASES[index]
             stream = feols_stream(fml, self.panel.src, workdir=self.workdir / str(index),
-                                  vcov=vcov, verbose=False, n_buckets=3, batch_rows=5_000,
+                                  **({} if vcov is None else {"vcov": vcov}), verbose=False, n_buckets=3, batch_rows=5_000,
                                   fe_dof=FE_DOF_PF, tol=1e-11, outputs="keep", **options)
-            ref = pf_feols(fml, self.panel,
-                           vcov=vcov if vcov is not None else default_vcov(fml))
+            ref = pf_feols(fml, self.panel, vcov=vcov)
             models = list(stream) if isinstance(stream, HDFEMulti) else [stream]
             refs = (ref.all_fitted_models if hasattr(ref, "all_fitted_models")
                     else {models[0].fml: ref})

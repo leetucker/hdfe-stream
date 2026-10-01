@@ -109,6 +109,17 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
     collin_tol_rel : also drop a covariate when its variation left after
          removing the fixed effects is below this share of its raw variation
          (default 1e-6, i.e. residual SD < 0.1% of raw SD).
+    fixef_rm : "singleton" (default, as in pyfixest) drops observations whose
+         level of some fixed effect appears in no other observation, repeating
+         until none is left, since dropping one can create another in a
+         different dimension. They contribute nothing to the coefficients but
+         count toward N, the number of clusters and the fixed-effect
+         parameters. "none" keeps them. The search takes a few extra passes
+         over the fixed-effect columns (one per dimension per round, and
+         typically two or three rounds), and holds one row per singleton level
+         in memory. It runs after missing values are removed and does not look
+         at weights; the number dropped is in diagnostics["singletons"].
+         Nothing is dropped without fixed effects.
     weights : column name or Polars expression with strictly positive
          weights (weighted least squares; rows with missing weights are
          dropped).
@@ -157,6 +168,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                  rhs_block: int = 8, assembly: str = "auto", max_s_gb: float | None = None,
                  collin_tol: float = 1e-10, collin_tol_rel: float = 1e-6,
                  n_threads: int | None = None, scratch_mb: int = 32,
+                 fixef_rm: str = "singleton",
                  weights: str | pl.Expr | None = None, weights_type: str = "aweights",
                  stream: str | None = None, models: list[dict[str, Any]] | None = None,
                  verbose: bool = True, logger: logging.Logger | None = None,
@@ -207,6 +219,9 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         # Also what enables leave-out estimation: it needs the row files and
         # cell arrays, which are otherwise deleted when the fit finishes.
         self.keep_intermediates = keep_intermediates
+        if fixef_rm not in ("none", "singleton"):
+            raise ValueError("fixef_rm must be 'none' or 'singleton'")
+        self.fixef_rm = fixef_rm
         if solver not in ("auto", "explicit", "stream_cg", "within"):
             raise ValueError("solver must be 'auto', 'explicit', 'stream_cg' or 'within'")
         if precond not in ("jacobi", "amg"):

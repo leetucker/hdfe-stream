@@ -68,7 +68,7 @@ def glm_panel(tmp_path_factory):
 def pf_glm(family, fml, data, **kwargs):
     """pyfixest reference, iterated and demeaned to a tight tolerance."""
     import pyfixest as pf
-    kwargs = {"fixef_rm": "none", "iwls_tol": 1e-12,
+    kwargs = {"iwls_tol": 1e-12,
               "demeaner": pf.LsmrDemeaner(fixef_atol=1e-12, fixef_btol=1e-12), **kwargs}
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -208,12 +208,14 @@ def test_feglm_fweights_match_repeated_rows(glm_panel, family, vcov):
 @pytest.mark.parametrize("family", ["logit", "probit"])
 def test_feglm_aweights(glm_panel, family):
     """Analytic weights give the frequency-weighted coefficients, and are
-    invariant to rescaling (pyfixest's feglm has no weights to compare with)."""
+    invariant to rescaling (pyfixest's feglm has no weights to compare with).
+    The clustered standard errors are too; the iid ones are not."""
     path, _ = glm_panel
     fml = "yb ~ x1 + x2 | worker_id + firm_id"
+    crv1 = {"CRV1": "worker_id"}
     with fit(family, fml, path, weights="fw", weights_type="fweights") as f, \
-            fit(family, fml, path, weights="fw") as a, \
-            fit(family, fml, path, weights=pl.col("fw") * 3.0) as a3:
+            fit(family, fml, path, weights="fw", vcov=crv1) as a, \
+            fit(family, fml, path, weights=pl.col("fw") * 3.0, vcov=crv1) as a3:
         assert rel(a.beta, f.beta) < TOL_BETA
         assert rel(a3.beta, a.beta) < TOL_BETA
         assert rel(a3.se, a.se) < TOL_SE
@@ -237,7 +239,7 @@ def test_binary_separation_repeats(tmp_path):
     path = tmp_path / "sep.parquet"
     frame = pl.concat([base, special])
     frame.write_parquet(path)
-    with fit("logit", "y ~ x | worker + firm", str(path)) as res:
+    with fit("logit", "y ~ x | worker + firm", str(path), fixef_rm="none") as res:
         sep = res.diagnostics["separation"]
         assert sep["rounds"] == 2
         kept = res.resid().select("worker", "firm").collect()

@@ -130,13 +130,15 @@ def test_residuals_and_fixed_effects_match_pyfixest(fits, references, akm, fe):
 
     mine = res.resid().select(*keys, "resid", *fe_cols).collect()
     beta = ref.coef().to_numpy()
+    # pyfixest's rows are the ones it kept (singletons are dropped)
+    used = akm.pandas.loc[ref._data.index]
     theirs = pl.DataFrame({
-        **{k: akm.frame[k] for k in keys},
+        **{k: used[k].to_numpy() for k in keys},
         "resid_ref": ref.resid(),
-        "fesum_ref": ref.predict() - akm.frame.select(X).to_numpy() @ beta,
+        "fesum_ref": ref.predict() - used[X].to_numpy() @ beta,
     })
     joined = mine.join(theirs, on=keys)
-    assert joined.height == akm.frame.height        # the key is unique per row
+    assert joined.height == len(used) == res.n_obs  # the key is unique per row
 
     assert scaled(joined["resid"], joined["resid_ref"]) < TOL_RESID
     fesum = sum(joined[c] for c in fe_cols)

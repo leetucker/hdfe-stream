@@ -170,13 +170,9 @@ def cluster_spec(dim):
 def pf_feols(fml, panel, tol=1e-12, **kwargs):
     """pyfixest reference fit, demeaned to `tol` so the comparison measures
     hdfe_stream's error rather than pyfixest's convergence.
-
-    `fixef_rm="none"` keeps pyfixest from dropping singleton observations,
-    which hdfe_stream does not do either.
     """
     import pyfixest as pf
 
-    kwargs.setdefault("fixef_rm", "none")
     try:
         return pf.feols(fml, data=panel.pandas,
                         demeaner=pf.LsmrDemeaner(fixef_atol=tol, fixef_btol=tol),

@@ -1199,7 +1199,8 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
     told if they are wrong.
 
     Extra options are passed to the fit, so `weights=` and the memory knobs
-    remain available. Several outcomes at once are not supported.
+    remain available. `fixef_rm` defaults to "none" here, because the pruning
+    has settled the sample. Several outcomes at once are not supported.
     """
     from .api import feols_stream
     from .feterms import _parse_fe, _parse_fe_term
@@ -1244,6 +1245,9 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
     # the streamed dimension is pinned so that the pair the sample was pruned on
     # is the pair the decomposition is about
     options.setdefault("stream", alpha)
+    # the pruning (or, with prune=False, the caller) has settled the sample; a
+    # second, different drop of singletons at the fit would change it
+    options.setdefault("fixef_rm", "none")
     _check_leave_out(leave_out, se, stayers, centering, se_variance,
                      options.get("weights"))
     # only leaving out an observation reads the row-level fit's sorted rows;

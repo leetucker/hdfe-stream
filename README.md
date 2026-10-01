@@ -99,6 +99,11 @@ Interactions with `^`
 worker–firm graph are computed and reported, and the degrees-of-freedom
 correction counts the fixed-effect parameters that are actually identified
 (`fe_dof="exact"`) or follows pyfixest's convention (`fe_dof="pyfixest"`).
+Singleton observations, those alone in their level of some fixed effect, are
+dropped as in pyfixest, repeating until none is left (`fixef_rm="singleton"`,
+the default; `fixef_rm="none"` keeps them). Finding them costs a few extra
+passes over the fixed-effect columns and memory for the singleton levels, not
+for the rows.
 
 **Covariates.** Transformations (`I(age**2)`, `log(x)`), categoricals (`C(x)`,
 string columns), interactions (`:`, `*`), event-study terms

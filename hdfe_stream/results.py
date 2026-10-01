@@ -306,6 +306,9 @@ class HDFEResult:
             lines.append(f"identifying {self.fe_names[0]} groups: {self.n_identifying:,}   "
                          f"({self.fe_names[0]} x {self.fe_names[1]}) components: "
                          f"{self.n_components:,}")
+        singles = self.diagnostics.get("singletons", {})
+        if singles.get("observations"):
+            lines.append(f"dropped as singletons: {singles['observations']:,} observations")
         if self.family:
             fit = (f"deviance: {self.deviance:.8g}   log-likelihood: {self.loglik:.8g}   "
                    f"pseudo R2: {self.pseudo_r2:.6f}")

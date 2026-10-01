@@ -9,6 +9,7 @@ bias it claims to.
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -16,8 +17,13 @@ import polars as pl
 import pytest
 import scipy.sparse as sp
 
-from hdfe_stream import StreamingHDFE
+from hdfe_stream import StreamingHDFE as _StreamingHDFE
 from hdfe_stream.simulate import simulate_akm, simulate_bottleneck
+
+# These tests build panels with single-observation workers and matches on
+# purpose, and check the leave-out machinery against references computed on the
+# panel as built, so the fit must keep every row.
+StreamingHDFE = partial(_StreamingHDFE, fixef_rm="none")
 
 FE = ["worker_id", "firm_id"]
 

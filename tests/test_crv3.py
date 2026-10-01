@@ -55,7 +55,7 @@ def test_crv3_matches_pyfixest(small, tmp_path, fml, cluster, options):
                        fe_dof=FE_DOF_PF, verbose=False, batch_rows=900, n_buckets=2,
                        **options)
     with res:
-        ref = pf.feols(fml, pdf, vcov={"CRV3": cluster}, fixef_rm="none",
+        ref = pf.feols(fml, pdf, vcov={"CRV3": cluster},
                        weights=options.get("weights"),
                        weights_type=options.get("weights_type", "aweights"))
         assert res.vcov_type == f"CRV3:{cluster}"

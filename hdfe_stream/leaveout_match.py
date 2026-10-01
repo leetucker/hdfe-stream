@@ -176,10 +176,13 @@ def leave_out_match(row_fit, alpha, psi, workdir, n_draws, seed, block,
     _log(verbose, f"leave-out: collapsed {person_years:,} person-years to "
                   "worker-firm matches, to leave out a match at a time", logger)
 
+    # every match stays: a stayer's one match looks like a singleton here, and
+    # is handled by `stayer_sigma2`
     match_fit = feols_stream(f"{row_fit.depvar} ~ 1 | {alpha} + {psi}",
                              str(table), workdir=workdir / "match_fit",
                              weights=MATCH_WEIGHT, keep_intermediates=True,
-                             stream=alpha, verbose=verbose, logger=logger)
+                             stream=alpha, fixef_rm="none", verbose=verbose,
+                             logger=logger)
     estimator = match_fit._estimator
     estimator.reload_intermediates()
     estimator._match_person_years = person_years

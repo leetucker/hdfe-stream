@@ -134,10 +134,12 @@ def test_within_fixed_effects_match_pyfixest(fitted, index, rich):
     mine = res.resid().select(*keys, f"fe_{dim}", "xb", "resid", res.depvar).collect()
     assert scaled(mine[f"fe_{dim}"] + mine["xb"] + mine["resid"], mine[res.depvar]) < TOL_RESID
 
-    theirs = pl.DataFrame({**{k: rich.frame[k] for k in keys},
+    # pyfixest predicts for the rows it kept (singletons are dropped)
+    used = rich.pandas.loc[ref._data.index, keys]
+    theirs = pl.DataFrame({**{k: used[k].to_numpy() for k in keys},
                            "predict_ref": np.asarray(ref.predict())})
     joined = mine.join(theirs, on=keys)
-    assert joined.height == rich.frame.height
+    assert joined.height == len(used) == mine.height
     assert scaled(joined[f"fe_{dim}"] + joined["xb"], joined["predict_ref"]) < TOL_RESID
     assert res.solver_info["solver"] == "none"
     assert res.k_fe == res.n_levels[dim]
@@ -160,14 +162,14 @@ def test_csw0_expands_to_zero_one_and_two_fixed_effects(rich, workdir):
         assert [len(r.fe_names) for r in multi] == [0, 1, 2]
 
 
-def test_default_vcov_is_iid_without_fixed_effects(rich, workdir):
-    """pyfixest's default: CRV1 by the first fixed effect, or iid with none."""
+def test_default_vcov_is_iid(rich, workdir):
+    """pyfixest's default is iid, with or without fixed effects."""
     with feols_stream("log_earn ~ age_squared", rich.src, workdir=workdir,
                       verbose=False) as res:
         assert res.vcov_type == "iid"
     with feols_stream("log_earn ~ age_squared | worker_id", rich.src,
                       workdir=workdir, verbose=False) as res:
-        assert res.vcov_type == "CRV1:worker_id"
+        assert res.vcov_type == "iid"
 
 
 @pytest.mark.parametrize("fe", [[], None])

@@ -10,8 +10,7 @@ One dimension
 None
     ordinary least squares. The rows are read in plain batches and never
     grouped or sorted, and the model keeps its intercept as a coefficient,
-    named "Intercept" as in pyfixest. The default vcov is then iid, again as in
-    pyfixest (with fixed effects it is CRV1 by the first one).
+    named "Intercept" as in pyfixest.
 
 Either way the rows are streamed, so the memory ceiling is the same as for a
 full AKM model: set by the batch size and the number of covariates, not by the
@@ -28,14 +27,14 @@ X = "age_squared + age_cubed + i(occ)"
 
 # ------------------------------------------------------------------- none: OLS
 ols = feols_stream(f"log_earn ~ {X}", data, workdir=workdir("ols"), verbose=False)
-print("no fixed effects (vcov defaults to iid):")
+print("no fixed effects:")
 ols.summary()
 print(f"solver: {ols.solver_info['solver']!r}; fixed effects: {ols.fe_names}")
 
 # ------------------------------------------------------- one: a within model
 within = feols_stream(f"log_earn ~ {X} | worker_id", data, workdir=workdir("within"),
                       verbose=False)
-print("\none fixed effect (vcov defaults to CRV1 by worker):")
+print("\none fixed effect:")
 within.summary()
 effects = within.fixef("worker_id").collect()
 print(f"{effects.height:,} worker effects, e.g.\n{effects.head(3)}")

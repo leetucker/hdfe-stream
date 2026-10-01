@@ -69,9 +69,14 @@ class _PassesMixin:
         lf = (lf.select([pl.col(c) for c in src + self.keep] + wexpr + texpr + design)
                 .drop_nulls(src)
                 .filter(pl.all_horizontal(finite)))
-        restrict = self._restrict_sample(lf)
-        if restrict is not None:
-            lf = restrict(lf)
+        # Row restrictions, in order: singletons, then whatever the subclass
+        # drops (separation, for GLMs), which sees the rows left by the first.
+        restricts = []
+        for hook in (self._singleton_restriction, self._restrict_sample):
+            restrict = hook(lf)
+            if restrict is not None:
+                lf = restrict(lf)
+                restricts.append(restrict)
 
         # One scan for counts, means, weight checks and (if the streamed
         # dimension must be chosen by cardinality) HyperLogLog counts.
@@ -101,7 +106,12 @@ class _PassesMixin:
         self.tmeans = np.array([mom[f"t{j + 1}"].item() for j in range(len(self.slope_vars))])
         self.n_obs = mom["n"].item()
         if self.n_obs == 0:
-            raise ValueError("no complete observations")
+            raise ValueError("no complete observations"
+                             + (" left after dropping singletons"
+                                if self.singletons["observations"] else ""))
+        if self.singletons["observations"]:
+            _warn(f"{self.singletons['observations']:,} singleton observations dropped from "
+                  "the model (fixef_rm='none' keeps them)", self.logger)
         if self.weights is not None and mom["wmin"].item() <= 0:
             raise ValueError("weights must be strictly positive")
         self.wsum = mom["wsum"].item() if self.weights is not None else float(self.n_obs)
@@ -133,7 +143,7 @@ class _PassesMixin:
                            .filter(pl.all_horizontal(
                                [self.var_exprs[nm].is_finite() for nm in self.var_names]
                                + others_finite)))
-            if restrict is not None:
+            for restrict in restricts:
                 coded = restrict(coded)
         for name, cols, cc, path in maps:
             self._log(f"pass 0: factorizing {name}")
@@ -432,6 +442,50 @@ class _PassesMixin:
             return None
         self.design_evaluated = "per bucket"
         return extra
+
+    def _singleton_restriction(self, lf):
+        """A function that drops the singleton observations (`fixef_rm`), or
+        None when there are none to drop.
+
+        A singleton is a row alone in its level of some fixed effect.
+        Dropping it can leave another row alone in a level of a different
+        dimension, so the search repeats until a full round finds nothing; the
+        result does not depend on the order of the dimensions. Each count is a
+        streaming group_by over the fixed-effect columns, so memory is a hash
+        table of the levels plus the singleton levels found, which are kept.
+        A singleton level holds one row, so the rows dropped are the levels
+        found."""
+        self.singletons = {"observations": 0, "levels": {}, "rounds": 0}
+        if self.fixef_rm != "singleton" or not self.fe_user:
+            return None
+        cols = list(dict.fromkeys(c for d in self.fe_user for c in self.fe_cols[d]))
+        cur = lf.select([pl.col(c) for c in cols])
+        found = {}
+        while True:
+            changed = False
+            for d in self.fe_user:
+                on = self.fe_cols[d]
+                bad = (cur.group_by(on).agg(pl.len().alias("__n"))
+                          .filter(pl.col("__n") == 1).select(on)
+                          .collect(engine="streaming"))
+                if bad.height:
+                    found.setdefault(d, []).append(bad)
+                    cur = cur.join(bad.lazy(), on=on, how="anti")
+                    changed = True
+            self.singletons["rounds"] += changed
+            if not changed:
+                break
+        if not found:
+            return None
+        tables = {d: pl.concat(v) for d, v in found.items()}
+        self.singletons["levels"] = {d: t.height for d, t in tables.items()}
+        self.singletons["observations"] = sum(self.singletons["levels"].values())
+
+        def restrict(frame):
+            for d, t in tables.items():
+                frame = frame.join(t.lazy(), on=self.fe_cols[d], how="anti")
+            return frame
+        return restrict
 
     def _restrict_sample(self, lf):
         """A function that drops rows from the estimation sample, applied to
