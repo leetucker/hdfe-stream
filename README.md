@@ -68,7 +68,7 @@ Parquet. So memory scales with firms × years, not with workers × rows, and tha
 asymmetry is the whole design. The covariates travel with the rows: what is
 held at once is one bucket or batch of rows × covariates, never all of them,
 which is why a wide design fits where an in-memory one does not. Full detail is in
-[`hdfe_stream/__init__.py`](hdfe_stream/__init__.py).
+[`hdfe_stream/__init__.py`](https://github.com/leetucker/hdfe-stream/blob/main/hdfe_stream/__init__.py).
 
 ## Install
 

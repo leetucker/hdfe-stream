@@ -1,4 +1,4 @@
-include README.md CHANGELOG.md
+include README.md CHANGELOG.md CITATION.cff LICENSE.md
 graft tests
 graft docs
 prune benchmarks

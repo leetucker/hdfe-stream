@@ -7,6 +7,8 @@ name = "hdfe-stream"
 version = "0.1.0"
 description = "Out-of-core regression with several high-dimensional fixed effects: OLS, Poisson, logit and probit, with AKM/KSS variance decompositions"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE.md"]
 authors = [{ name = "Lee Tucker" }]
 keywords = ["econometrics", "fixed effects", "high-dimensional", "out-of-core", "AKM", "KSS", "pyfixest"]
 classifiers = [

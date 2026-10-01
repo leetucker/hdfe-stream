@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use this software in your research, please cite it as below."
+type: software
+title: "hdfe-stream"
+abstract: "Out-of-core regression with several high-dimensional fixed effects: OLS, Poisson, logit and probit, with AKM/KSS variance decompositions."
+authors:
+  - family-names: Tucker
+    given-names: Lee
+    email: lee.c.tucker@gmail.com
+version: 0.1.0
+date-released: 2026-09-30
+license: MIT
+repository-code: "https://github.com/leetucker/hdfe-stream"
+url: "https://github.com/leetucker/hdfe-stream"
+keywords:
+  - econometrics
+  - fixed effects
+  - high-dimensional
+  - out-of-core
+  - AKM
+  - KSS
