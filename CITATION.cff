@@ -6,7 +6,7 @@ abstract: "Out-of-core regression with several high-dimensional fixed effects: O
 authors:
   - family-names: Tucker
     given-names: Lee
-    email: lee.c.tucker@gmail.com
+    email: lee.c.tucker@census.gov
 version: 0.1.0
 date-released: 2026-09-30
 license: MIT
