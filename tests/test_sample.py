@@ -209,3 +209,47 @@ def test_low_level_interface(path):
     with est.fit(pl.scan_parquet(path)) as res:
         assert "pos" in res.resid().collect().columns
         assert res.sample().collect()["in_sample"].sum() == res.n_obs
+
+
+# ------------------------------------------------------------- DataFrame source
+
+def test_a_dataframe_source_gives_the_same_fit_as_a_path(path):
+    frame = pl.read_parquet(path)
+    with fit("y ~ x | w + f", path) as from_path, fit("y ~ x | w + f", frame) as from_frame:
+        assert from_frame.n_obs == from_path.n_obs
+        np.testing.assert_allclose(from_frame.beta, from_path.beta, rtol=1e-10)
+        np.testing.assert_allclose(from_frame.se, from_path.se, rtol=1e-10)
+        sample = from_frame.sample().collect()
+        assert sample.height == frame.height
+        assert sample["in_sample"].sum() == from_frame.n_obs
+        assert set(from_frame.resid().collect()["row_id"]) == set(
+            sample.filter(pl.col("in_sample"))["row_id"])
+
+
+def test_a_dataframe_source_works_for_the_other_entry_points(path):
+    frame = pl.read_parquet(path)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with fepois_stream("cnt ~ x | w + f", frame, fe_dof=FE_DOF_PF, verbose=False) as pois:
+            assert pois.n_obs > 0
+    est = StreamingHDFE("y", ["x"], ["w", "f"], verbose=False)
+    with est.fit(frame) as res:
+        assert res.n_obs > 0
+
+
+def test_a_dataframe_source_works_for_leave_out(tmp_path):
+    from hdfe_stream import leave_one_out_connected, leave_out_kss
+    from hdfe_stream.simulate import simulate_akm
+
+    panel = simulate_akm(n_workers=300, n_firms=30, seed=13)
+    pruned = leave_one_out_connected(panel)
+    assert pruned.diagnostics["workers_before"] == 300
+    kwargs = dict(n_draws=16, block=32, seed=4, verbose=False)
+    fml = "log_earn ~ age_squared | worker_id + firm_id"
+    path = tmp_path / "p.parquet"
+    panel.write_parquet(path)
+    from_frame = leave_out_kss(fml, panel, workdir=tmp_path / "a", **kwargs)
+    from_path = leave_out_kss(fml, str(path), workdir=tmp_path / "b", **kwargs)
+    assert from_frame.n_obs == from_path.n_obs
+    for name, value in from_path.leave_out.items():
+        assert from_frame.leave_out[name] == pytest.approx(value, rel=1e-8)

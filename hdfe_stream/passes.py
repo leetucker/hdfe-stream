@@ -14,7 +14,7 @@ from ._columns import BUCKET, GCODE, PREFIX, WCOL, check_source, tcol, vcol
 from .kernels_base import _nb_components, _nb_diag
 from .kernels_slopes import _nb_diag_sl
 from .report import _warn
-from .utils import _row_wise, _segments, iter_group_chunks
+from .utils import _as_lazy, _row_wise, _segments, iter_group_chunks
 
 # Shared-state contract with the other mixins
 # -------------------------------------------
@@ -45,7 +45,7 @@ class _PassesMixin:
 
     # ------------------------------------------------------------------ pass 0
     def _pass0_code(self, source, keys, extra):
-        lf = source if isinstance(source, pl.LazyFrame) else pl.scan_parquet(source)
+        lf = _as_lazy(source)
         schema = lf.collect_schema()
         check_source(schema.names())
         if self.row_id in schema:

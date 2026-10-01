@@ -51,6 +51,7 @@ from ._types import PathLike, Source
 from .report import _log
 
 from .results import HDFEResult
+from .utils import _as_lazy
 
 if TYPE_CHECKING:
     import polars as pl
@@ -333,7 +334,7 @@ def leave_one_out_connected(data: Source, worker: str = "worker_id",
     only once, because a worker seen once is a pendant vertex and removing a
     pendant never creates a cut vertex.
 
-    `data` is a Parquet path, glob, or Polars LazyFrame. The return value's
+    `data` is a Parquet path, glob, Polars LazyFrame or DataFrame. The return value's
     `.data` is the same source filtered to the surviving workers and firms, ready
     to pass to `feols_stream` or `StreamingHDFE.fit`.
 
@@ -350,7 +351,7 @@ def leave_one_out_connected(data: Source, worker: str = "worker_id",
     from .kernels_graph import (_nb_articulation_points, _nb_components,
                                 build_bipartite)
 
-    frame = data if isinstance(data, pl.LazyFrame) else pl.scan_parquet(data)
+    frame = _as_lazy(data)
 
     # one streaming pass for the distinct matches and how many rows each has
     matches = (frame.group_by(worker, firm).len("rows")

@@ -289,9 +289,10 @@ class HDFEResult:
         the source when collected, and a join with those tables.
 
         The source must be the same rows in the same order as at the fit. A
-        file or glob is (Polars keeps the file list and metadata in the plan,
-        and reading a rewritten file fails); a LazyFrame is only if its plan
-        is, which a group_by, an unordered join or a random sample is not.
+        DataFrame is, and so is a file or glob (Polars keeps the file list and
+        metadata in the plan, and reading a rewritten file fails); a LazyFrame
+        is only if its plan is, which a group_by, an unordered join or a
+        random sample is not.
         With `check` the source's row count is compared with the count at the
         fit, which catches a plan that returns a different number of rows each
         time it runs, not one that returns the same rows in a different

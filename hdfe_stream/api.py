@@ -14,6 +14,7 @@ from .glm import StreamingGLM
 from .report import _log
 from .formula import _plan_formula, _pyfixest_formula_api
 from .results import HDFEMulti, HDFEResult, _vcov_key
+from .utils import _as_lazy
 
 
 class _FormulaEstimator:
@@ -35,7 +36,8 @@ def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,
     Any number of fixed effects works, including one ("y ~ x | worker_id",
     a within regression) and none ("y ~ x", OLS with an intercept).
 
-    data    : Parquet path/glob or Polars LazyFrame.
+    data    : Parquet path/glob or Polars LazyFrame; a DataFrame also works, but
+              is already in memory, which the library is built to avoid.
     workdir : directory under which run directories are created (default:
               $HDFE_STREAM_WORKDIR if set, else the system temporary
               directory); see StreamingHDFE for the
@@ -72,7 +74,7 @@ def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options):
     """Plan the formula, fit each estimator that `estimators(fe, group)`
     makes for each set of fixed effects, and return the results in the
     formula's order."""
-    lf = data if isinstance(data, pl.LazyFrame) else pl.scan_parquet(data)
+    lf = _as_lazy(data)
     _log(options.get("verbose", True), f"planning {fml!r} (formula expansion, level discovery)",
          options.get("logger"), options.get("log_level"))
     groups = _plan_formula(fml, lf)

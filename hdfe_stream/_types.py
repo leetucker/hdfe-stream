@@ -8,8 +8,8 @@ from typing import Any, Mapping, Sequence, Union
 import polars as pl
 
 PathLike = Union[str, Path]
-# a Parquet path or glob, or a Polars LazyFrame
-Source = Union[PathLike, pl.LazyFrame]
+# a Parquet path or glob, or a Polars LazyFrame (or DataFrame, already in memory)
+Source = Union[PathLike, pl.LazyFrame, pl.DataFrame]
 # 'iid', 'hetero', 'HC1', 'CRV1:var', or {'CRV1': 'var'}
 Vcov = Union[str, Mapping[str, str]]
 # column name, (name, expression), or a mapping / sequence of them

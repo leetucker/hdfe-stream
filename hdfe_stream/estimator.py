@@ -402,7 +402,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
     def fit(self, source: Source, vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
             fe_dof: str = "exact") -> HDFEResult | HDFEMulti:
         """
-        source : Parquet path/glob or a Polars LazyFrame.
+        source : Parquet path/glob, a Polars LazyFrame, or a DataFrame.
         vcov   : default vcov: 'iid', 'hetero'/'HC1', {'CRV1': var} or
                  'CRV1:var'; multi-way clustering as {'CRV1': 'a+b'} (any
                  number of ways). {'CRV3': var} is the cluster jackknife

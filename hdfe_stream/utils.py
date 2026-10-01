@@ -15,7 +15,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ._columns import GCODE
-from ._types import PathLike
+from ._types import PathLike, Source
 
 
 def _phys_mem_gb():
@@ -155,6 +155,16 @@ def _function_name(spec):
             return f"{key}.{next(iter(value))}"
         return key
     return None
+
+
+def _as_lazy(source: Source) -> pl.LazyFrame:
+    """The source as a LazyFrame: a LazyFrame as is, a DataFrame as its lazy
+    view (no copy), anything else as a Parquet path or glob to scan."""
+    if isinstance(source, pl.LazyFrame):
+        return source
+    if isinstance(source, pl.DataFrame):
+        return source.lazy()
+    return pl.scan_parquet(source)
 
 
 def _row_wise(expr):

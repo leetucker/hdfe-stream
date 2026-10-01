@@ -21,6 +21,10 @@ syntax and are parsed by pyfixest's own parser, so the syntax, the coefficient
 names and the results all match. The difference is where the work happens: rows
 are streamed off disk in batches and never held as a design matrix.
 
+The data can be a Parquet path or glob, a Polars LazyFrame, or a Polars
+DataFrame. Using file paths or LazyFrames keeps memory usage to a minimum, but
+using DataFrames works well for smaller data and for trying things out.
+
 ## When to use this, and when not to
 
 **Use pyfixest.** It is the better tool whenever your data fits in memory:
@@ -164,8 +168,8 @@ rows = fit.sample().join(fit.resid().select("row_id", "resid"), on="row_id", how
 Nothing is stored per row for this: the frame is the source plus the small
 tables of dropped levels, and `row_id` adds a few bytes per row to the working
 and residual files. It relies on the source reading back in the same order,
-which a file or glob does and a LazyFrame does only if its plan does (not after
-a `group_by`, an unordered join or a random sample). For a model list,
+which a file, a glob or a DataFrame does and a LazyFrame does only if its plan
+does (not after a `group_by`, an unordered join or a random sample). For a model list,
 `multi.sample()` returns `{formula: frame}`; models fitted on the same fixed
 effects share one sample.
 
