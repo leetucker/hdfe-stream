@@ -169,6 +169,7 @@ class StreamingGLM(StreamingHDFE):
                  .collect(engine="streaming"))
         n = chk["n"].item()
         self.n_before_separation = n
+        self._separation_tables = {}
         self.separation = {"checked": self.separation_check and bool(self.fe_user),
                            "observations": 0, "levels": {}, "rounds": 0}
         if n == 0:
@@ -202,6 +203,7 @@ class StreamingGLM(StreamingHDFE):
         if not found:
             return None
         tables = {d: pl.concat(v) for d, v in found.items()}
+        self._separation_tables = tables
         self.separation["levels"] = {d: t.height for d, t in tables.items()}
 
         def restrict(frame):

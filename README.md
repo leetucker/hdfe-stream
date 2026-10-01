@@ -149,6 +149,26 @@ decomposition run as a streaming pass; estimated effects per dimension via
 `pf.etable`, `pf.summary`, `pf.coefplot` and `pf.iplot`, and `hdfe_stream.etable`
 mixes streaming and in-memory models in one table.
 
+**Matching results to the source.** The residual file is in the estimator's
+order, not the source's, so every row carries `row_id`, its position in the
+source before any row was dropped (`row_id=` renames the column).
+`fit.resid()` joins back onto the source on it, and `fit.sample()` returns the
+source, lazily, with `row_id`, `in_sample` and `dropped_because` (null for rows
+used; otherwise `"missing"`, `"singleton"` or `"separation"`), for looking at
+the data net of what the fit dropped:
+
+```python
+rows = fit.sample().join(fit.resid().select("row_id", "resid"), on="row_id", how="left")
+```
+
+Nothing is stored per row for this: the frame is the source plus the small
+tables of dropped levels, and `row_id` adds a few bytes per row to the working
+and residual files. It relies on the source reading back in the same order,
+which a file or glob does and a LazyFrame does only if its plan does (not after
+a `group_by`, an unordered join or a random sample). For a model list,
+`multi.sample()` returns `{formula: frame}`; models fitted on the same fixed
+effects share one sample.
+
 **Operations.** Progress, warnings and summaries to a `logging` logger as they
 happen. Each fit works in its own run directory; intermediates are deleted as
 soon as they are no longer needed, everything is removed if the fit fails, and

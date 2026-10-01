@@ -52,6 +52,15 @@ class _PassesMixin:
     def _pass0_code(self, source, keys, extra):
         lf = source if isinstance(source, pl.LazyFrame) else pl.scan_parquet(source)
         schema = lf.collect_schema()
+        if self.row_id in schema:
+            raise ValueError(f"the data already has a column named {self.row_id!r}, which "
+                             "the estimator uses for each row's position in the source; "
+                             "pass row_id= to name it something else")
+        # Positions in the source as given, before any row is dropped: what
+        # lets the residuals, and sample(), be matched to the source again.
+        raw = lf
+        lf = lf.with_row_index(self.row_id)
+        schema = lf.collect_schema()
         src = self._src_cols()
         missing = [c for c in src + self.keep + self.slope_vars if c not in schema]
         if missing:
@@ -77,6 +86,7 @@ class _PassesMixin:
             if restrict is not None:
                 lf = restrict(lf)
                 restricts.append(restrict)
+        self._record_sample(raw, src)
 
         # One scan for counts, means, weight checks and (if the streamed
         # dimension must be chosen by cardinality) HyperLogLog counts.
@@ -443,6 +453,25 @@ class _PassesMixin:
         self.design_evaluated = "per bucket"
         return extra
 
+    def _record_sample(self, raw, src):
+        """What `HDFEResult.sample()` needs to say which rows of the source the
+        fit used: the source itself, its row count, the test for a usable row
+        (as pass 0 applies it, but on the source's own columns), and the
+        small tables of levels dropped for being singletons or separated."""
+        usable = pl.all_horizontal(
+            [pl.col(c).is_not_null() for c in src]
+            + [self.var_exprs[nm].is_finite() for nm in self.var_names]
+            + [pl.col(v).cast(pl.Float64).is_finite() for v in self.slope_vars]
+            + ([self.weights.is_finite()] if self.weights is not None else [])
+        ).fill_null(False)
+        self._sample_spec = {
+            "source": raw, "row_id": self.row_id, "usable": usable,
+            "n_raw": raw.select(pl.len()).collect(engine="streaming").item(),
+            "fe_cols": dict(self.fe_cols),
+            "tables": {"singleton": dict(self._singleton_tables),
+                       "separation": dict(self._separation_tables)},
+        }
+
     def _singleton_restriction(self, lf):
         """A function that drops the singleton observations (`fixef_rm`), or
         None when there are none to drop.
@@ -456,6 +485,7 @@ class _PassesMixin:
         A singleton level holds one row, so the rows dropped are the levels
         found."""
         self.singletons = {"observations": 0, "levels": {}, "rounds": 0}
+        self._singleton_tables = {}
         if self.fixef_rm != "singleton" or not self.fe_user:
             return None
         cols = list(dict.fromkeys(c for d in self.fe_user for c in self.fe_cols[d]))
@@ -478,6 +508,7 @@ class _PassesMixin:
         if not found:
             return None
         tables = {d: pl.concat(v) for d, v in found.items()}
+        self._singleton_tables = tables
         self.singletons["levels"] = {d: t.height for d, t in tables.items()}
         self.singletons["observations"] = sum(self.singletons["levels"].values())
 

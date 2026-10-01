@@ -24,7 +24,7 @@ from .inverse import _InverseMixin
 from .leaveout import _ComponentsMixin, _LeaveOutMixin, _TraceMixin
 from .leaveout_se import _StandardErrorMixin
 from .leaveout_weakid import _WeakIdMixin
-from .passes import _PassesMixin
+from .passes import _RESERVED, _PassesMixin
 from .report import _log
 from .results import HDFEMulti, HDFEResult, _canon_cluster, _vcov_key
 from .solve import _SolveMixin
@@ -120,6 +120,11 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
          in memory. It runs after missing values are removed and does not look
          at weights; the number dropped is in diagnostics["singletons"].
          Nothing is dropped without fixed effects.
+    row_id : name of the column that gives each row's position in `source`
+         (counted before any row is dropped). It is written to the residual
+         file, so `resid()` joins back onto the source on it, and
+         `HDFEResult.sample()` adds it to the source. The source must not
+         already have a column of this name (default "row_id").
     weights : column name or Polars expression with strictly positive
          weights (weighted least squares; rows with missing weights are
          dropped).
@@ -168,7 +173,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                  rhs_block: int = 8, assembly: str = "auto", max_s_gb: float | None = None,
                  collin_tol: float = 1e-10, collin_tol_rel: float = 1e-6,
                  n_threads: int | None = None, scratch_mb: int = 32,
-                 fixef_rm: str = "singleton",
+                 fixef_rm: str = "singleton", row_id: str = "row_id",
                  weights: str | pl.Expr | None = None, weights_type: str = "aweights",
                  stream: str | None = None, models: list[dict[str, Any]] | None = None,
                  verbose: bool = True, logger: logging.Logger | None = None,
@@ -241,7 +246,13 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                          ("cells" if self.m <= 8 and not self.slopes and not self.no_fe
                           else "rows"))
         fe_src = {c for d in self.fe_user for c in self.fe_cols[d]}
-        self.keep = [c for c in dict.fromkeys(keep) if c not in fe_src]
+        if _RESERVED.fullmatch(row_id):
+            raise ValueError(f"row_id={row_id!r} is a name the estimator uses internally")
+        self.row_id = row_id
+        self.keep = [row_id] + [c for c in dict.fromkeys(keep)
+                                if c not in fe_src and c != row_id]
+        self._singleton_tables, self._separation_tables = {}, {}
+        self._sample_spec = None
         self.tol, self.maxiter = tol, maxiter
         self.batch_rows, self.rgs = batch_rows, row_group_size
         self.scratch_mb = int(scratch_mb)

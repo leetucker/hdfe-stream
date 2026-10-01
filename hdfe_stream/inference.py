@@ -649,4 +649,4 @@ class _InferenceMixin:
             f_stat_1st_stage=f_stats,
             n_clusters=n_clusters,
             weights=self.weights_name, weights_type=self.weights_type, _run=self._run,
-            _estimator=self)
+            _estimator=self, _sample=self._sample_spec)

@@ -92,6 +92,7 @@ class HDFEResult:
     pseudo_r2: float = np.nan
     _run: object = field(default=None, repr=False, compare=False)
     _estimator: object = field(default=None, repr=False, compare=False)
+    _sample: dict | None = field(default=None, repr=False, compare=False)
 
     @property
     def se(self) -> np.ndarray:
@@ -264,8 +265,72 @@ class HDFEResult:
 
     def resid(self) -> pl.LazyFrame:
         """Lazy scan of row-level output (FE contributions + residuals); same
-        lifetime caveat as fixef()."""
+        lifetime caveat as fixef(). The `row_id` column is each row's position
+        in the source, so the residuals join back onto `sample()` (or onto the
+        source with `with_row_index("row_id")`) on it. The file is in the
+        estimator's own order, not the source's; sort by `row_id` to restore it."""
         return self._scan(self.paths["resid"], "residual")
+
+    def sample(self, check: bool = True) -> pl.LazyFrame:
+        """The source, lazily, with three columns added saying what the fit did
+        with each row:
+
+        row_id           the row's position in the source (first column); the
+                         same column `resid()` carries
+        in_sample        True for the rows the model was estimated on
+        dropped_because  null for those rows; otherwise "missing" (a null or
+                         non-finite value in a fixed effect, cluster, outcome,
+                         covariate or weight), "singleton" (`fixef_rm`) or
+                         "separation" (GLMs)
+
+        Nothing is stored per row: the frame is the source plus an expression
+        and the small tables of levels the fit dropped, so it costs a scan of
+        the source when collected, and a join with those tables.
+
+        The source must be the same rows in the same order as at the fit. A
+        file or glob is (Polars keeps the file list and metadata in the plan,
+        and reading a rewritten file fails); a LazyFrame is only if its plan
+        is, which a group_by, an unordered join or a random sample is not.
+        With `check` the source's row count is compared with the count at the
+        fit, which catches a plan that returns a different number of rows each
+        time it runs, not one that returns the same rows in a different
+        order."""
+        spec = self._sample
+        if spec is None:
+            raise ValueError("this result holds no reference to its source (it was "
+                             "converted, or fitted without one)")
+        source, row_id = spec["source"], spec["row_id"]
+        names = ("in_sample", "dropped_because")
+        clash = [c for c in (row_id, *names) if c in source.collect_schema()]
+        if clash:
+            raise ValueError(f"the source has columns named {clash}, which sample() adds; "
+                             "rename them")
+        if check:
+            n = source.select(pl.len()).collect(engine="streaming").item()
+            if n != spec["n_raw"]:
+                raise ValueError(
+                    f"the source has {n:,} rows, and had {spec['n_raw']:,} when the model "
+                    "was fitted, so row_id would no longer line up with the residuals")
+        frame = source.with_row_index(row_id)
+        flags = {}
+        for kind, tables in spec["tables"].items():
+            for d, table in tables.items():
+                flag = f"__{kind}_{len(flags)}"
+                frame = frame.join(table.lazy().with_columns(pl.lit(True).alias(flag)),
+                                   on=spec["fe_cols"][d], how="left")
+                flags.setdefault(kind, []).append(flag)
+        reason = pl.when(~spec["usable"]).then(pl.lit("missing"))
+        for kind in ("singleton", "separation"):
+            if kind in flags:
+                reason = reason.when(pl.any_horizontal(
+                    [pl.col(f).is_not_null() for f in flags[kind]])).then(pl.lit(kind))
+        levels = ["missing", "singleton", "separation"]
+        return (frame.with_columns(reason.otherwise(None).cast(pl.Enum(levels))
+                                   .alias("dropped_because"))
+                     .with_columns(pl.col("dropped_because").is_null().alias("in_sample"))
+                     .drop([f for fs in flags.values() for f in fs])
+                     .select(row_id, *source.collect_schema().names(), "in_sample",
+                             "dropped_because"))
 
     @property
     def files_dir(self) -> Path | None:
@@ -404,6 +469,13 @@ class HDFEMulti:
 
     def to_pyfixest(self) -> list:
         return [r.to_pyfixest() for r in self]
+
+    def sample(self, check: bool = True) -> dict[str, pl.LazyFrame]:
+        """`{formula: HDFEResult.sample()}` for each model. Models fitted
+        together on the same fixed effects share one sample, so their frames
+        are the same; only a stepwise change in the fixed effects (or, for
+        GLMs, in the outcome) changes it. Every frame uses the same `row_id`."""
+        return {f: r.sample(check) for f, r in self.all_fitted_models.items()}
 
     def cleanup(self) -> None:
         """Delete the result files of all models."""
