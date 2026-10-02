@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.0
+
+Changes to defaults, so results can differ from 0.1.0 without any change to
+your code.
+
+- **Default `vcov` is now `"iid"`**, with or without fixed effects, matching
+  pyfixest 0.60. Before, a model with fixed effects defaulted to CRV1 clustered
+  on the first fixed effect. Pass `vcov={"CRV1": "worker_id"}` for the old
+  behavior.
+- **Singleton observations are dropped by default** (`fixef_rm="singleton"`),
+  as in pyfixest, repeating until none is left. `fixef_rm="none"` keeps them.
+  `leave_out_kss` fits with `fixef_rm="none"`, since its pruning defines the
+  sample.
+
+New features.
+
+- **`row_id` in `resid()`**: each row carries its position in the source before
+  any row was dropped, so residuals join back onto the source (`row_id=` renames
+  the column).
+- **`fit.sample()`** returns the source, lazily, with `row_id`, `in_sample` and
+  `dropped_because` (`"missing"`, `"singleton"` or `"separation"`).
+  `multi.sample()` returns `{formula: frame}`.
+- **Polars `DataFrame` inputs** are accepted wherever a Parquet path or
+  `LazyFrame` was.
+- **Reserved column prefix `__hdfe_`.** All of the estimator's internal columns
+  now use it, and a source with a column starting with it is refused. This fixes
+  fits failing when a user column was named `w` (with weights), `v0`, `c1`,
+  `gcode` and similar.
+
 ## 0.1.0
 
 First release.
