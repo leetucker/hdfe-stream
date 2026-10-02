@@ -225,3 +225,6 @@ prototypes/.xhdfe-venv/
 
 # hdfe_stream: package-run logs
 logs/
+
+# technical report, drafted outside the public repository
+report/
