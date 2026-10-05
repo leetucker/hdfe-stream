@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Polars 1.41 is excluded** from the supported versions. Its streaming join
+  panics (`called Option::unwrap() on a None value`) once a frame has about
+  130 columns, which a model with more than about 120 covariates reaches in
+  pass 0. Polars 1.40 and earlier, and 1.42 and later, are unaffected.
+- **A panic inside Polars is reported as a `RuntimeError`** that names the
+  Polars version, says it is a Polars bug, and suggests a fix, instead of a
+  bare `PanicException`.
+
 ## 0.2.0
 
 Changes to defaults, so results can differ from 0.1.0 without any change to

@@ -41,6 +41,21 @@ from .workspace import _ACTIVE_RUNS, _MARKER, _Run, _base_dir, _dir_bytes, _remo
 # (pass 1/1b), and clusters (inference).
 
 
+def _polars_panic_message(exc):
+    """What to tell the user when Polars panics (a Rust assertion failing
+    inside Polars, not an error in the data or the model)."""
+    msg = (f"Polars {pl.__version__} crashed while running the fit's queries "
+           f"(Rust panic: {exc}). This is a bug in Polars, not a problem with "
+           "the data or the model.")
+    if pl.__version__.startswith("1.41."):
+        return (msg + " Polars 1.41 panics in streaming joins once a frame "
+                "has about 130 columns or more, as a model with over 120 "
+                "covariates does; upgrade with `pip install -U 'polars>=1.42'`.")
+    return (msg + " Upgrading Polars may fix it; if it does not, please report "
+            "it at https://github.com/leetucker/hdfe-stream/issues with the "
+            "Polars version and the formula.")
+
+
 class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                     _LeaveOutMixin, _TraceMixin, _ComponentsMixin,
                     _StandardErrorMixin, _WeakIdMixin):
@@ -437,6 +452,8 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
             self._release_intermediates()
             if not self.keep_intermediates:
                 self._run.cleanup()
+            if isinstance(exc, pl.exceptions.PanicException):
+                raise RuntimeError(_polars_panic_message(exc)) from exc
             raise
         self._release_intermediates()
         _ACTIVE_RUNS.discard(str(self.workdir))

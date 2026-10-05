@@ -26,7 +26,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "polars>=1.37",
+    "polars>=1.37,!=1.41.*",       # 1.41 panics in streaming joins of wide frames
     "numpy>=1.24",
     "numba>=0.59",
     "pyarrow>=14.0",
