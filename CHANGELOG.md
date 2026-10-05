@@ -2,6 +2,19 @@
 
 ## 0.2.1
 
+- **`fe_dof="exact"` no longer depends on the order of the fixed effects.**
+  With three or more fixed effects it counted the connected components of the
+  streamed dimension and whichever came next in the formula, so reordering the
+  formula could change the standard errors. It now counts the components of
+  every pair of dimensions and uses the pair with the most, which is never
+  more than the true number of redundant levels. With two fixed effects
+  nothing changes, except in the clustered case below.
+- **Clustered standard errors with fixed effects nested in the clusters.**
+  Under `fe_dof="exact"`, the components of a pair of fixed effects that are
+  both nested within the clusters were subtracted from K, although those
+  fixed effects' levels are already dropped from it. K could then fall below
+  the number of covariates and the standard errors were too small. Such a pair
+  is no longer used, and with no other pair K is pyfixest's.
 - **`fit.sample()` labels every singleton.** With three or more fixed effects
   that each had singleton levels, rows dropped only for the third or a later
   dimension came back with `in_sample=True`, so the counts disagreed with

@@ -176,6 +176,68 @@ def test_exact_fe_dof_differs_from_pyfixest_only_through_dof(akm, workdir, refer
     assert exact.k_fe >= loose.k_fe
 
 
+def _three_way_panel(seed=3, n=3000):
+    """Three overlapping interactions, as in an event study with
+    unit-by-time, unit-by-group and group-by-season effects: irregular
+    enough that the redundant levels depend on which pair is counted."""
+    rng = np.random.default_rng(seed)
+    t = rng.integers(0, 12, n)
+    df = pl.DataFrame({"u": rng.integers(0, 40, n), "g": rng.integers(0, 10, n),
+                       "t": t, "s": t % 4, "x": rng.normal(size=n)})
+    return df.with_columns(y=pl.col("x") + pl.lit(rng.normal(size=n)))
+
+
+def _fe_rank(df, fe):
+    """Identified FE parameters: the rank of the stacked indicator matrices."""
+    blocks = [np.eye(n)[codes] for n, codes in
+              ((int(c.max()) + 1, c) for c in
+               (df.select(pl.struct(f.split("^")).rank("dense") - 1).to_series().to_numpy()
+                for f in fe))]
+    return np.linalg.matrix_rank(np.hstack(blocks))
+
+
+def test_exact_fe_dof_is_conservative_and_order_free():
+    """With three fixed effects `fe_dof="exact"` gives the same count for
+    every order of the formula and every streamed dimension, and never fewer
+    parameters than are identified; with two it is the identified count."""
+    from itertools import permutations
+
+    from hdfe_stream import feols_stream
+
+    df = _three_way_panel()
+    fe = ["t^u", "g^u", "s^g"]
+    counts = set()
+    for order in permutations(fe):
+        for stream in (None, order[0]):
+            with feols_stream(f"y ~ x | {' + '.join(order)}", df, stream=stream,
+                              verbose=False) as res:
+                counts.add(res.k_fe)
+                sample = res.sample().filter("in_sample").collect()
+    k_fe, = counts
+    rank = _fe_rank(sample, fe)
+    with feols_stream(f"y ~ x | {' + '.join(fe)}", df, fe_dof=FE_DOF_PF,
+                      verbose=False) as loose:
+        assert rank <= k_fe < loose.k_fe
+
+    with feols_stream("y ~ x | t^u + g^u", df, verbose=False) as two:
+        sample = two.sample().filter("in_sample").collect()
+        assert two.k_fe == _fe_rank(sample, ["t^u", "g^u"])
+
+
+def test_exact_fe_dof_skips_pairs_nested_in_the_clusters():
+    """Clustered by `g` with every fixed effect nested in it, all their
+    levels leave K and only the intercept stays, as in pyfixest: the
+    components of a pair of nested fixed effects are not subtracted again."""
+    from hdfe_stream import feols_stream
+
+    df = _three_way_panel()
+    with feols_stream("y ~ x | g^u + s^g", df, vcov={"CRV1": "g"}, verbose=False) as exact, \
+         feols_stream("y ~ x | g^u + s^g", df, vcov={"CRV1": "g"}, fe_dof=FE_DOF_PF,
+                      verbose=False) as loose:
+        assert exact.k_fe < loose.k_fe          # the pair's components still count for iid
+        np.testing.assert_allclose(exact.se, loose.se, rtol=1e-12)
+
+
 @pytest.mark.parametrize("assembly", ["cells", "rows"])
 def test_assembly_paths_agree(akm, workdir, references, assembly):
     """The cross-products can be accumulated from the cell table or from a

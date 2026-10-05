@@ -11,7 +11,7 @@ import numpy as np
 import polars as pl
 
 from ._columns import BUCKET, GCODE, PREFIX, WCOL, check_source, tcol, vcol
-from .kernels_base import _nb_components, _nb_diag
+from .kernels_base import _nb_components, _nb_diag, _nb_union_pairs
 from .kernels_slopes import _nb_diag_sl
 from .report import _warn
 from .utils import _as_lazy, _row_wise, _segments, iter_group_chunks
@@ -328,6 +328,12 @@ class _PassesMixin:
         kinds = ("codes", "n") + (("sums",) if m else ()) + (("st", "ainv", "cmat") if ps else ())
         files = {k: open(self.paths["ident"][k], "wb") for k in kinds}
         self.fe0_rank = 0               # fe[0] parameters: sum of per-group ranks
+        # Union-find for each pair of non-streamed dimensions, for the
+        # degrees of freedom (see _components). Every cell joins its two
+        # levels, so these take all cells, not only the identifying ones.
+        nl = [self.n_levels[f] for f in self.o_fe]
+        uf = {} if ps else {(i, j): np.arange(nl[i] + nl[j])
+                            for i in range(len(nl)) for j in range(i + 1, len(nl))}
         for ch in iter_group_chunks(self.paths["cells"],
                                     [GCODE, *self.ccols, "n", "cnt", *scols, *slcols],
                                     self.batch_rows):
@@ -335,6 +341,8 @@ class _PassesMixin:
                 sl = slice(off[f], off[f] + self.n_levels[f])
                 obs[sl] += np.bincount(ch[cc], weights=ch["n"], minlength=self.n_levels[f])
                 cnt[sl] += np.bincount(ch[cc], weights=ch["cnt"], minlength=self.n_levels[f])
+            for (i, j), parent in uf.items():
+                _nb_union_pairs(parent, ch[self.ccols[i]], ch[self.ccols[j]], nl[i])
             starts, local = _segments(ch[GCODE])
             ncells = np.diff(np.append(starts, len(local)))
             keep = ncells[local] > 1
@@ -378,6 +386,9 @@ class _PassesMixin:
         np.save(self.paths["ident"]["starts"],
                 np.concatenate(([0], np.cumsum(sizes))).astype(np.int64))
         self.obs, self.cnt, self.n_identifying = obs, cnt, len(sizes)
+        self._other_pair_components = {
+            (self.o_fe[i], self.o_fe[j]): int(np.count_nonzero(parent == np.arange(len(parent))))
+            for (i, j), parent in uf.items()}
         self._track_disk()
         if not self.keep_intermediates:         # cell tables are no longer needed
             for f in self.paths["cells"]:
@@ -537,6 +548,7 @@ class _PassesMixin:
         self.n_levels, self.fe_params = {}, {}
         self.n_cells, self.n_ident_cells, self.n_identifying = self.n_obs, 0, 0
         self.n_components, self.fe0_rank = 0, 0
+        self.pair_components = {}
         self.obs = self.cnt = self.diag = np.zeros(0)
         self.comp = np.zeros(0, np.int64)
         self.starts = np.zeros(1, np.int64)
@@ -547,9 +559,16 @@ class _PassesMixin:
 
     # ----------------------------------------------------------- components
     def _components(self):
-        """Connected components of the (fe[0], fe[1]) graph by union-find.
-        Only the first two dimensions get exact redundancy accounting; any
-        further dimension contributes one more restriction (see `fe_dof`)."""
+        """Connected components of the (fe[0], fe[1]) graph by union-find,
+        which the solver and the reported effects use, and the number of
+        components of every pair of dimensions, which `_k_fe` uses.
+
+        A pair with C components has exactly C redundant levels between its
+        two dimensions, and each further dimension adds at least one more, so
+        any pair gives a lower bound on the redundant levels; `_k_fe` takes
+        the largest. With varying slopes only the (fe[0], fe[1]) pair is
+        counted."""
+        self.pair_components = {}
         if not self.o_fe:           # one dimension: no graph to connect
             self.comp = np.zeros(0, np.int64)
             self.n_components = 0
@@ -558,3 +577,11 @@ class _PassesMixin:
         lab = _nb_components(self.starts, self.codes, self.n_levels[self.o_fe[0]])
         self.comp = lab
         self.n_components = int(np.count_nonzero(lab == np.arange(len(lab))))
+        self.pair_components[(self.g_fe, self.o_fe[0])] = self.n_components
+        if self.slope_vars:
+            return
+        for j, d in enumerate(self.o_fe[1:], 1):
+            lab = _nb_components(self.starts, self.codes, self.n_levels[d], j)
+            self.pair_components[(self.g_fe, d)] = int(
+                np.count_nonzero(lab == np.arange(len(lab))))
+        self.pair_components.update(self._other_pair_components)

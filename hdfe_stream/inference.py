@@ -246,7 +246,9 @@ class _InferenceMixin:
         worker trends in `year` alongside year effects). The worker slopes on
         such a variable sum to a trend that the other dimension already
         spans, so one of them is redundant; each counts as one more
-        restriction in the FE degrees of freedom."""
+        restriction in the FE degrees of freedom. Found once per fit."""
+        if self.slope_redundancy is not None:
+            return self.slope_redundancy
         out = []
         for j, v in enumerate(self.slope_vars):
             for d in self.o_fe:
@@ -580,7 +582,8 @@ class _InferenceMixin:
         # Small-sample factors follow pyfixest's ssc defaults: iid
         # (N-1)/(N-K); hetero N/(N-K); CRV1 G/(G-1)*(N-1)/(N-Kc), with the
         # levels of FEs nested in any of the request's cluster terms dropped
-        # from K (plus one back per nested FE). Multi-way: inclusion-exclusion
+        # from K (plus one back per nested FE); with fe_dof='exact', a pair of
+        # nested FEs adds no redundant levels (see _k_fe). Multi-way: inclusion-exclusion
         # over the terms, each scaled with G = the smallest one-way cluster
         # count (pyfixest's G_df="min"); t-tests use G_min - 1 df.
         K = k + k_fe
@@ -594,7 +597,8 @@ class _InferenceMixin:
             Gs = [self.clusters[t]["G"] for t, _, single in terms if single]
             Gm = min(Gs)
             nest = list(dict.fromkeys(d for t, _, _ in terms for d in nested[t]))
-            Kc = K - sum(self.fe_params[d] for d in nest) + len(nest)
+            Kc = (k + self._k_fe(ctx["fe_dof"], nest)
+                  - sum(self.fe_params[d] for d in nest) + len(nest))
             adj = _ratio(Gm, Gm - 1) * _ratio(N - 1, N - Kc)
             Vc = sum(sign * adj * (Binv @ meat[t] @ Binv) for t, sign, _ in terms)
             vc[f"CRV1:{req}"] = (Vc, Gm - 1)
@@ -636,7 +640,7 @@ class _InferenceMixin:
                 "assembly": self.assembly, "nested_in_cluster": nested,
                 "design_evaluated": getattr(self, "design_evaluated", None),
                 "stream": self.stream_choice, "singletons": dict(self.singletons), "fe_params": dict(self.fe_params),
-                "slope_redundancy": getattr(self, "slope_redundancy", []),
+                "slope_redundancy": getattr(self, "slope_redundancy", None) or [],
                 "seconds_total": round(time.time() - ctx["t0"], 2)}
         return HDFEResult(
             fml=fml, depvar=yname, coefnames=names, fe_names=self.fe, beta=beta, vcov=V,

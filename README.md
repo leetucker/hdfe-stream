@@ -100,9 +100,17 @@ regression, `y ~ x | worker_id`) and none (OLS with an intercept, `y ~ x`).
 Interactions with `^`
 (`firm_id^year`). Varying slopes on the streamed dimension in fixest syntax
 (`worker_id[t]`, `worker_id[t, t2]`). Connected components of the
-worker–firm graph are computed and reported, and the degrees-of-freedom
-correction counts the fixed-effect parameters that are actually identified
+worker–firm graph are computed and reported. The degrees-of-freedom
+correction either removes the redundant fixed-effect levels it can identify
 (`fe_dof="exact"`) or follows pyfixest's convention (`fe_dof="pyfixest"`).
+`"exact"` counts the connected components of each pair of fixed-effect
+dimensions and uses the pair with the most, plus one redundant level for each
+further dimension. With two fixed effects this is the exact number of
+identified parameters. With more it is an upper bound, so standard errors are
+conservative, and it does not depend on the order of the fixed effects in the
+formula. For clustered standard errors, fixed effects nested within the
+clusters are dropped from the count as in pyfixest, and a pair of two nested
+fixed effects is not used.
 Singleton observations, those alone in their level of some fixed effect, are
 dropped as in pyfixest, repeating until none is left (`fixef_rm="singleton"`,
 the default; `fixef_rm="none"` keeps them). Finding them costs a few extra

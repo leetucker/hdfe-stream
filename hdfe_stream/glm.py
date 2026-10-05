@@ -238,7 +238,7 @@ class StreamingGLM(StreamingHDFE):
                                        nb.get_num_threads())
                   + " ".join(f"{f}={v:,}" for f, v in self.n_levels.items()))
         nested = {t: self._nested_dims(t) for t in self.clusters}
-        ctx = {"k_fe": self._k_fe(fe_dof), "nested": nested, "default": default, "t0": t0}
+        ctx = {"k_fe": self._k_fe(fe_dof), "fe_dof": fe_dof, "nested": nested, "default": default, "t0": t0}
         self._layout()
         self._track_disk()
         return [self._fit_model(f"m{mi:03d}", model, ctx)

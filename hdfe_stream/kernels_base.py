@@ -111,15 +111,16 @@ def _uf_find(parent, x):
 
 
 @nb.njit(cache=True)
-def _nb_components(starts, codes, n_levels):
-    """Union-find over the first non-streamed dimension: levels that share
-    an fe[0] group are connected. Returns a root label per level."""
+def _nb_components(starts, codes, n_levels, col=0):
+    """Union-find over non-streamed dimension `col` (the first by default):
+    levels that share an fe[0] group are connected. Returns a root label
+    per level."""
     parent = np.arange(n_levels)
     for gi in range(len(starts) - 1):
         s, e = starts[gi], starts[gi + 1]
-        r0 = _uf_find(parent, codes[s, 0])
+        r0 = _uf_find(parent, codes[s, col])
         for i in range(s + 1, e):
-            r = _uf_find(parent, codes[i, 0])
+            r = _uf_find(parent, codes[i, col])
             if r != r0:
                 if r < r0:
                     parent[r0] = r
@@ -129,6 +130,21 @@ def _nb_components(starts, codes, n_levels):
     for x in range(n_levels):
         parent[x] = _uf_find(parent, x)
     return parent
+
+
+@nb.njit(cache=True)
+def _nb_union_pairs(parent, a, b, off):
+    """Union-find over the graph of two non-streamed dimensions: each cell
+    joins its level `a[i]` of the first with its level `b[i]` of the second,
+    stored at `off + b[i]`. `parent` carries over between chunks of cells."""
+    for i in range(len(a)):
+        ra = _uf_find(parent, a[i])
+        rb = _uf_find(parent, off + b[i])
+        if ra != rb:
+            if ra < rb:
+                parent[rb] = ra
+            else:
+                parent[ra] = rb
 
 
 @nb.njit(cache=True)

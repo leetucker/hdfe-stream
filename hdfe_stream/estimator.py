@@ -296,6 +296,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         self._run = _Run(self.base_dir, self.outputs == "auto")
         self.workdir = p = self._run.path
         self.disk_peak = 0
+        self.slope_redundancy = None    # found once per fit by _redundant_slopes
         self.paths = {
             "maps": {},
             "partitioned": str(p / "rows_partitioned"),
@@ -391,7 +392,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         gamma, info = self._solve()
         self._log("step 3: assembling normal equations")
         A = self._assemble(gamma)
-        ctx = {"k_fe": self._k_fe(fe_dof), "nested": nested, "default": default, "t0": t0,
+        ctx = {"k_fe": self._k_fe(fe_dof), "fe_dof": fe_dof, "nested": nested, "default": default, "t0": t0,
                "info": info}
         self._track_disk()
         # a loop, not a comprehension: before Python 3.12 a comprehension is a
@@ -402,13 +403,22 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
             results.append(self._estimate(f"m{mi:03d}", model, A, gamma, ctx))
         return results
 
-    def _k_fe(self, fe_dof):
-        """Fixed-effect parameters net of the redundant ones (see `fit`)."""
+    def _k_fe(self, fe_dof, nested=()):
+        """Fixed-effect parameters net of the redundant ones (see `fit`).
+
+        'exact' counts the components of the pair of dimensions with the
+        most (see `_components`), plus one per further dimension. `nested`
+        are dimensions whose levels a CRV1 request drops from K: a pair of
+        two of them is skipped, since its redundant levels are among levels
+        that are not counted, and without another pair nothing beyond
+        pyfixest's count is subtracted."""
         total = sum(self.fe_params.values())   # fe[0]: one per group, or its rank with slopes
         if len(self.fe) < 2:
             n_red = 0                   # one dimension, or none: nothing is redundant
         elif fe_dof == "exact":
-            n_red = self.n_components + len(self.o_fe) - 1
+            comps = max((c for (a, b), c in self.pair_components.items()
+                         if a not in nested or b not in nested), default=1)
+            n_red = comps + len(self.o_fe) - 1
         else:
             n_red = len(self.o_fe)
         return total - n_red - len(self._redundant_slopes())
@@ -428,7 +438,11 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                  ["firm_id", "worker_id+firm_id"]. Any column or 'a^b' combination works;
                  fe[0] itself and the other FE dimensions reuse their codes.
         fe_dof : 'exact' counts one redundant level per connected component of
-                 the (fe[0], fe[1]) graph, plus one per further dimension;
+                 the pair of FE dimensions with the most components, plus one
+                 per further dimension: exact with two dimensions, and with
+                 more a conservative count (never more redundant levels than
+                 there are) that does not depend on their order. For CRV1, a
+                 pair of FEs both nested in the clusters is not used.
                  'pyfixest' counts one per dimension beyond the first.
         Returns an HDFEResult, or an HDFEMulti when there are several models.
         """
