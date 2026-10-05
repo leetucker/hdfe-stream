@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1
 
 - **`fit.sample()` labels every singleton.** With three or more fixed effects
   that each had singleton levels, rows dropped only for the third or a later
@@ -11,6 +11,13 @@
   rather than a level of its own. For fixed effects this matches pyfixest;
   for clusters, where pyfixest raises an error, the row is dropped as it is
   for a null cluster. `sample()` reports these rows as `"missing"`.
+- **Polars 1.41 is excluded** from the supported versions. Its streaming join
+  panics (`called Option::unwrap() on a None value`) once a frame has about
+  130 columns, which a model with more than about 120 covariates reaches in
+  pass 0. Polars 1.40 and earlier, and 1.42 and later, are unaffected.
+- **A panic inside Polars is reported as a `RuntimeError`** that names the
+  Polars version, says it is a Polars bug, and suggests a fix, instead of a
+  bare `PanicException`.
 
 ## 0.2.0
 

@@ -138,6 +138,20 @@ def test_nothing_is_left_after_a_failure_in_the_solve(rich, workdir, monkeypatch
     assert run_dirs(workdir) == []
 
 
+def test_a_polars_panic_is_reported_as_a_polars_bug(rich, workdir, monkeypatch):
+    """A Rust panic inside Polars surfaces as a RuntimeError that names the
+    Polars version, and the run is still removed."""
+    import polars as pl
+
+    def boom(self):
+        raise pl.exceptions.PanicException("called `Option::unwrap()` on a `None` value")
+
+    monkeypatch.setattr(StreamingHDFE, "_solve", boom)
+    with pytest.raises(RuntimeError, match=f"Polars {pl.__version__}.*bug in Polars"):
+        feols_stream(FML, rich.src, workdir=workdir, verbose=False)
+    assert run_dirs(workdir) == []
+
+
 def test_nothing_is_left_after_an_estimation_error(rich, workdir):
     """All covariates collinear: the fit fails after files have been written."""
     with pytest.raises(ValueError):
