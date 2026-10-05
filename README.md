@@ -95,27 +95,24 @@ takes column names or Polars expressions instead of a formula string.
 
 ## Features
 
-**Fixed effects.** Any number of dimensions, including one (a within
-regression, `y ~ x | worker_id`) and none (OLS with an intercept, `y ~ x`).
-Interactions with `^`
-(`firm_id^year`). Varying slopes on the streamed dimension in fixest syntax
-(`worker_id[t]`, `worker_id[t, t2]`). Connected components of the
-worker–firm graph are computed and reported. The degrees-of-freedom
-correction either removes the redundant fixed-effect levels it can identify
-(`fe_dof="exact"`) or follows pyfixest's convention (`fe_dof="pyfixest"`).
-`"exact"` counts the connected components of each pair of fixed-effect
-dimensions and uses the pair with the most, plus one redundant level for each
-further dimension. With two fixed effects this is the exact number of
-identified parameters. With more it is an upper bound, so standard errors are
-conservative, and it does not depend on the order of the fixed effects in the
-formula. For clustered standard errors, fixed effects nested within the
-clusters are dropped from the count as in pyfixest, and a pair of two nested
-fixed effects is not used.
-Singleton observations, those alone in their level of some fixed effect, are
-dropped as in pyfixest, repeating until none is left (`fixef_rm="singleton"`,
-the default; `fixef_rm="none"` keeps them). Finding them costs a few extra
-passes over the fixed-effect columns and memory for the singleton levels, not
-for the rows.
+**Fixed effects.** Any number of dimensions, including one (a within regression,
+`y ~ x | worker_id`) and none (OLS with an intercept, `y ~ x`). Interactions
+with `^` (`firm_id^year`). Varying slopes on the streamed dimension in fixest
+syntax (`worker_id[t]`, `worker_id[t, t2]`). Connected components of the
+worker–firm graph are computed and reported. The degrees-of-freedom correction
+either removes the redundant fixed-effect levels it can identify
+(`fe_dof="exact"`, the default) or follows pyfixest's convention
+(`fe_dof="pyfixest"`). `"exact"` counts the connected components of each pair of
+fixed-effect dimensions and uses the pair with the most, plus one redundant
+level for each further dimension. With two fixed effects this is the exact
+number of identified parameters. With more it is an upper bound, so standard
+errors are conservative. For clustered standard errors, fixed effects nested
+within the clusters are dropped from the count as in pyfixest, and a pair of two
+nested fixed effects is not used. Singleton observations, those alone in their
+level of some fixed effect, are dropped as in pyfixest, repeating until none is
+left (`fixef_rm="singleton"`, the default; `fixef_rm="none"` keeps them).
+Finding them costs a few extra passes over the fixed-effect columns and memory
+for the singleton levels, not for the rows.
 
 **Covariates.** Transformations (`I(age**2)`, `log(x)`), categoricals (`C(x)`,
 string columns), interactions (`:`, `*`), event-study terms
