@@ -41,6 +41,12 @@ from .utils import _as_lazy, _row_wise, _segments, iter_group_chunks
 # `cell_sums`, which passes 1/1b consult before summing the variables per cell.
 
 
+def _not_nan(schema, cols):
+    """A NaN in a fixed-effect or cluster column is missing, as a null is
+    (and as in pyfixest): one test per floating-point column."""
+    return [pl.col(c).is_not_nan() for c in cols if schema[c].is_float()]
+
+
 class _PassesMixin:
 
     # ------------------------------------------------------------------ pass 0
@@ -70,7 +76,8 @@ class _PassesMixin:
         others_finite = [pl.col(tcol(j + 1)).is_finite() for j in range(len(self.slope_vars))]
         if self.weights is not None:
             others_finite.append(pl.col(WCOL).is_finite())
-        finite = [pl.col(vcol(j)).is_finite() for j in range(m)] + others_finite
+        others_finite += _not_nan(schema, src)
+        finite =[pl.col(vcol(j)).is_finite() for j in range(m)] + others_finite
         lf = (lf.select([pl.col(c) for c in src + self.keep] + wexpr + texpr + design)
                 .drop_nulls(src)
                 .filter(pl.all_horizontal(finite)))
@@ -454,6 +461,7 @@ class _PassesMixin:
         small tables of levels dropped for being singletons or separated."""
         usable = pl.all_horizontal(
             [pl.col(c).is_not_null() for c in src]
+            + _not_nan(raw.collect_schema(), src)
             + [self.var_exprs[nm].is_finite() for nm in self.var_names]
             + [pl.col(v).cast(pl.Float64).is_finite() for v in self.slope_vars]
             + ([self.weights.is_finite()] if self.weights is not None else [])

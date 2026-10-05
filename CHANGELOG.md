@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **`fit.sample()` labels every singleton.** With three or more fixed effects
+  that each had singleton levels, rows dropped only for the third or a later
+  dimension came back with `in_sample=True`, so the counts disagreed with
+  `n_obs` and the summary's singleton count. The fit itself was right. GLM
+  `"separation"` labels had the same fault.
+- **A NaN in a fixed-effect or cluster column is missing**, as a null is,
+  rather than a level of its own. For fixed effects this matches pyfixest;
+  for clusters, where pyfixest raises an error, the row is dropped as it is
+  for a null cluster. `sample()` reports these rows as `"missing"`.
+
 ## 0.2.0
 
 Changes to defaults, so results can differ from 0.1.0 without any change to

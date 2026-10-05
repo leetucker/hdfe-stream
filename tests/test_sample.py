@@ -84,6 +84,63 @@ def test_sample_says_which_rows_were_used_and_why_not(path, frame):
         assert res.diagnostics["singletons"]["observations"] == reasons["singleton"]
 
 
+def test_singletons_of_every_dimension_are_reasons():
+    """With three fixed effects, rows that are singletons only in the third
+    are dropped too: sample() agrees with the fit's counts and with the rows
+    left by dropping singletons to a fixed point."""
+    rng = np.random.default_rng(5)
+    n = 2000
+    df = pl.DataFrame({"y": rng.normal(size=n), "x": rng.normal(size=n),
+                       "a": np.r_[1000 + np.arange(5), rng.integers(0, 50, n - 5)],
+                       "b": np.r_[rng.integers(0, 40, 5), 1000 + np.arange(5),
+                                  rng.integers(0, 40, n - 10)],
+                       "c": np.r_[rng.integers(0, 30, n - 10), 1000 + np.arange(10)]})
+    keep = df.with_row_index("row_id")
+    while True:
+        before = keep.height
+        for d in ("a", "b", "c"):
+            keep = keep.filter(pl.len().over(d) > 1)
+        if keep.height == before:
+            break
+    with feols_stream("y ~ x | a + b + c", df, verbose=False) as res:
+        s = res.sample().collect()
+        assert res.diagnostics["singletons"]["levels"] == {"a": 5, "b": 5, "c": 10}
+        reasons = dict(s["dropped_because"].value_counts().iter_rows())
+        assert reasons["singleton"] == res.diagnostics["singletons"]["observations"]
+        assert s["in_sample"].sum() == res.n_obs
+        assert s.filter("in_sample")["row_id"].to_list() == keep["row_id"].to_list()
+
+
+def test_nan_in_a_fixed_effect_or_cluster_is_missing():
+    """A NaN in a floating-point fixed effect or cluster drops the row, as a
+    null does, rather than forming a level of its own. pyfixest drops the
+    fixed effects the same way."""
+    rng = np.random.default_rng(11)
+    n = 1000
+    df = pl.DataFrame({"y": rng.normal(size=n), "x": rng.normal(size=n),
+                       "a": rng.integers(0, 20, n).astype(float),
+                       "b": rng.integers(0, 10, n).astype(float),
+                       "g": rng.integers(0, 30, n).astype(float)})
+    df = df.with_columns(
+        pl.when(pl.int_range(n) < 20).then(float("nan")).otherwise(pl.col("a")).alias("a"),
+        pl.when(pl.int_range(n).is_between(20, 29)).then(float("nan"))
+          .otherwise(pl.col("g")).alias("g"))
+    with feols_stream("y ~ x | a + b", df, vcov={"CRV1": "g"}, verbose=False) as res:
+        s = res.sample().collect()
+        assert res.n_obs == n - 30 == s["in_sample"].sum()
+        assert s.filter(pl.col("dropped_because") == "missing")["row_id"].to_list() \
+            == list(range(30))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            # pyfixest refuses a missing cluster rather than dropping the
+            # row, so it gets the data without those rows; the NaN fixed
+            # effects it drops itself
+            ref = pf.feols("y ~ x | a + b", df.filter(pl.col("g").is_not_nan()).to_pandas(),
+                           vcov={"CRV1": "g"})
+        np.testing.assert_allclose(res.beta, ref.coef().to_numpy(), rtol=1e-8)
+        np.testing.assert_allclose(res.se, ref.se().to_numpy(), rtol=1e-6)
+
+
 def test_sample_is_the_rows_pyfixest_used(path, frame):
     with fit("y ~ x | w + f", path) as res:
         with warnings.catch_warnings():

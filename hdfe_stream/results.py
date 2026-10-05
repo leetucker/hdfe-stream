@@ -279,9 +279,10 @@ class HDFEResult:
         row_id           the row's position in the source (first column); the
                          same column `resid()` carries
         in_sample        True for the rows the model was estimated on
-        dropped_because  null for those rows; otherwise "missing" (a null or
-                         non-finite value in a fixed effect, cluster, outcome,
-                         covariate or weight), "singleton" (`fixef_rm`) or
+        dropped_because  null for those rows; otherwise "missing" (a null in any
+                         column the fit uses, a NaN in a fixed effect or
+                         cluster, or a non-finite outcome, covariate or
+                         weight), "singleton" (`fixef_rm`) or
                          "separation" (GLMs)
 
         Nothing is stored per row: the frame is the source plus an expression
@@ -318,7 +319,7 @@ class HDFEResult:
         flags = {}
         for kind, tables in spec["tables"].items():
             for d, table in tables.items():
-                flag = f"{PREFIX}{kind}_{len(flags)}"
+                flag = f"{PREFIX}{kind}_{len(flags.get(kind, []))}"
                 frame = frame.join(table.lazy().with_columns(pl.lit(True).alias(flag)),
                                    on=spec["fe_cols"][d], how="left")
                 flags.setdefault(kind, []).append(flag)
