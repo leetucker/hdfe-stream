@@ -11,7 +11,7 @@ import copy
 from typing import Any
 
 import numpy as np
-from scipy import stats
+from scipy import special
 
 from .results import HDFEMulti, HDFEResult
 
@@ -86,8 +86,8 @@ def _crit(obj, q):
     """Quantile for confidence intervals: normal for GLMs, t otherwise, as
     pyfixest has it."""
     if obj._method != "feols":
-        return stats.norm.ppf(q)
-    return stats.t.ppf(q, obj._df_t)
+        return special.ndtri(q)
+    return special.stdtrit(obj._df_t, q)
 
 
 def _fill_pyfixest(obj, r):
@@ -105,7 +105,7 @@ def _fill_pyfixest(obj, r):
     else:
         vtype, detail, clustervar, G = kind, kind, None, None
     glm = method != "feols"
-    crit = stats.norm.ppf(0.975) if glm else stats.t.ppf(0.975, r.df_t)
+    crit = special.ndtri(0.975) if glm else special.stdtrit(r.df_t, 0.975)
     obj.__dict__.update({
         "_fml": r.fml, "_depvar": r.depvar,
         # the FE string as written in the formula, without spaces: maketables
@@ -115,7 +115,7 @@ def _fill_pyfixest(obj, r):
                                  else " + ".join(r.fe_names)) if r.fe_names else None),
         "_has_fixef": bool(r.fe_names), "_coefnames": list(r.coefnames), "_k": len(r.coefnames),
         "_beta_hat": np.asarray(r.beta), "_se": se, "_tstat": t,
-        "_pvalue": 2 * (stats.norm.sf(np.abs(t)) if glm else stats.t.sf(np.abs(t), r.df_t)),
+        "_pvalue": 2 * (special.ndtr(-np.abs(t)) if glm else special.stdtr(r.df_t, -np.abs(t))),
         "_conf_int": np.vstack([r.beta - crit * se, r.beta + crit * se]),
         "_vcov": r.vcov, "_vcov_type": vtype, "_vcov_type_detail": detail,
         "_clustervar": clustervar, "_G": G, "_df_t": r.df_t,

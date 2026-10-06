@@ -652,8 +652,8 @@ class LeaveOutComponents:
                 f"{d['psi']} after pruning to the leave-one-out connected set")
         wide = self.se is not None
         confidence = self.diagnostics.get("confidence", 0.95)
-        from scipy.stats import norm
-        z = float(norm.ppf(0.5 + confidence / 2.0))
+        from scipy.special import ndtri
+        z = float(ndtri(0.5 + confidence / 2.0))
         header = f"{'component':<20}{'plug-in':>12}{'bias':>12}{'leave-out':>12}"
         if wide:
             header += f"{'se':>11}{f'{confidence:.0%} interval':>26}"

@@ -34,19 +34,23 @@ from __future__ import annotations
 import numpy as np
 
 
+def _norm_pdf(b: float) -> float:
+    return np.exp(-0.5 * b * b) / np.sqrt(2.0 * np.pi)
+
+
 def am_cdf(z: float, kappa: float) -> float:
     """P(rho(kappa) <= z) for q = 1."""
-    from scipy import integrate, stats
+    from scipy import integrate, special
 
     if z <= 0:
         return 0.0
     if kappa <= 0:
-        return float(2.0 * stats.norm.cdf(z) - 1.0)
+        return float(2.0 * special.ndtr(z) - 1.0)
     c = 1.0 / kappa
 
     def integrand(b):
         inner = np.sqrt(max((z - b) * (z + b + 2.0 * c), 0.0))
-        return 2.0 * stats.norm.pdf(b) * (2.0 * stats.norm.cdf(inner) - 1.0)
+        return 2.0 * _norm_pdf(b) * (2.0 * special.ndtr(inner) - 1.0)
 
     value, _err = integrate.quad(integrand, 0.0, z, epsabs=1e-13, epsrel=1e-12,
                                  limit=200)
@@ -55,12 +59,12 @@ def am_cdf(z: float, kappa: float) -> float:
 
 def am_critical_value(kappa: float, alpha: float = 0.05) -> float:
     """z_{alpha, kappa} for q = 1: between sqrt(chi2_1) and sqrt(chi2_2)."""
-    from scipy import optimize, stats
+    from scipy import optimize, special
 
-    lo = float(np.sqrt(stats.chi2.ppf(1.0 - alpha, 1)))
+    lo = float(np.sqrt(special.chdtri(1, alpha)))
     if kappa <= 0:
         return lo
-    hi = float(np.sqrt(stats.chi2.ppf(1.0 - alpha, 2)))
+    hi = float(np.sqrt(special.chdtri(2, alpha)))
     target = 1.0 - alpha
     # the quantile rises with kappa from lo to hi; bracket just outside both
     return float(optimize.brentq(lambda z: am_cdf(z, kappa) - target,

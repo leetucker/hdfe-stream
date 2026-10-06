@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 
 import numpy as np
 import polars as pl
-from scipy import stats
+from scipy import special
 
 from ._columns import PREFIX, check_source
 from ._types import Vcov
@@ -107,7 +107,7 @@ class HDFEResult:
         degrees of freedom, or the normal for GLMs, as in pyfixest."""
         se = self.se
         t = np.divide(self.beta, se, out=np.full_like(self.beta, np.nan), where=se > 0)
-        p = 2 * (stats.norm.sf(np.abs(t)) if self.family else stats.t.sf(np.abs(t), self.df_t))
+        p = 2 * (special.ndtr(-np.abs(t)) if self.family else special.stdtr(self.df_t, -np.abs(t)))
         return pl.DataFrame({
             "Coefficient": self.coefnames,
             "Estimate": self.beta,
