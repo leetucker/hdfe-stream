@@ -74,57 +74,6 @@ def _nb_diag_sl(starts, codes, n, st, Ainv, offs, diag):
 
 
 @nb.njit(parallel=True, cache=True)
-def _nb_emit_triples_sl(starts, codes, n, st, Ainv, offs, doffs, g0, g1, toff, R, C, V, dense):
-    """As _nb_emit_triples, with each group's correction  -U Ainv U'  where U
-    holds the per-level sums of w t (q x p)."""
-    D, p = codes.shape[1], st.shape[1]
-    nt = dense.shape[0]
-    G = g1 - g0
-    for t in nb.prange(nt):
-        dn = dense[t]
-        for gi in range(g0 + t * G // nt, g0 + (t + 1) * G // nt):
-            s, e = starts[gi], starts[gi + 1]
-            pp = toff[gi - g0]
-            lev = np.empty((e - s) * D, np.int64)
-            dlev = np.empty((e - s) * D, np.int64)
-            u = np.zeros(((e - s) * D, p))
-            q = 0
-            for i in range(s, e):
-                for d in range(D):
-                    a = offs[d] + codes[i, d]
-                    for d2 in range(D):
-                        if doffs[d] >= 0 and doffs[d2] >= 0:
-                            dn[doffs[d] + codes[i, d], doffs[d2] + codes[i, d2]] += n[i]
-                        else:
-                            R[pp] = a
-                            C[pp] = offs[d2] + codes[i, d2]
-                            V[pp] = n[i]
-                            pp += 1
-                    r = 0
-                    while r < q and lev[r] != a:
-                        r += 1
-                    if r == q:
-                        lev[q] = a
-                        dlev[q] = doffs[d] + codes[i, d] if doffs[d] >= 0 else -1
-                        q += 1
-                    for c in range(p):
-                        u[r, c] += st[i, c]
-            for r1 in range(q):
-                for r2 in range(q):
-                    v = 0.0
-                    for c1 in range(p):
-                        for c2 in range(p):
-                            v -= u[r1, c1] * Ainv[gi, c1, c2] * u[r2, c2]
-                    if dlev[r1] >= 0 and dlev[r2] >= 0:
-                        dn[dlev[r1], dlev[r2]] += v
-                    else:
-                        R[pp] = lev[r1]
-                        C[pp] = lev[r2]
-                        V[pp] = v
-                        pp += 1
-
-
-@nb.njit(parallel=True, cache=True)
 def _nb_stream_matvec_sl(P, starts, codes, n, st, Ainv, offs, acc):
     """(D_o' W M_0 D_o) P with the slope projection, streamed."""
     nt, k, D, p = acc.shape[0], P.shape[1], codes.shape[1], st.shape[1]

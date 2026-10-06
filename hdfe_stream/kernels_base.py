@@ -147,90 +147,173 @@ def _nb_union_pairs(parent, a, b, off):
                 parent[ra] = rb
 
 
+# The explicit S = D_o' M_0 D_o is built directly in CSR, one row (level) at
+# a time. Row r collects, from every fe[0] group g that contains level r,
+#     sum over g's cells with level r of  n a'   -   u_r' Ainv_g U_g'
+# where a is a cell's level indicator and U_g holds the group's per-level
+# sums of the projection's regressors: without slopes those are the cell
+# counts and Ainv_g = 1 / N_g. A first pass counts each row's distinct
+# columns so S is allocated once at its final size; a second fills it.
+
 @nb.njit(cache=True)
-def _nb_group_levels(s, e, codes, offs, doffs, lev, dlev, u, n):
-    """Distinct levels touched by one group, with their observation counts.
-    dlev[r] is the level's index in the dense block (-1 if not dense).
-    Returns (number of distinct levels, number of those that are dense)."""
+def _nb_level_groups(starts, codes, offs, L):
+    """For each level, the fe[0] groups that contain it, ascending: groups of
+    level a are grp[ptr[a]:ptr[a+1]]."""
     D = codes.shape[1]
-    q = 0
-    qd = 0
-    for i in range(s, e):
-        for d in range(D):
-            a = offs[d] + codes[i, d]
-            r = 0
-            while r < q and lev[r] != a:
-                r += 1
-            if r == q:
-                lev[q] = a
-                dlev[q] = doffs[d] + codes[i, d] if doffs[d] >= 0 else -1
-                if dlev[q] >= 0:
-                    qd += 1
-                u[q] = 0.0
-                q += 1
-            u[r] += n[i]
-    return q, qd
+    G = len(starts) - 1
+    mark = np.full(L, -1, np.int64)
+    ptr = np.zeros(L + 1, np.int64)
+    for g in range(G):
+        for i in range(starts[g], starts[g + 1]):
+            for d in range(D):
+                a = offs[d] + codes[i, d]
+                if mark[a] != g:
+                    mark[a] = g
+                    ptr[a + 1] += 1
+    for a in range(L):
+        ptr[a + 1] += ptr[a]
+    grp = np.empty(ptr[L], np.int32)
+    fill = ptr[:-1].copy()
+    mark[:] = -1
+    for g in range(G):
+        for i in range(starts[g], starts[g + 1]):
+            for d in range(D):
+                a = offs[d] + codes[i, d]
+                if mark[a] != g:
+                    mark[a] = g
+                    grp[fill[a]] = g
+                    fill[a] += 1
+    return ptr, grp
 
 
 @nb.njit(parallel=True, cache=True)
-def _nb_count_triples(starts, codes, n, offs, doffs, g0, g1, out):
-    """Number of COO triples each group contributes to the explicit S (pairs
-    where both levels are dense go to the dense block instead)."""
-    D = codes.shape[1]
-    Dd = 0
-    for d in range(D):
-        if doffs[d] >= 0:
-            Dd += 1
-    for gi in nb.prange(g0, g1):
-        s, e = starts[gi], starts[gi + 1]
-        lev = np.empty((e - s) * D, np.int64)
-        dlev = np.empty((e - s) * D, np.int64)
-        u = np.empty((e - s) * D)
-        q, qd = _nb_group_levels(s, e, codes, offs, doffs, lev, dlev, u, n)
-        out[gi - g0] = (e - s) * (D * D - Dd * Dd) + q * q - qd * qd
+def _nb_row_work(starts, lptr, lgrp, out):
+    """Cells scanned to build each row: the sizes of the groups it is in."""
+    for r in nb.prange(len(lptr) - 1):
+        w = 0
+        for k in range(lptr[r], lptr[r + 1]):
+            g = lgrp[k]
+            w += starts[g + 1] - starts[g]
+        out[r] = w
 
 
 @nb.njit(parallel=True, cache=True)
-def _nb_emit_triples(starts, codes, n, offs, doffs, g0, g1, toff, R, C, V, dense):
-    """Each group g adds  sum_cells n a a'  -  u u' / N_g  to S, where a is the
-    cell's level indicator and u the group's level counts. Group g writes its
-    sparse entries to its own slice [toff[g], toff[g+1]); entries between two
-    dense (small-dimension) levels go to the per-thread dense[t] block."""
+def _nb_row_nnz(starts, codes, offs, lptr, lgrp, work, wide, bounds, out):
+    """Distinct columns of each row: every level of every group the row's
+    level is in. Rows are split into blocks [bounds[k], bounds[k+1]) of
+    similar work; rows with work > `wide` (levels of small dimensions, which
+    are in most groups) mark columns in a dense flag array instead."""
     D = codes.shape[1]
-    nt = dense.shape[0]
-    G = g1 - g0
-    for t in nb.prange(nt):
-        dn = dense[t]
-        for gi in range(g0 + t * G // nt, g0 + (t + 1) * G // nt):
-            s, e = starts[gi], starts[gi + 1]
-            p = toff[gi - g0]
-            lev = np.empty((e - s) * D, np.int64)
-            dlev = np.empty((e - s) * D, np.int64)
-            u = np.empty((e - s) * D)
-            q, qd = _nb_group_levels(s, e, codes, offs, doffs, lev, dlev, u, n)
-            Ng = 0.0
-            for i in range(s, e):
-                Ng += n[i]
-                for d in range(D):
-                    a = offs[d] + codes[i, d]
-                    for d2 in range(D):
-                        if doffs[d] >= 0 and doffs[d2] >= 0:
-                            dn[doffs[d] + codes[i, d], doffs[d2] + codes[i, d2]] += n[i]
+    L = len(lptr) - 1
+    for k in nb.prange(len(bounds) - 1):
+        mark = np.full(L, -1, np.int32)
+        flag = np.zeros(0, np.uint8)
+        for r in range(bounds[k], bounds[k + 1]):
+            cnt = 0
+            if work[r] > wide:
+                if len(flag) == 0:
+                    flag = np.zeros(L, np.uint8)
+                else:
+                    flag[:] = 0
+                for j in range(lptr[r], lptr[r + 1]):
+                    g = lgrp[j]
+                    for i in range(starts[g], starts[g + 1]):
+                        for d in range(D):
+                            flag[offs[d] + codes[i, d]] = 1
+                for c in range(L):
+                    cnt += flag[c]
+            else:
+                for j in range(lptr[r], lptr[r + 1]):
+                    g = lgrp[j]
+                    for i in range(starts[g], starts[g + 1]):
+                        for d in range(D):
+                            c = offs[d] + codes[i, d]
+                            if mark[c] != r:
+                                mark[c] = r
+                                cnt += 1
+            out[r] = cnt
+
+
+@nb.njit(parallel=True, cache=True)
+def _nb_row_fill(starts, codes, n, st, Ainv, Ng, offs, lptr, lgrp, work, wide, bounds,
+                 indptr, indices, data):
+    """Fill the rows of S (see above), each with sorted column indices.
+
+    Without slopes `Ainv` is empty and the correction divides by Ng rather
+    than multiplying by 1 / Ng, so that it cancels exactly where it should
+    (a worker who never moves). Wide rows (see `_nb_row_nnz`) accumulate in a
+    dense array and come out sorted; the rest accumulate in place and are
+    sorted at the end."""
+    D, p = codes.shape[1], st.shape[1]
+    L = len(lptr) - 1
+    plain = Ainv.shape[0] == 0
+    for k in nb.prange(len(bounds) - 1):
+        mark = np.full(L, -1, np.int32)
+        pos = np.empty(L, np.int32)
+        acc = np.zeros(0)
+        flag = np.zeros(0, np.uint8)
+        ur = np.empty(p)
+        w = np.empty(p)
+        for r in range(bounds[k], bounds[k + 1]):
+            dr = 0
+            while dr + 1 < D and offs[dr + 1] <= r:
+                dr += 1
+            lr = r - offs[dr]
+            p0 = indptr[r]
+            dense = work[r] > wide
+            if dense and len(acc) == 0:
+                acc = np.zeros(L)
+                flag = np.zeros(L, np.uint8)
+            q = 0
+            for j in range(lptr[r], lptr[r + 1]):
+                g = lgrp[j]
+                s, e = starts[g], starts[g + 1]
+                ur[:] = 0.0
+                for i in range(s, e):
+                    if codes[i, dr] == lr:
+                        for c in range(p):
+                            ur[c] += st[i, c]
+                if plain:
+                    w[0] = ur[0] / Ng[g]
+                else:
+                    for c1 in range(p):
+                        v = 0.0
+                        for c2 in range(p):
+                            v += Ainv[g, c1, c2] * ur[c2]
+                        w[c1] = v
+                for i in range(s, e):
+                    v = 0.0
+                    for c in range(p):
+                        v -= st[i, c] * w[c]
+                    if codes[i, dr] == lr:
+                        v += n[i]
+                    for d in range(D):
+                        col = offs[d] + codes[i, d]
+                        if dense:
+                            acc[col] += v
+                            flag[col] = 1
+                        elif mark[col] != r:
+                            mark[col] = r
+                            pos[col] = q
+                            indices[p0 + q] = col
+                            data[p0 + q] = v
+                            q += 1
                         else:
-                            R[p] = a
-                            C[p] = offs[d2] + codes[i, d2]
-                            V[p] = n[i]
-                            p += 1
-            for r1 in range(q):
-                for r2 in range(q):
-                    v = -u[r1] * u[r2] / Ng
-                    if dlev[r1] >= 0 and dlev[r2] >= 0:
-                        dn[dlev[r1], dlev[r2]] += v
-                    else:
-                        R[p] = lev[r1]
-                        C[p] = lev[r2]
-                        V[p] = v
-                        p += 1
+                            data[p0 + pos[col]] += v
+            if dense:
+                for c in range(L):
+                    if flag[c]:
+                        indices[p0 + q] = c
+                        data[p0 + q] = acc[c]
+                        q += 1
+                        acc[c] = 0.0
+                        flag[c] = 0
+            else:
+                order = np.argsort(indices[p0:p0 + q])
+                ci = indices[p0:p0 + q][order]
+                cv = data[p0:p0 + q][order]
+                indices[p0:p0 + q] = ci
+                data[p0:p0 + q] = cv
 
 
 @nb.njit(parallel=True, cache=True)

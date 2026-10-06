@@ -160,8 +160,6 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
          512 MB gets to 20s but holds 669 MB.
     cells_in_memory : load the identifying cells into RAM instead of
          memory-mapping them.
-    triple_budget, dense_max_levels : tuning for building S (see
-         `_build_explicit`).
     n_threads : numba threads (default: all available).
     verbose : emit progress messages (default True).
     logger : a logging.Logger; if given, progress messages go to it (at
@@ -185,7 +183,6 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                  tol: float = 1e-10, maxiter: int = 5000, batch_rows: int = 2_000_000,
                  row_group_size: int = 500_000, n_buckets: int | None = None,
                  rows_per_bucket: int = 20_000_000, cells_in_memory: bool = False,
-                 triple_budget: int = 5_000_000, dense_max_levels: int = 1000,
                  rhs_block: int = 8, assembly: str = "auto", max_s_gb: float | None = None,
                  collin_tol: float = 1e-10, collin_tol_rel: float = 1e-6,
                  n_threads: int | None = None, scratch_mb: int = 32,
@@ -275,8 +272,6 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         self.scratch_mb = int(scratch_mb)
         self.n_buckets, self.rows_per_bucket = n_buckets, rows_per_bucket
         self.cells_in_memory = cells_in_memory
-        self.triple_budget = triple_budget
-        self.dense_max_levels = dense_max_levels
         self.rhs_block = max(1, int(rhs_block))
         self.max_s_gb = max_s_gb if max_s_gb is not None else 0.25 * _phys_mem_gb()
         self.collin_tol, self.collin_tol_rel = collin_tol, collin_tol_rel

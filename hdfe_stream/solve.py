@@ -8,10 +8,10 @@ import numba as nb
 import numpy as np
 import scipy.sparse as sp
 
-from .kernels_base import (_nb_count_triples, _nb_csr_matmat,
-                           _nb_emit_triples, _nb_rhs, _nb_stream_matvec)
-from .kernels_slopes import (_nb_emit_triples_sl, _nb_rhs_sl,
-                             _nb_stream_matvec_sl)
+from .kernels_base import (_nb_csr_matmat, _nb_level_groups, _nb_rhs,
+                           _nb_row_fill, _nb_row_nnz, _nb_row_work,
+                           _nb_stream_matvec)
+from .kernels_slopes import _nb_rhs_sl, _nb_stream_matvec_sl
 from .report import _warn
 from .utils import _scatter
 
@@ -47,7 +47,7 @@ _RHS_ZERO_TOL = 1e-11
 # Reads, set by _PassesMixin: the identifying cells (starts, codes, n, sums,
 # and st/ainv/cmat with varying slopes) plus n_levels, offs, obs, comp, diag.
 # From StreamingHDFE: solver, precond, tol, maxiter, rhs_block, max_s_gb,
-# triple_budget, dense_max_levels, paths.
+# paths.
 #
 # Sets nothing that the other mixins read: _solve() returns Gamma and its
 # solver-info dict to the caller in estimator.py.
@@ -116,81 +116,49 @@ class _SolveMixin:
         return lambda R: R * dinv[:, None]
 
     def _build_explicit(self):
-        """Form S = D_o' M_0 D_o as a CSR matrix in one parallel pass.
+        """Form S = D_o' M_0 D_o as a CSR matrix, row by row in parallel.
 
-        Entries between two levels of *small* dimensions (at most
-        `dense_max_levels` levels each, e.g. years) are accumulated in a dense
-        block; everything else is emitted as COO triples. Groups are processed
-        in chunks whose triples fit in max(triple_budget, nnz(S so far)); each
-        chunk is converted to CSR (summing duplicates) and added to S, which
-        keeps the total merge cost linear in the number of triples. Raises
-        _STooLarge as soon as S exceeds `max_s_gb`.
+        Each row's columns are counted first, so S is allocated once at its
+        final size, and nothing larger than S is held while it is built
+        besides an index of the groups each level is in. Raises _STooLarge,
+        before allocating S, if it would exceed `max_s_gb`.
         """
-        off, L = self._offsets()
-        G = len(self.starts) - 1
-        doffs, nd = [], 0
-        for f in self.o_fe:
-            if self.n_levels[f] <= self.dense_max_levels and nd + self.n_levels[f] <= 4096:
-                doffs.append(nd)
-                nd += self.n_levels[f]
-            else:
-                doffs.append(-1)
-        doffs = np.array(doffs, np.int64)
-        nt = nb.get_num_threads()
-        dense = np.zeros((nt, max(nd, 1), max(nd, 1)))
-        cap = self.max_s_gb * 1e9
-
-        def nbytes(S):
-            return S.data.nbytes + S.indices.nbytes + S.indptr.nbytes
-
-        S = sp.csr_matrix((L, L))
+        _, L = self._offsets()
         t0 = time.time()
-        n_triples = 0
-        block = 2_000_000                  # groups per counting block
-        for b0 in range(0, G, block):
-            b1 = min(G, b0 + block)
-            cnt = np.empty(b1 - b0, np.int64)
-            _nb_count_triples(self.starts, self.codes, self.n, self.offs, doffs, b0, b1, cnt)
-            cum = np.concatenate(([0], np.cumsum(cnt)))
-            g0 = b0
-            while g0 < b1:
-                budget = max(self.triple_budget, S.nnz)
-                base = cum[g0 - b0]
-                g1 = b0 + int(np.searchsorted(cum, base + budget, side="right")) - 1
-                g1 = min(max(g1, g0 + 1), b1)
-                toff = cum[g0 - b0:g1 - b0 + 1] - base
-                mt = int(toff[-1])
-                R = np.empty(mt, np.int32)
-                C = np.empty(mt, np.int32)
-                V = np.empty(mt)
-                if self.slope_vars:
-                    _nb_emit_triples_sl(self.starts, self.codes, self.n, self.st, self.ainv,
-                                        self.offs, doffs, g0, g1, toff, R, C, V, dense)
-                else:
-                    _nb_emit_triples(self.starts, self.codes, self.n, self.offs, doffs,
-                                     g0, g1, toff, R, C, V, dense)
-                if mt:
-                    S = S + sp.coo_matrix((V, (R, C)), shape=(L, L)).tocsr()
-                del R, C, V
-                n_triples += mt
-                g0 = g1
-                if nbytes(S) > cap:
-                    raise _STooLarge(
-                        f"S exceeded max_s_gb={self.max_s_gb:.1f} after {g1:,} of {G:,} "
-                        f"groups ({S.nnz:,} nonzeros)")
-        if nd:
-            dsum = dense.sum(axis=0)
-            gidx = np.concatenate([off[f] + np.arange(self.n_levels[f])
-                                   for f, d in zip(self.o_fe, doffs) if d >= 0])
-            rr, cc = np.nonzero(dsum)
-            S = S + sp.coo_matrix((dsum[rr, cc], (gidx[rr], gidx[cc])), shape=(L, L)).tocsr()
-        S.sum_duplicates()
-        S.sort_indices()
-        mb = nbytes(S) / 1e6
-        self._log(f"  explicit S: {L:,} x {L:,}, nnz {S.nnz:,} ({mb:,.0f} MB), "
-                           f"{n_triples:,} triples + {nd}x{nd} dense block, "
-                           f"{time.time()-t0:.1f}s")
-        return S, {"S_nnz": int(S.nnz), "S_mb": round(mb, 1),
+        lptr, lgrp = _nb_level_groups(self.starts, self.codes, self.offs, L)
+        work = np.empty(L, np.int64)
+        _nb_row_work(self.starts, lptr, lgrp, work)
+        # blocks of rows with similar work, several per thread to balance them
+        cum = np.cumsum(work)
+        cuts = np.searchsorted(cum, np.linspace(0, cum[-1], 16 * nb.get_num_threads() + 1)[1:-1])
+        bounds = np.unique(np.concatenate(([0], cuts, [L]))).astype(np.int64)
+        wide = max(L // (4 * self.codes.shape[1]), 1)
+        rnnz = np.empty(L, np.int64)
+        _nb_row_nnz(self.starts, self.codes, self.offs, lptr, lgrp, work, wide, bounds, rnnz)
+        nnz = int(rnnz.sum())
+        idx = np.int32 if max(nnz, L) < 2**31 else np.int64
+        nbytes = nnz * (8 + np.dtype(idx).itemsize) + (L + 1) * np.dtype(idx).itemsize
+        if nbytes > self.max_s_gb * 1e9:
+            raise _STooLarge(f"S would take {nbytes / 1e9:.3g} GB > max_s_gb="
+                             f"{self.max_s_gb:.3g} ({nnz:,} nonzeros)")
+        indptr = np.zeros(L + 1, idx)
+        np.cumsum(rnnz, out=indptr[1:])
+        del rnnz, cum
+        indices = np.empty(nnz, idx)
+        data = np.empty(nnz)
+        if self.slope_vars:
+            st, ainv, ng = self.st, self.ainv, np.zeros(0)
+        else:
+            st, ainv = self.n.reshape(-1, 1), np.zeros((0, 1, 1))
+            ng = np.add.reduceat(self.n, self.starts[:-1])
+        _nb_row_fill(self.starts, self.codes, self.n, st, ainv, ng, self.offs, lptr, lgrp,
+                     work, wide, bounds, indptr, indices, data)
+        S = sp.csr_matrix((data, indices, indptr), shape=(L, L), copy=False)
+        S.has_sorted_indices = True
+        mb = nbytes / 1e6
+        self._log(f"  explicit S: {L:,} x {L:,}, nnz {nnz:,} ({mb:,.0f} MB), "
+                  f"{time.time()-t0:.1f}s")
+        return S, {"S_nnz": nnz, "S_mb": round(mb, 1),
                    "S_build_seconds": round(time.time() - t0, 2)}
 
     def _make_block_solver(self):

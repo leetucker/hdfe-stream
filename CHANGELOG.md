@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.2 (in progress)
+
+- **The explicit solver builds its matrix faster and in less memory.** The
+  reduced matrix S is now written directly in compressed form, one row at a
+  time, instead of being assembled from chunks of coordinate triples that
+  were merged with scipy. Each row's size is counted first, so S is allocated
+  once and nothing larger than S is held while it is built; `max_s_gb` is
+  checked before S is allocated rather than partway through. Estimates are
+  unchanged up to rounding.
+- **Removed `triple_budget` and `dense_max_levels`** from `StreamingHDFE`. They
+  tuned the old way of building S and have no counterpart in the new one.
+
 ## 0.2.1
 
 - **`fe_dof="exact"` no longer depends on the order of the fixed effects.**
