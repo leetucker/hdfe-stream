@@ -100,7 +100,7 @@ class _SolveMixin:
             rel = np.linalg.norm(R, axis=0) / bnorm
             active = rel > self.tol
             if self.verbose and (it % 25 == 0 or not active.any()):
-                self._log(f"  CG iter {it}: max rel. residual {rel.max():.2e}")
+                self._debug(f"  CG iter {it}: max rel. residual {rel.max():.2e}")
             if not active.any():
                 break
             Z = precond(R)

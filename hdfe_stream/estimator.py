@@ -163,7 +163,8 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
     n_threads : numba threads (default: all available).
     verbose : emit progress messages (default True).
     logger : a logging.Logger; if given, progress messages go to it (at
-         `log_level`, default INFO) as they happen, and warnings (dropped
+         `log_level`, default INFO) as they happen, per-iteration CG residuals
+         go to it at DEBUG (and are not printed without a logger), and warnings (dropped
          collinear variables, non-convergence, negative variances) go to
          logger.warning. Default: print to stdout / warnings module.
     models : list of {"fml", "y", "x"} dicts selecting which of the variables
@@ -305,6 +306,13 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
 
     def _log(self, msg):
         _log(self.verbose, msg, self.logger, self.log_level)
+
+    def _debug(self, msg):
+        """Fine-grained progress (e.g. per-iteration CG residuals): a DEBUG
+        record, so it shows only if the logger is enabled for DEBUG. Never
+        printed when there is no logger."""
+        if self.logger is not None:
+            _log(self.verbose, msg, self.logger, logging.DEBUG)
 
     def _track_disk(self):
         self.disk_peak = max(self.disk_peak, _dir_bytes(self.workdir))

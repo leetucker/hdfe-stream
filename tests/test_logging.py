@@ -109,6 +109,24 @@ def test_log_level_is_configurable(rich, workdir, logger):
     fit.cleanup()
 
 
+def test_cg_iterations_are_debug_only(rich, workdir, logger):
+    """Per-iteration CG residuals are DEBUG records under the default INFO
+    log_level, so a logger at INFO drops them; without a logger they never print."""
+    log, recorder = logger
+    with contextlib.redirect_stdout(io.StringIO()):
+        fit = feols_stream("log_earn ~ age_squared | worker_id + firm_id", rich.src,
+                           workdir=workdir, logger=log)
+    assert any("CG iter" in m for m in recorder.levels("DEBUG"))
+    assert not any("CG iter" in m for m in recorder.levels("INFO"))
+    fit.cleanup()
+
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        feols_stream("log_earn ~ age_squared | worker_id + firm_id", rich.src,
+                     workdir=workdir).cleanup()
+    assert "CG iter" not in stdout.getvalue()
+
+
 def test_summary_is_one_record(rich, workdir, logger):
     """The summary is a multi-line report; it goes out as a single record so a
     log aggregator does not interleave it with other lines."""
