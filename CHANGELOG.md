@@ -5,6 +5,17 @@
 - **Polars 2.0 support.** `fit.sample()` returns the source's rows in the source's
   order again. Polars 2.0 collects with the streaming engine by default, whose
   joins do not keep row order unless asked, so the rows came back shuffled.
+- **Dropping singletons no longer inflates memory with a wide design.** The
+  dropped levels were anti-joined after the design was evaluated, so the
+  streaming join buffered every design column; with 503 indicators that took
+  the first scan to about 14 GB under Polars 2.0. The rows are now dropped from
+  the source columns before the design is evaluated, and the peak is back to
+  about 8.6 GB. The rows dropped are the same.
+- **Sorting the buckets takes less memory under Polars 2.0.** Each bucket is
+  sorted with Polars' in-memory engine and then written, rather than sunk
+  through the streaming engine, whose sort peaked about 1.5x higher. With a
+  narrow design in one bucket (8 covariates, 8.5 million rows) the peak falls
+  from 4.6 GB to 3.3 GB; the sort is also faster with a wide design.
 - **The explicit solver builds its matrix faster and in less memory.** The
   reduced matrix S is now written directly in compressed form, one row at a
   time, instead of being assembled from chunks of coordinate triples that

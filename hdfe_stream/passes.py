@@ -87,9 +87,12 @@ class _PassesMixin:
             others_finite.append(pl.col(WCOL).is_finite())
         others_finite += _not_nan(schema, src)
         finite =[pl.col(vcol(j)).is_finite() for j in range(m)] + others_finite
-        lf = (lf.select([pl.col(c) for c in src + self.keep] + wexpr + texpr + design)
-                .drop_nulls(src)
-                .filter(pl.all_horizontal(finite)))
+
+        def evaluate(frame):
+            return (frame.select([pl.col(c) for c in src + self.keep] + wexpr + texpr + design)
+                         .drop_nulls(src)
+                         .filter(pl.all_horizontal(finite)))
+        lf = evaluate(source)
         # Row restrictions, in order: singletons, then whatever the subclass
         # drops (separation, for GLMs), which sees the rows left by the first.
         restricts = []
@@ -98,6 +101,16 @@ class _PassesMixin:
             if restrict is not None:
                 lf = restrict(lf)
                 restricts.append(restrict)
+        if restricts:
+            # The same rows, with the restrictions applied to the source
+            # before the design is evaluated: they are anti-joins on the
+            # fixed-effect columns, and a streaming join of the evaluated
+            # design buffers every design column (with 500 indicators, the
+            # scan below peaked near 11 GB this way instead of 4 GB).
+            narrow = source
+            for restrict in restricts:
+                narrow = restrict(narrow)
+            lf = evaluate(narrow)
         self._record_sample(raw, src)
 
         # One scan for counts, means, weight checks and (if the streamed
@@ -243,12 +256,17 @@ class _PassesMixin:
             bucket = pl.scan_parquet(str(srcdir / "*.parquet"))
             if raw_extra is not None:
                 bucket = bucket.with_columns(design).drop(raw_extra)
-            (bucket
+            # A sort holds the whole bucket anyway, so it is collected and
+            # written rather than sunk: Polars 2.0's streaming sort peaks at
+            # about 1.5x the memory of its in-memory engine.
+            sorted_bucket = (bucket
                .sort(sort_by)
                .with_columns((new_group.cast(pl.UInt32).cum_sum() - 1 + offset)
                              .cast(pl.UInt32).alias(GCODE))
-               .sink_parquet(out, row_group_size=self.rgs))
-            offset = pl.scan_parquet(out).select(pl.col(GCODE).max()).collect().item() + 1
+               .collect(engine="in-memory"))
+            sorted_bucket.write_parquet(out, row_group_size=self.rgs)
+            offset = sorted_bucket[GCODE].max() + 1
+            del sorted_bucket
             self.paths["rows"].append(out)
         self.n_levels = {self.g_fe: offset, **self.n_levels}
         self._track_disk()
