@@ -320,8 +320,10 @@ class HDFEResult:
         for kind, tables in spec["tables"].items():
             for d, table in tables.items():
                 flag = f"{PREFIX}{kind}_{len(flags.get(kind, []))}"
+                # the source's own order, which a join keeps only when asked
                 frame = frame.join(table.lazy().with_columns(pl.lit(True).alias(flag)),
-                                   on=spec["fe_cols"][d], how="left")
+                                   on=spec["fe_cols"][d], how="left",
+                                   maintain_order="left")
                 flags.setdefault(kind, []).append(flag)
         reason = pl.when(~spec["usable"]).then(pl.lit("missing"))
         for kind in ("singleton", "separation"):

@@ -1490,7 +1490,8 @@ def test_diagnose_defaults_to_se(assembled):
                                            se=True, se_draws=16,
                                            diagnose_draws=16)
     assert with_se.weak_id is not None
-    assert plain.leave_out == with_se.leave_out
+    # the same estimate; parallel sums need not agree in the last bits
+    assert with_se.leave_out == pytest.approx(plain.leave_out, rel=1e-10)
 
 
 def test_summary_marks_weakly_identified_intervals(assembled):

@@ -47,6 +47,15 @@ def _not_nan(schema, cols):
     return [pl.col(c).is_not_nan() for c in cols if schema[c].is_float()]
 
 
+def _drop_levels(frame, tables, fe_cols):
+    """The rows of `frame` in none of the levels `tables` lists, a table of
+    levels per fixed effect. An anti-join, not an is_in filter: is_in costs
+    over ten times as much once there are a million levels to test."""
+    for d, t in tables.items():
+        frame = frame.join(t.lazy(), on=fe_cols[d], how="anti")
+    return frame
+
+
 class _PassesMixin:
 
     # ------------------------------------------------------------------ pass 0
@@ -491,45 +500,46 @@ class _PassesMixin:
 
         A singleton is a row alone in its level of some fixed effect.
         Dropping it can leave another row alone in a level of a different
-        dimension, so the search repeats until a full round finds nothing; the
-        result does not depend on the order of the dimensions. Each count is a
-        streaming group_by over the fixed-effect columns, so memory is a hash
-        table of the levels plus the singleton levels found, which are kept.
-        A singleton level holds one row, so the rows dropped are the levels
-        found."""
+        dimension, so the dimensions are checked in turn, each one's
+        singletons dropped before the next is counted, until every dimension
+        has been checked since the last drop and found none. A dimension's
+        own drop cannot leave a singleton in it, so after a drop the others
+        are checked and that one is not. The result is the largest set of rows
+        in which no level is alone, whatever the order of the dimensions.
+        Each count is a streaming group_by over the fixed-effect columns, one
+        dimension at a time, so memory is one hash table of levels plus the
+        singleton levels found, which are kept. A singleton level holds one
+        row, so the rows dropped are the levels found."""
         self.singletons = {"observations": 0, "levels": {}, "rounds": 0}
         self._singleton_tables = {}
         if self.fixef_rm != "singleton" or not self.fe_user:
             return None
         cols = list(dict.fromkeys(c for d in self.fe_user for c in self.fe_cols[d]))
         cur = lf.select([pl.col(c) for c in cols])
-        found = {}
-        while True:
-            changed = False
-            for d in self.fe_user:
-                on = self.fe_cols[d]
-                bad = (cur.group_by(on).agg(pl.len().alias(f"{PREFIX}n"))
-                          .filter(pl.col(f"{PREFIX}n") == 1).select(on)
-                          .collect(engine="streaming"))
-                if bad.height:
-                    found.setdefault(d, []).append(bad)
-                    cur = cur.join(bad.lazy(), on=on, how="anti")
-                    changed = True
-            self.singletons["rounds"] += changed
-            if not changed:
-                break
+        dims, found, rounds = self.fe_user, {}, set()
+        quiet, i = 0, 0             # checks in a row that found nothing
+        while quiet < len(dims) - bool(found):
+            d = dims[i % len(dims)]
+            on = self.fe_cols[d]
+            bad = (cur.group_by(on).agg(pl.len().alias(f"{PREFIX}n"))
+                      .filter(pl.col(f"{PREFIX}n") == 1).select(on)
+                      .collect(engine="streaming"))
+            if bad.height:
+                found.setdefault(d, []).append(bad)
+                cur = _drop_levels(cur, {d: bad}, self.fe_cols)
+                rounds.add(i // len(dims))
+                quiet = 0
+            else:
+                quiet += 1
+            i += 1
+        self.singletons["rounds"] = len(rounds)
         if not found:
             return None
         tables = {d: pl.concat(v) for d, v in found.items()}
         self._singleton_tables = tables
         self.singletons["levels"] = {d: t.height for d, t in tables.items()}
         self.singletons["observations"] = sum(self.singletons["levels"].values())
-
-        def restrict(frame):
-            for d, t in tables.items():
-                frame = frame.join(t.lazy(), on=self.fe_cols[d], how="anti")
-            return frame
-        return restrict
+        return lambda frame: _drop_levels(frame, tables, self.fe_cols)
 
     def _restrict_sample(self, lf):
         """A function that drops rows from the estimation sample, applied to

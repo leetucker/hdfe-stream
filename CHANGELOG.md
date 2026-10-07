@@ -2,6 +2,9 @@
 
 ## 0.2.2 (in progress)
 
+- **Polars 2.0 support.** `fit.sample()` returns the source's rows in the source's
+  order again. Polars 2.0 collects with the streaming engine by default, whose
+  joins do not keep row order unless asked, so the rows came back shuffled.
 - **The explicit solver builds its matrix faster and in less memory.** The
   reduced matrix S is now written directly in compressed form, one row at a
   time, instead of being assembled from chunks of coordinate triples that
@@ -11,6 +14,12 @@
   unchanged up to rounding.
 - **Removed `triple_budget` and `dense_max_levels`** from `StreamingHDFE`. They
   tuned the old way of building S and have no counterpart in the new one.
+- **Finding singletons takes fewer scans.** The search used to stop only
+  after a full round over the fixed effects found nothing. It now stops once
+  every fixed effect has been checked since the last drop, since a dimension's
+  own drop cannot leave a singleton in it: four scans instead of six for a
+  typical three-way model, about 40% less time spent on singletons, and the
+  same memory. The rows dropped are the same.
 
 ## 0.2.1
 
