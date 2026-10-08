@@ -5,6 +5,10 @@
 - **Polars 2.0 support.** `fit.sample()` returns the source's rows in the source's
   order again. Polars 2.0 collects with the streaming engine by default, whose
   joins do not keep row order unless asked, so the rows came back shuffled.
+  Under Polars 2.0, repeated fits of the same model can differ in the last
+  digit or so (around 1e-16 relative): its streaming engine adds floating-point
+  sums in an order that depends on thread scheduling. Under Polars 1.x they
+  are identical bit for bit.
 - **Dropping singletons no longer inflates memory with a wide design.** The
   dropped levels were anti-joined after the design was evaluated, so the
   streaming join buffered every design column; with 503 indicators that took

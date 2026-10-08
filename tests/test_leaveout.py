@@ -1257,7 +1257,8 @@ def test_standard_errors_do_not_disturb_the_point_estimate(assembled):
     plain = est.leave_out_components(result, n_draws=256, block=64, seed=4)
     with_se = est.leave_out_components(result, n_draws=256, block=64, seed=4,
                                        se=True, se_draws=64)
-    assert plain.leave_out == with_se.leave_out
+    # equal up to rounding: Polars 2.0 sums in a thread-dependent order
+    assert with_se.leave_out == pytest.approx(plain.leave_out, rel=1e-10)
     assert plain.se is None and with_se.se is not None
 
 
