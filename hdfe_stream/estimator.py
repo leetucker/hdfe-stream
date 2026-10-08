@@ -148,8 +148,9 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
          weights; N = sum of weights), as in pyfixest.
     keep : extra columns to carry into the residual output.
     n_buckets / rows_per_bucket : rows are hash-partitioned by fe[0] into
-         buckets so the sort and the cell group_by are bucket-sized.
-    batch_rows : rows per chunk when streaming Parquet.
+         buckets so the sort is bucket-sized.
+    batch_rows : rows per chunk when streaming Parquet, and per slice of
+         whole fe[0] groups when building the cell table.
     scratch_mb : budget, in MB, for the row-blocked scratch the leave-out passes
          hold (default 32). Those passes want about a dozen float64 columns per
          row of the chunk, so the chunk is shrunk below `batch_rows` as needed to

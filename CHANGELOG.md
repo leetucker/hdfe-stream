@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.2 (in progress)
+## 0.2.2
 
 - **Polars 2.0 support.** `fit.sample()` returns the source's rows in the source's
   order again. Polars 2.0 collects with the streaming engine by default, whose
@@ -11,23 +11,24 @@
   are identical bit for bit.
 - **Dropping singletons no longer inflates memory with a wide design.** The
   dropped levels were anti-joined after the design was evaluated, so the
-  streaming join buffered every design column; with 503 indicators that took
-  the first scan to about 14 GB under Polars 2.0. The rows are now dropped from
-  the source columns before the design is evaluated, and the peak is back to
-  about 8.6 GB. The rows dropped are the same.
-- **Sorting the buckets takes less memory under Polars 2.0.** Each bucket is
-  sorted with Polars' in-memory engine and then written, rather than sunk
-  through the streaming engine, whose sort peaked about 1.5x higher. With a
-  narrow design in one bucket (8 covariates, 8.5 million rows) the peak falls
-  from 4.6 GB to 3.3 GB; the sort is also faster with a wide design.
-- **Empty run directories no longer pile up on NFS.** A file deleted while
-  still open or memory-mapped becomes a hidden .nfs file on NFS, so its run
-  directory could not be removed and was left empty once the process exited.
-  A failed removal is now retried after collecting garbage on every platform
-  (it was Windows only); the leave-out functions release their memory maps as
-  soon as they are done (`reload_intermediates()` maps them back in); and
-  empty run directories more than a minute old are removed by every new fit
-  in the same working directory and by `hdfe_stream.cleanup()`.
+  streaming join buffered every design column. The rows are now dropped from
+  the source columns before the design is evaluated.
+- **Finding singletons takes fewer scans.** The search used to stop only
+  after a full round over the fixed effects found nothing. It now stops once
+  every fixed effect has been checked since the last drop, since a dimension's
+  own drop cannot leave a singleton in it: four scans instead of six for a
+  typical three-way model, about 40% less time spent on singletons, and the
+  same memory. The rows dropped are the same.
+- **Sorting the buckets and building the cell table takes less memory under
+  Polars 2.0.** Each bucket is sorted with Polars' in-memory engine and then
+  written, rather than sunk through the streaming engine, whose sort peaked
+  about 1.5x higher. Similarly, Pass 1 grouped each bucket with a streaming
+  `group_by`, which under Polars 2.0 gives every thread its own hash table: with
+  as many cells as rows, as in an AKM panel, the fit's peak more than doubled.
+  The rows are sorted by fe[0] group, so each bucket is now grouped a slice of
+  whole groups at a time and the cells appended in order. This reduces memory
+  use in AKM specifications and leaves wide designs unchanged or a little
+  better.
 - **The explicit solver builds its matrix faster and in less memory.** The
   reduced matrix S is now written directly in compressed form, one row at a
   time, instead of being assembled from chunks of coordinate triples that
@@ -37,12 +38,27 @@
   unchanged up to rounding.
 - **Removed `triple_budget` and `dense_max_levels`** from `StreamingHDFE`. They
   tuned the old way of building S and have no counterpart in the new one.
-- **Finding singletons takes fewer scans.** The search used to stop only
-  after a full round over the fixed effects found nothing. It now stops once
-  every fixed effect has been checked since the last drop, since a dimension's
-  own drop cannot leave a singleton in it: four scans instead of six for a
-  typical three-way model, about 40% less time spent on singletons, and the
-  same memory. The rows dropped are the same.
+- **Per-iteration CG messages are logged at DEBUG.** With `verbose=True`, the
+  "CG iter N: max rel. residual" lines go to the logger at DEBUG, whatever
+  `log_level` is, so they appear only when the logger is enabled for DEBUG.
+  Without a logger they are no longer printed. Other progress messages are
+  unchanged.
+- **Importing hdfe_stream costs a little less memory.** p-values, critical
+  values and the weak-identification interval use `scipy.special`'s
+  distribution functions instead of `scipy.stats`, which is no longer
+  imported. The values are the same.
+- **Empty run directories no longer pile up on NFS.** A file deleted while
+  still open or memory-mapped becomes a hidden .nfs file on NFS, so its run
+  directory could not be removed and was left empty once the process exited.
+  A failed removal is now retried after collecting garbage on every platform
+  (it was Windows only); the leave-out functions release their memory maps as
+  soon as they are done (`reload_intermediates()` maps them back in); and
+  empty run directories more than a minute old are removed by every new fit
+  in the same working directory and by `hdfe_stream.cleanup()`.
+- **Slightly less verbose default logging.** CG iteration messages are now
+  logged at DEBUG level and therefore not printed by default. Lower your log
+  level to obtain this information.
+
 
 ## 0.2.1
 

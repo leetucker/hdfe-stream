@@ -263,7 +263,7 @@ def figure(bench, metric, theme_name, rows):
             f"{label} at {_and(xs)}" for label, xs in where.items())
             + f" {point_name}.")
     wide = len(panels) > 1
-    lines = [line for note in notes for line in textwrap.wrap(note, 175 if wide else 125)]
+    lines = [line for note in notes for line in textwrap.wrap(note, 175 if wide else 115)]
     if lines:
         fig.text(0.01, 0.01, "\n".join(lines), color=theme["muted"],
                  fontsize=8, ha="left", va="bottom")

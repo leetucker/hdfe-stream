@@ -193,7 +193,7 @@ demeaners, and with [xhdfe](https://github.com/reisportela/xhdfe-xfe), on its
 CPU backend. Sizes run from 25,000 to 5,000,000 workers, with firms = workers /
 15 at every size and about 8.5 rows per worker, so the largest panel has 42.5
 million rows. Every configuration agrees with every other on the coefficients
-to within 4e-10, so these are measurements of equally good answers. Reproduce
+to within 3e-10, so these are measurements of equally good answers. Reproduce
 with:
 
 ```bash
@@ -229,47 +229,48 @@ At 5 million workers:
 
 | configuration | wall time | peak memory | peak disk |
 |---|---:|---:|---:|
-| pyfixest (MAP, its default) | 888 s | 20.7 GB | — |
-| pyfixest (LSMR) | 150 s | 25.8 GB | — |
-| xhdfe | 126 s | 19.1 GB | — |
-| hdfe_stream (`explicit`, its default) | 45 s | 5.5 GB | 4.1 GB |
-| hdfe_stream (`stream_cg`) | 53 s | 5.5 GB | 4.1 GB |
-| **hdfe_stream (`stream_cg`, low memory)** | **59 s** | **3.5 GB** | 4.1 GB |
+| pyfixest (MAP, its default) | 1,960 s | 20.7 GB | — |
+| pyfixest (LSMR) | 138 s | 25.3 GB | — |
+| xhdfe | 238 s | 19.0 GB | — |
+| hdfe_stream (`explicit`, its default) | 52 s | 4.1 GB | 4.1 GB |
+| hdfe_stream (`stream_cg`) | 54 s | 4.0 GB | 4.1 GB |
+| **hdfe_stream (`stream_cg`, low memory)** | **60 s** | **3.2 GB** | 4.3 GB |
 
 ### Reading the figures
 
 **Memory is the point.** At 5 million workers the in-memory libraries peak at
-19–26 GB: pyfixest's LSMR run needed almost all of this machine's 26 GB.
-hdfe_stream peaks at 5.5 GB with its defaults and 3.5 GB with the batch and
+19–25 GB: pyfixest's LSMR run needed almost all of this machine's 26 GB.
+hdfe_stream peaks at 4.1 GB with its defaults and 3.2 GB with the batch and
 bucket sizes turned down ("low memory": `rows_per_bucket=250_000`,
-`batch_rows=200_000`), for about 12% more time and the same answer. What it
-spends instead is disk: about 95 bytes per row, 4.1 GB at 42.5 million rows, freed
+`batch_rows=200_000`), for about 16% more time and the same answer. What it
+spends instead is disk: about 97 bytes per row, 4.1 GB at 42.5 million rows, freed
 when the fit finishes. The in-memory libraries' peak grows in proportion to the
-data. hdfe_stream's low-memory setting grows far more slowly: 0.8 GB at 25,000
-workers, 1.3 GB at a million, 3.5 GB at five million.
+data. hdfe_stream's low-memory setting grows far more slowly: 0.9 GB at 25,000
+workers, 1.4 GB at a million, 3.2 GB at five million.
 
-**It is not slower for it.** From about 400,000 workers up, hdfe_stream is the
-fastest configuration measured. At 5 million workers it takes 45 s against
-xhdfe's 126 s and pyfixest's 150 s (LSMR) or 888 s (MAP). With AKM panel data,
+**It is not slower for it.** From about a million workers up, hdfe_stream is
+the fastest configuration measured, and at 400,000 it is within half a second
+of xhdfe (4.1 s against 3.7 s). At 5 million workers it takes 52 s against
+pyfixest's 138 s (LSMR) or 1,960 s (MAP) and xhdfe's 238 s. With AKM panel data,
 reducing rows to worker-firm cells before solving more than pays for the disk
 traffic. The simulated panel has about 8.5 rows per worker and one cell per
 row, which suits this approach; a specification where the cell table is no
 smaller than the data, and the fixed effects are less local, may do worse.
 
 **Below about 400,000 workers, the in-memory libraries use less memory.**
-Running any hdfe_stream fit costs about 0.8 GB, most of it importing polars,
+Running any hdfe_stream fit costs about 0.9 GB, most of it importing polars,
 numba and scipy and starting Polars' streaming engine and numba's thread pools.
-On small data that floor dominates: at 25,000 workers xhdfe peaks at 0.27 GB and
+On small data that floor dominates: at 25,000 workers xhdfe peaks at 0.29 GB and
 pyfixest at about 0.5 GB. This is the concrete version of "use pyfixest (or
 xhdfe) if your data fits".
 
 **The default pyfixest demeaner is not the one to compare against.**
-`MapDemeaner` (alternating projections) is about 6x slower than `LsmrDemeaner`
-from 400,000 workers up, since many worker effects are the case alternating
+`MapDemeaner` (alternating projections) is 6 to 14 times slower than
+`LsmrDemeaner` from 400,000 workers up, since many worker effects are the case alternating
 projections struggles with. If you are comparing, compare against LSMR.
 
-**hdfe_stream's `within` solver** uses more memory at scale: 14.6 GB at 5
-million workers, where `stream_cg` and `explicit` stay near 5.5 GB. Prefer
+**hdfe_stream's `within` solver** uses more memory at scale: 14.9 GB at 5
+million workers, where `stream_cg` and `explicit` stay near 4 GB. Prefer
 those when memory is the constraint.
 
 ### Many covariates
@@ -306,17 +307,17 @@ Wall time and peak memory ("—": ran out of this machine's 26 GB):
 
 | covariates | pyfixest (MAP) | pyfixest (LSMR) | xhdfe | hdfe_stream | hdfe_stream, sized |
 |---:|---:|---:|---:|---:|---:|
-| 8 | 219 s, 5.7 GB | 17 s, 7.3 GB | 18 s, 9.0 GB | 9 s, 2.9 GB | 8 s, 3.0 GB |
-| 41 | 522 s, 13.1 GB | 56 s, 17.3 GB | 55 s, 18.1 GB | 26 s, 6.9 GB | 25 s, 3.8 GB |
-| 83 | 1,026 s, 24.8 GB | 189 s, 25.4 GB | — | 76 s, 12.5 GB | 53 s, 4.2 GB |
-| 167 | — | — | — | 178 s, 23.0 GB | 104 s, 5.1 GB |
-| 503 | — | — | — | — | **392 s, 8.6 GB** |
+| 8 | 132 s, 5.7 GB | 16 s, 7.3 GB | 15 s, 9.1 GB | 7 s, 3.2 GB | 7 s, 3.0 GB |
+| 41 | 520 s, 13.8 GB | 62 s, 18.2 GB | 60 s, 18.2 GB | 22 s, 6.9 GB | 20 s, 3.7 GB |
+| 83 | 976 s, 25.2 GB | 156 s, 25.8 GB | 125 s, 26.0 GB | 58 s, 12.4 GB | 44 s, 4.9 GB |
+| 167 | — | — | — | 127 s, 23.0 GB | 81 s, 5.1 GB |
+| 503 | — | — | — | — | **329 s, 8.6 GB** |
 
 **The in-memory libraries run out first.** Their peak grows with rows ×
-covariates. At 8.5 million rows pyfixest was within 1 GB of this machine's 26 GB
-at 83 indicators and out of memory at 167; xhdfe was already out of memory at
-83. hdfe_stream sized to the
-design goes from 3.0 GB at 8 indicators to 5.1 GB at 167 and 8.6 GB at 503. Of
+covariates. At 8.5 million rows all three were within about 1 GB of this
+machine's 26 GB at 83 indicators, and out of memory at 167. hdfe_stream sized
+to the design goes from 3.0 GB at 8 indicators to 5.1 GB at 167 and 8.6 GB at
+503. Of
 that last figure, about 4.9 GB is the memory-mapped cell table: file pages the
 kernel can drop under pressure. The memory the fit itself allocated peaked at
 4.6 GB (a separate profile, reading the process's anonymous and file-backed
@@ -339,16 +340,16 @@ fit = feols_stream(fml, data, rows_per_bucket=min(20_000_000, int(1e9 // per_row
 
 **Time grows with the square of the width.** The cross-products cost k × k per
 row; they are formed chunk by chunk as BLAS matrix products, and 503 indicators
-take 6½ minutes where 167 take under 2. hdfe_stream is the fastest configuration at
+take 5½ minutes where 167 take under 1½. hdfe_stream is the fastest configuration at
 every width measured.
 
 **Timings on this machine are noisy where memory is tight.** Each point is one
 run. Repeated runs of the default configuration at 83 indicators, which holds
-12.5 GB, took between 53 and 83 s; the sized configuration varied by about 15%.
+12.4 GB, took between 53 and 83 s; the sized configuration varied by about 15%.
 The differences between libraries above are far larger than that.
 
 **Disk grows with the width too**, since the working copy of the rows carries
-every covariate: 0.3 GB at 8 indicators, 6 GB at 503.
+every covariate: 0.3 GB at 8 indicators, 5.5 GB at 503.
 
 **How the design is built matters.** A formula term such as `i(age_bin)` is
 carried through the partitioning as the one column it is computed from, and the
@@ -373,12 +374,13 @@ python benchmarks/akm_benchmark.py --memory-sweep 1000000
 
 | `rows_per_bucket` | `batch_rows` | wall time | peak memory | peak disk |
 |---:|---:|---:|---:|---:|
-| 20,000,000 (default) | 2,000,000 | 10.1 s | 3,601 MB | 808 MB |
-| 1,000,000 | 500,000 | 9.3 s | 1,496 MB | 809 MB |
-| 250,000 | 200,000 | 10.4 s | 1,279 MB | 824 MB |
-| 100,000 | 100,000 | 9.8 s | 1,371 MB | 818 MB |
+| 20,000,000 (default) | 2,000,000 | 11.2 s | 2,341 MB | 818 MB |
+| 1,000,000 | 500,000 | 11.0 s | 1,849 MB | 821 MB |
+| 250,000 | 200,000 | 11.6 s | 1,384 MB | 863 MB |
+| 100,000 | 100,000 | 11.6 s | 1,555 MB | 876 MB |
 
-Most of the saving comes from the first step down. The defaults are tuned for a
+The saving comes from the first two steps down; below that, the peak rises
+again. The defaults are tuned for a
 machine with room to spare; if memory is the binding constraint, set
 `rows_per_bucket` to something near what you can afford and leave the rest
 alone (with many covariates, scale `batch_rows` and `row_group_size` down too;
@@ -391,9 +393,10 @@ Leave-out estimation has a memory knob of its own, `scratch_mb`; see
 [docs/kss.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss.md#performance).
 
 Measured on an Intel Core Ultra 7 258V, 8 cores, 26 GB RAM, Linux (WSL2);
-Python 3.13.5, polars 1.44.2, numpy 2.5.3, numba 0.67.0, scipy 1.18.1,
-pyfixest 0.60.0, xhdfe 2.28.0 (CPU backend). hdfe_stream was measured on
-2026-10-06 and pyfixest and xhdfe on 2026-09-28. The exact versions are in
+Python 3.14.8, polars 2.0.0, numpy 2.5.3, numba 0.68.0, scipy 1.18.1,
+pyfixest 0.60.0, xhdfe 2.28.1 (CPU backend). In the regression benchmarks
+hdfe_stream was measured on 2026-10-07 and pyfixest and xhdfe on 2026-10-06;
+the GLM and KSS benchmarks were measured on 2026-10-07 and 2026-10-08. The exact versions are in
 [benchmarks/results/machine.json](https://github.com/leetucker/hdfe-stream/blob/main/benchmarks/results/machine.json). Numba
 kernels are compiled on first use and cached to disk; the benchmark runs a
 warm-up fit so compilation is not charged to any configuration.
@@ -501,7 +504,7 @@ errors, and KSS's weak-identification diagnostic and q = 1 interval.
 **[docs/kss.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss.md)** covers the options, the standard errors and their
 measured coverage, weak identification, validation, reproducibility, and
 [performance against xhdfe](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss.md#performance): at 5 million workers,
-5.7 GB of memory against xhdfe's 20 GB, with standard errors in 58 minutes
+4.8 GB of memory against xhdfe's 20 GB, with standard errors in 49 minutes
 where xhdfe's did not finish in three hours.
 **[docs/kss_methodological_differences.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss_methodological_differences.md)**
 lists every way this implementation differs from LeaveOutTwoWay,

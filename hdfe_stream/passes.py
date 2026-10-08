@@ -9,12 +9,13 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+import pyarrow.parquet as pq
 
 from ._columns import BUCKET, GCODE, PREFIX, WCOL, check_source, tcol, vcol
 from .kernels_base import _nb_components, _nb_diag, _nb_union_pairs
 from .kernels_slopes import _nb_diag_sl
 from .report import _warn
-from .utils import _as_lazy, _row_wise, _segments, iter_group_chunks
+from .utils import _as_lazy, _row_wise, _segments, iter_group_chunks, iter_group_tables
 
 # Shared-state contract with the other mixins
 # -------------------------------------------
@@ -313,15 +314,35 @@ class _PassesMixin:
             aggs += [wz(pl.col(f"u{a}") * pl.col(f"z{j}")).sum().alias(f"slz{a}_{j}")
                      for a in range(1, ps + 1) for j in range(m)]
         self.paths["cells"] = []
+        # A cell is a run of rows within one fe[0] group, and the rows are
+        # sorted by group, so each bucket is grouped a slice of whole groups
+        # at a time (about `batch_rows` rows) in Polars' in-memory engine, and
+        # the slices' cells are appended in order. Memory is then a slice's,
+        # not a bucket's. A streaming group_by over the bucket was the old
+        # way; under Polars 2.0 it gives each thread its own hash table, which
+        # with as many cells as rows peaked at about three times the memory.
+        cols = [GCODE, *self.ccols, *[vcol(j) for j in range(m)]]
+        if weighted:
+            cols.append(WCOL)
+        cols += [tcol(j + 1) for j in range(ps)]
         for rows in self.paths["rows"]:
             out = rows.replace("rows_b", "cells_b")
-            (pl.scan_parquet(rows)
-               .select(GCODE, *self.ccols, *z)
-               .group_by(GCODE, *self.ccols)
-               .agg(aggs)
-               .sort(GCODE, *self.ccols)
-               .sink_parquet(out, row_group_size=self.rgs))
-            self.paths["cells"].append(out)
+            writer = None
+            for tbl in iter_group_tables(rows, cols, self.batch_rows):
+                cells = (pl.from_arrow(tbl).lazy()
+                           .select(GCODE, *self.ccols, *z)
+                           .group_by(GCODE, *self.ccols)
+                           .agg(aggs)
+                           .sort(GCODE, *self.ccols)
+                           .collect(engine="in-memory")
+                           .to_arrow())
+                if writer is None:
+                    writer = pq.ParquetWriter(out, cells.schema, compression="zstd")
+                writer.write_table(cells, row_group_size=self.rgs)
+                del tbl, cells
+            if writer is not None:
+                writer.close()
+                self.paths["cells"].append(out)
 
         exprs = [pl.len().alias("n_cells")]
         if self.assembly == "cells":

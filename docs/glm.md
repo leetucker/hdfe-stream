@@ -177,7 +177,7 @@ digits of the coefficients.
 
 A step costs one read of the sorted rows and one solve of the reduced system.
 A fit typically takes about 10 steps, so it costs several times what an OLS
-fit of the same data costs: 5 to 8 times, in the benchmarks below.
+fit of the same data costs: 4 to 7 times, in the benchmarks below.
 
 **Solver.** The reduced matrix S depends on the weights, so the `explicit`
 solver has to rebuild it at every step. Streaming the cells instead costs one
@@ -186,7 +186,8 @@ previous step's solution, so the count falls from step to step: from 19 at the
 first step to 6 at the eighth on one 3.4-million-row panel. With
 `solver="auto"`, the default, S is therefore built for the first step only, and
 `stream_cg` is used after that. From 400,000 to 1,000,000 workers, `explicit`
-takes 28 to 45% longer; at 5,000,000 the two take about the same time.
+takes within 12% of the time `auto` takes; at 5,000,000, it takes 27 to 30%
+less.
 
 With `precond="amg"`, which needs S, it is rebuilt at every step. Setting
 `solver=` explicitly applies it to every step.
@@ -234,7 +235,8 @@ python benchmarks/plot_benchmarks.py
 ```
 
 Wherever both libraries finished, the coefficients agree to within 1e-7, the
-tolerance the iterations reach. For logit, pyfixest keeps workers whose
+tolerance the iterations reach, except for Poisson at 41 covariates, where they
+agree to within 3e-6. For logit, pyfixest keeps workers whose
 outcome is 1 in every year, which this package drops (see
 [differences from pyfixest](#differences-from-pyfixest)), so its N is larger:
 8,404,384 against 8,283,651 at 1,000,000 workers.
@@ -260,22 +262,22 @@ Wall time and peak memory, hdfe_stream at its defaults:
 
 | workers | rows | Poisson: `fepois_stream` | Poisson: pyfixest | logit: `feglm_stream` | logit: pyfixest |
 |---:|---:|---:|---:|---:|---:|
-| 25,000 | 212,000 | 1.8 s, 0.7 GB | 2.9 s, 0.6 GB | 2.1 s, 0.8 GB | 3.4 s, 0.6 GB |
-| 100,000 | 850,000 | 4.9 s, 1.0 GB | 17 s, 1.1 GB | 5.1 s, 1.0 GB | 16 s, 1.1 GB |
-| 400,000 | 3.4 million | 14 s, 1.7 GB | 72 s, 3.3 GB | 18 s, 1.7 GB | 60 s, 3.3 GB |
-| 1,000,000 | 8.5 million | 38 s, 2.4 GB | 219 s, 7.0 GB | 46 s, 2.4 GB | 174 s, 7.3 GB |
-| 5,000,000 | 42.5 million | 276 s, 4.2 GB | out of memory | 309 s, 4.2 GB | out of memory |
+| 25,000 | 212,000 | 1.8 s, 0.8 GB | 3.2 s, 0.6 GB | 2.3 s, 0.8 GB | 3.0 s, 0.6 GB |
+| 100,000 | 850,000 | 4.7 s, 1.1 GB | 15 s, 1.2 GB | 5.2 s, 1.1 GB | 13 s, 1.2 GB |
+| 400,000 | 3.4 million | 15 s, 1.8 GB | 68 s, 3.6 GB | 16 s, 1.8 GB | 60 s, 3.7 GB |
+| 1,000,000 | 8.5 million | 34 s, 2.6 GB | 203 s, 7.6 GB | 42 s, 2.6 GB | 171 s, 8.0 GB |
+| 5,000,000 | 42.5 million | 287 s, 4.4 GB | out of memory | 351 s, 4.4 GB | out of memory |
 
-- **Time.** From 100,000 workers up, hdfe_stream is 3 to 6 times faster.
+- **Time.** From 100,000 workers up, hdfe_stream is 2.4 to 6 times faster.
 - **Memory.** At 5,000,000 workers pyfixest ran out of this machine's 26 GB,
-  for both models. hdfe_stream peaked at 4.2 GB, or 3.1 to 3.2 GB with the
-  low-memory setting, for 4 to 5% more time. At 25,000 workers pyfixest uses
-  less, as with OLS: an hdfe_stream process costs about 0.7 GB before it has
-  done anything.
-- **Disk.** About 65 bytes per row: 2.7 GB at 42.5 million rows, where OLS on
-  the same design writes 3.9 GB.
-- **Against OLS.** `feols_stream` fits the same design in 7.6 s at 1,000,000
-  workers and 40 s at 5,000,000, so a Poisson or logit fit costs 5 to 8 OLS
+  for both models. hdfe_stream peaked at 4.4 GB, or 3.1 GB with the low-memory
+  setting, in about the same time. At 25,000 workers pyfixest uses less, as
+  with OLS: an hdfe_stream process costs about 0.8 GB before it has done
+  anything.
+- **Disk.** About 67 bytes per row: 2.8 GB at 42.5 million rows, where OLS on
+  the same design writes 4.1 GB.
+- **Against OLS.** `feols_stream` fits the same design in 9.0 s at 1,000,000
+  workers and 52 s at 5,000,000, so a Poisson or logit fit costs 4 to 7 OLS
   fits.
 
 ### Covariates
@@ -299,20 +301,20 @@ Wall time and peak memory, hdfe_stream sized to the design:
 
 | covariates | Poisson: `fepois_stream` | Poisson: pyfixest | logit: `feglm_stream` | logit: pyfixest |
 |---:|---:|---:|---:|---:|
-| 8 | 31 s, 2.7 GB | 604 s, 9.6 GB | 41 s, 2.7 GB | 462 s, 10.1 GB |
-| 41 | 183 s, 3.6 GB | 2,445 s, 24.2 GB | 202 s, 3.9 GB | 1,724 s, 24.8 GB |
-| 83 | 466 s, 4.1 GB | out of memory | 489 s, 4.1 GB | out of memory |
-| 167 | 803 s, 5.6 GB | out of memory | 499 s, 5.8 GB | out of memory |
-| 503 | 1,890 s, 10.6 GB | out of memory | 1,935 s, 10.6 GB | out of memory |
+| 8 | 36 s, 2.8 GB | 321 s, 9.9 GB | 40 s, 2.9 GB | 266 s, 10.3 GB |
+| 41 | 113 s, 4.1 GB | 1,256 s, 25.4 GB | 127 s, 4.1 GB | 905 s, 25.6 GB |
+| 83 | 251 s, 4.5 GB | out of memory | 268 s, 4.4 GB | out of memory |
+| 167 | 484 s, 5.8 GB | out of memory | 515 s, 5.8 GB | out of memory |
+| 503 | 1,957 s, 10.6 GB | out of memory | 2,052 s, 10.6 GB | out of memory |
 
-- **pyfixest** needs about 24 GB at 41 covariates, and runs out of memory from
-  83 up.
+- **pyfixest** needs about 25.5 GB at 41 covariates, nearly all of this
+  machine's 26 GB, and runs out of memory from 83 up.
 - **hdfe_stream at its defaults** needs more memory as the design widens than
-  when sized to it: 12.7 GB at 83 covariates, 22.8 GB at 167, and more than
+  when sized to it: 12.8 GB at 83 covariates, 24.0 GB at 167, and more than
   the machine has at 503. Its batches and buckets hold a fixed number of rows
   however wide the rows are. For a wide design, size them as the benchmark
   does, as for OLS.
-- **Disk** grows with the width, to 6.8 GB at 503 covariates, about what OLS
-  writes for the same design (6.0 GB).
-- **Against OLS.** At 503 covariates, sized the same way, OLS takes 351 s and
-  8.6 GB, and the GLM 1,890 s and 10.6 GB.
+- **Disk** grows with the width, to 6.8 GB at 503 covariates, a little more
+  than OLS writes for the same design (5.5 GB).
+- **Against OLS.** At 503 covariates, sized the same way, OLS takes 329 s and
+  8.6 GB, and the GLM 1,957 s and 10.6 GB.

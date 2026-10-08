@@ -33,7 +33,7 @@ pip install cmake ninja
 pip install "git+https://github.com/reisportela/xhdfe-xfe.git"
 ```
 
-The figures here used commit `e0c2362` (2.28.0), on its CPU backend, which is
+The figures here used commit `f71420b` (2.28.1), on its CPU backend, which is
 its default; no GPU was involved.
 
 The GLM benchmarks compare with pyfixest alone, since xhdfe fits linear models

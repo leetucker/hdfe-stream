@@ -50,7 +50,8 @@ Memory: rows are only ever streamed. The arrays held in RAM are sized by the
 non-streamed dimensions' level counts (times a block of at most `rhs_block`
 variables at a time), plus, for the explicit solver, the sparse reduced
 matrix S, whose size depends on how levels co-occur and not on rows. Polars
-steps stream; the sort and cell group_by run one fe[0] hash bucket at a time.
+steps stream; the sort runs one fe[0] hash bucket at a time, and the cell
+group_by a slice of whole fe[0] groups (about batch_rows rows) at a time.
 
 Pipeline
 --------
@@ -59,9 +60,9 @@ Pass 0 (Polars, streaming)   evaluate the design as Polars expressions; drop
                              the non-streamed FE and cluster ids;
                              hash-partition rows into fe[0] buckets; sort each
                              bucket and assign dense fe[0] codes.
-Pass 1 (Polars, streaming)   per bucket: group_by(fe[0], other codes) -> cell
-                             table with n and sums (plus within-cell
-                             cross-products when assembly="cells").
+Pass 1 (Polars)              per slice of whole fe[0] groups: group_by(fe[0],
+                             other codes) -> cell table with n and sums (plus
+                             within-cell cross-products when assembly="cells").
 Pass 1b (streamed + numba)   keep cells of fe[0] groups with more than one
                              cell as memory-mapped arrays; Jacobi diagonal.
 Step 2 (solver, per block)   solve  S Gamma = D_o' M_0 V,  S = D_o' M_0 D_o,
@@ -132,7 +133,7 @@ def _detect_version():
         from importlib.metadata import version
         return version("hdfe-stream")
     except Exception:                 # source tree without an installed dist
-        return "0.2.1"
+        return "0.2.2"
 
 
 __version__ = _detect_version()

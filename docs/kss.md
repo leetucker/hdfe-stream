@@ -461,8 +461,8 @@ use 200 random-projection draws. For the standard errors each uses its own
 defaults: xhdfe simulates the trace term with 1,000 draws of the quadratic form,
 hdfe_stream with 200 Hutchinson draws (see
 [kss_methodological_differences.md](kss_methodological_differences.md) §5.2).
-At every size the two point estimates agree to within 0.1%, which is
-random-projection noise. Reproduce with `python benchmarks/kss_benchmark.py`;
+At every size the two point estimates agree to within 0.3%, and from 100,000
+workers up to within 0.12%, which is random-projection noise. Reproduce with `python benchmarks/kss_benchmark.py`;
 the numbers are in [benchmarks/results/kss.csv](../benchmarks/results/kss.csv).
 
 <picture>
@@ -484,26 +484,26 @@ At 5 million workers (42.5 million rows):
 
 | configuration | wall time | peak memory | peak disk |
 |---|---:|---:|---:|
-| xhdfe | 1,305 s | 20.0 GB | — |
+| xhdfe | 782 s | 20.0 GB | — |
 | xhdfe, standard errors | did not finish within 3 hours | | |
-| hdfe_stream | 474 s | 5.3 GB | 2.5 GB |
-| hdfe_stream, standard errors | 2,752 s | 10.7 GB | 3.1 GB |
+| hdfe_stream | 472 s | 4.8 GB | 2.8 GB |
+| hdfe_stream, standard errors | 2,917 s | 10.8 GB | 3.4 GB |
 
 **At scale, memory is the difference.** At 5 million workers xhdfe's point
-estimate peaks at 20 GB, and hdfe_stream's at 5.3 GB, while writing 2.5 GB to
-disk. With standard errors hdfe_stream peaks at 10.7 GB, still about half of
+estimate peaks at 20 GB, and hdfe_stream's at 4.8 GB, while writing 2.8 GB to
+disk. With standard errors hdfe_stream peaks at 10.8 GB, still about half of
 xhdfe's point estimate alone. Both prune to exactly the same sample at every
-size, and their estimates agree to within 0.1%.
+size, and at 5 million workers their estimates agree to within 0.01%.
 
 **Standard errors are where the time goes.** From 100,000 workers up,
-hdfe_stream's are 2 to 4.4 times faster than xhdfe's: 695 s against 2,258 s at a
-million workers. At 5 million, xhdfe's did not finish in the three hours
-allowed and hdfe_stream's took 46 minutes. The two estimate the trace term
+hdfe_stream's are 1.7 to 4.5 times faster than xhdfe's: 475 s against 2,127 s at
+a million workers. At 5 million, xhdfe's did not finish in the three hours
+allowed and hdfe_stream's took 49 minutes. The two estimate the trace term
 differently (§5.2 of the differences catalog); xhdfe's default is 1,000
 simulated draws of the full quadratic form.
 
-**Small panels favor xhdfe.** At 25,000 workers its point estimate takes 0.7 s
-and 0.26 GB, against hdfe_stream's 8.5 s and 0.8 GB. hdfe_stream pays fixed
+**Small panels favor xhdfe.** At 25,000 workers its point estimate takes 0.8 s
+and 0.27 GB, against hdfe_stream's 9.4 s and 0.9 GB. hdfe_stream pays fixed
 costs a small panel cannot amortize: importing its dependencies, and two fits
 (the regression and the collapsed match-level one), each with its own passes
 over the data.
@@ -512,13 +512,13 @@ over the data.
 factors the firm system directly up to 50,000 firms and iterates above that. At
 400,000 workers (26,661 firms) the factorization alone took about 250 s, since
 a run with 10 draws instead of 200 took nearly as long. At a million workers
-(66,665 firms) it iterates, and its point estimate (87 s) beats hdfe_stream's
-(119 s).
+(66,665 firms) it iterates, and its point estimate takes 119 s, against
+hdfe_stream's 74 s.
 
 **The low-memory setting helps less here than for the regression.**
-`rows_per_bucket` and `batch_rows` shrink the fits: 1.85 GB against 2.09 GB at
-a million workers. At 5 million workers they made no difference (5.3 GB either
-way), so the peak there is set by something those settings do not control.
+`rows_per_bucket` and `batch_rows` shrink the fits: 2.0 GB against 2.2 GB at
+a million workers, and 4.5 GB against 4.8 GB at 5 million, so most of the peak
+is set by something those settings do not control.
 
 **`scratch_mb`** (default 32) is leave-out estimation's own memory knob, because its
 passes hold about a dozen float64 columns per row of the chunk. It shrinks the

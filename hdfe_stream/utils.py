@@ -38,6 +38,14 @@ def iter_group_chunks(paths: PathLike | Sequence[PathLike], columns: Sequence[st
     group in a batch are carried into the next one. With several files,
     `gcode` must be increasing across files (as the bucket files are).
     """
+    for tbl in iter_group_tables(paths, columns, batch_rows):
+        yield _tbl_to_np(tbl)
+
+
+def iter_group_tables(paths: PathLike | Sequence[PathLike], columns: Sequence[str],
+                      batch_rows: int = 2_000_000) -> Iterator[pa.Table]:
+    """`iter_group_chunks`, as Arrow tables: about `batch_rows` rows at a
+    time, each holding complete fe[0] groups."""
     if isinstance(paths, (str, Path)):
         paths = [paths]
     carry = None
@@ -52,10 +60,10 @@ def iter_group_chunks(paths: PathLike | Sequence[PathLike], columns: Sequence[st
         if cut == 0:  # the whole buffer is one group; keep accumulating
             carry = tbl
             continue
-        yield _tbl_to_np(tbl.slice(0, cut))
+        yield tbl.slice(0, cut)
         carry = tbl.slice(cut)
     if carry is not None and carry.num_rows:
-        yield _tbl_to_np(carry)
+        yield carry
 
 
 def _tbl_to_np(tbl):
