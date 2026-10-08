@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import os
+import re
 import shutil
 import socket
 import tempfile
@@ -33,12 +34,13 @@ _ACTIVE_RUNS = set()      # run directories of fits currently running in this pr
 
 
 def _remove_path(path):
-    """Delete a file or directory, never raising. Windows refuses to delete a
-    file that is memory-mapped, and a map can outlive its last named reference
-    until the garbage collector reaches it, so on Windows a failure is retried
-    once after collecting garbage."""
+    """Delete a file or directory, never raising. A file that is still open
+    or memory-mapped cannot be deleted on Windows, and on NFS it is renamed to
+    a hidden .nfs file that keeps its directory from being removed. A map can
+    outlive its last named reference until the garbage collector reaches it,
+    so a failure is retried once after collecting garbage."""
     path = Path(path)
-    for attempt in range(2 if os.name == "nt" else 1):
+    for attempt in range(2):
         try:
             if path.is_dir():
                 shutil.rmtree(path)
@@ -51,6 +53,57 @@ def _remove_path(path):
             gc.collect()
     if path.is_dir():
         shutil.rmtree(path, ignore_errors=True)
+        _remove_if_empty(path)
+
+
+def _remove_if_empty(path, tries=5):
+    """Remove `path` if it is an empty directory. On Windows a deleted file
+    can stay pending until its last handle closes, so rmtree can empty a
+    directory yet fail to remove it; the directory is retried briefly. (On
+    NFS the directory still holds the .nfs file, so it is not empty and is
+    left for `_sweep_empty_runs` once the handle is gone.)"""
+    for attempt in range(tries):
+        try:
+            os.rmdir(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if any(Path(path).iterdir()):
+                return                      # not empty: something is still there
+            time.sleep(0.05 * 2 ** attempt)
+
+
+_RUN_NAME = re.compile(r"hdfe_run_\d{8}_\d{6}_[0-9a-f]{8}")
+_EMPTY_RUN_MIN_AGE_S = 60       # a run directory exists briefly before its marker
+
+
+def _sweep_empty_runs(base, dry_run=False):
+    """Remove empty run directories in `base`: ones whose files went but whose
+    own removal failed, because a file in them was still open (an .nfs file on
+    NFS, a pending delete on Windows) and has since been closed. Their marker
+    went with the files, so they are recognized by name and emptiness; young
+    ones are skipped, since a new run directory is empty until its marker is
+    written. Returns the paths removed (or, with dry_run, that would be)."""
+    removed = []
+    try:
+        candidates = sorted(Path(base).glob("hdfe_run_*"))
+    except OSError:
+        return removed
+    for d in candidates:
+        try:
+            if (not _RUN_NAME.fullmatch(d.name) or str(d) in _ACTIVE_RUNS
+                    or not d.is_dir() or any(d.iterdir())
+                    or time.time() - d.stat().st_mtime < _EMPTY_RUN_MIN_AGE_S):
+                continue
+        except OSError:
+            continue
+        if not dry_run:
+            _remove_if_empty(d, tries=1)
+            if d.exists():
+                continue
+        removed.append(str(d))
+    return removed
 
 
 def _rmtree_quiet(path):
@@ -99,6 +152,7 @@ class _Run:
     def __init__(self, base, auto_cleanup):
         base = Path(base)
         base.mkdir(parents=True, exist_ok=True)
+        _sweep_empty_runs(base)         # left by earlier runs; see there
         self.path = base / f"hdfe_run_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         self.path.mkdir()
         (self.path / _MARKER).write_text(f"{socket.gethostname()} {os.getpid()} {time.time()}\n")
@@ -129,7 +183,10 @@ def cleanup(workdir: str | Path | None = None,
     """Remove leftover run directories (e.g. from killed processes) in
     `workdir` (default: $HDFE_STREAM_WORKDIR if set, else the system
     temporary directory). Only directories
-    created by hdfe_stream (they carry a marker file) are touched.
+    created by hdfe_stream (they carry a marker file) are touched, and empty
+    ones named like them (whose files were deleted but which could not be
+    removed while a file in them was still open, as on NFS); every new fit
+    removes those too.
 
     Runs of this process are removed unless a fit is still running in them
     (this includes result files of finished fits; their resid()/fixef() stop
@@ -143,6 +200,7 @@ def cleanup(workdir: str | Path | None = None,
     host, removed = socket.gethostname(), []
     if not base.exists():
         return removed
+    removed += [(d, 0) for d in _sweep_empty_runs(base, dry_run=dry_run)]
     for d in sorted(base.glob("hdfe_run_*")):
         marker = d / _MARKER
         if not marker.exists():

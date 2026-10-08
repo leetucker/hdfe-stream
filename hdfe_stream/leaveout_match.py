@@ -188,16 +188,19 @@ def leave_out_match(row_fit, alpha, psi, workdir, n_draws, seed, block,
     estimator._match_person_years = person_years
     estimator._leave_out_level = "match"
 
-    stayers = stayer_sigma2(row_fit, match_fit, alpha, psi)
-    within = (within_match_variance(row_fit, alpha, psi)
-              if se and se_variance == "person_year" else None)
-    components = estimator.leave_out_components(
-        match_fit, n_draws=n_draws, block=block, seed=seed, psi=psi,
-        stayers="within_match", stayer_sigma2=stayers,
-        centering=centering, se_variance=se_variance, match_within=within,
-        se=se, se_draws=se_draws, se_trace=se_trace, diagnose=diagnose,
-        diagnose_draws=diagnose_draws, weak_interval=weak_interval,
-        confidence=confidence)
+    try:
+        stayers = stayer_sigma2(row_fit, match_fit, alpha, psi)
+        within = (within_match_variance(row_fit, alpha, psi)
+                  if se and se_variance == "person_year" else None)
+        components = estimator.leave_out_components(
+            match_fit, n_draws=n_draws, block=block, seed=seed, psi=psi,
+            stayers="within_match", stayer_sigma2=stayers,
+            centering=centering, se_variance=se_variance, match_within=within,
+            se=se, se_draws=se_draws, se_trace=se_trace, diagnose=diagnose,
+            diagnose_draws=diagnose_draws, weak_interval=weak_interval,
+            confidence=confidence)
+    finally:
+        estimator.unload_intermediates()
     # the components are person-year moments, so that is the sample size;
     # n_movers stays the count of movers' matches, the rows left out
     components.match_fit = match_fit

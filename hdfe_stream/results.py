@@ -237,12 +237,15 @@ class HDFEResult:
                 "use the top-level hdfe_stream.leave_out_kss, which handles this "
                 "and the pruning for you")
         estimator.reload_intermediates()
-        return estimator.leave_out_components(
-            self, n_draws=n_draws, block=block, seed=seed, psi=psi,
-            stayers="own" if stayers is None else stayers, se=se,
-            se_draws=se_draws, se_trace=se_trace, diagnose=diagnose,
-            diagnose_draws=diagnose_draws, weak_interval=weak_interval,
-            confidence=confidence)
+        try:
+            return estimator.leave_out_components(
+                self, n_draws=n_draws, block=block, seed=seed, psi=psi,
+                stayers="own" if stayers is None else stayers, se=se,
+                se_draws=se_draws, se_trace=se_trace, diagnose=diagnose,
+                diagnose_draws=diagnose_draws, weak_interval=weak_interval,
+                confidence=confidence)
+        finally:
+            estimator.unload_intermediates()
 
     def _scan(self, path, what):
         if path is None:

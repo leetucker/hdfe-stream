@@ -215,6 +215,63 @@ def test_cleanup_ignores_directories_it_did_not_create(workdir):
     assert (workdir / "unrelated").exists()
 
 
+def test_cleanup_removes_empty_run_directories(workdir):
+    """A run directory whose files went but whose own removal failed (as a
+    pending delete on Windows can make it) has lost its marker too, so it is
+    recognized by its name and emptiness instead. An empty directory merely
+    named like one, or a run directory with something in it, is not."""
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    old = time.time() - 3600
+    empty = workdir / "hdfe_run_20260101_120000_0123abcd"
+    empty.mkdir()
+    (workdir / "hdfe_run_not_ours").mkdir()
+    young = workdir / "hdfe_run_20260101_120000_89abcdef"   # a run starting up
+    young.mkdir()
+    full = workdir / "hdfe_run_20260101_120000_4567cdef"
+    full.mkdir()
+    (full / "precious.txt").write_text("keep me")
+    for d in (empty, workdir / "hdfe_run_not_ours", full):
+        os.utime(d, (old, old))
+
+    assert hdfe_stream.cleanup(workdir, dry_run=True) == [(str(empty), 0)]
+    assert empty.exists()
+    assert hdfe_stream.cleanup(workdir) == [(str(empty), 0)]
+    assert not empty.exists()
+    assert young.exists()
+    assert (workdir / "hdfe_run_not_ours").exists()
+    assert (full / "precious.txt").exists()
+
+
+def test_a_new_fit_removes_empty_run_directories(rich, workdir):
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    empty = workdir / "hdfe_run_20260101_120000_0123abcd"
+    empty.mkdir()
+    old = time.time() - 3600
+    os.utime(empty, (old, old))
+    feols_stream(FML, rich.src, workdir=str(workdir), verbose=False).cleanup()
+    assert not empty.exists()
+
+
+def test_a_run_directory_left_empty_by_rmtree_is_removed(workdir, monkeypatch):
+    """If deleting the tree empties the directory but cannot remove it, the
+    empty directory is removed afterwards."""
+    run = workspace._Run(workdir, auto_cleanup=False)
+    (run.path / "models").mkdir()
+    real = workspace.shutil.rmtree
+
+    def contents_only(path, ignore_errors=False):
+        for child in Path(path).iterdir():
+            real(child) if child.is_dir() else child.unlink()
+        if not ignore_errors:
+            raise PermissionError("directory is in use")
+
+    monkeypatch.setattr(workspace.shutil, "rmtree", contents_only)
+    run.cleanup()
+    assert not run.exists
+
+
 def test_cleanup_of_a_missing_directory_is_not_an_error(tmp_path):
     assert hdfe_stream.cleanup(tmp_path / "does_not_exist") == []
 

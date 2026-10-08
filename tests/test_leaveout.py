@@ -2006,7 +2006,7 @@ def test_match_level_kernel_reproduces_the_point_estimate_exactly(
     kss_exact = _kss_exact()
     _, clean, got = match_case
     components = got["weighted"]
-    est = components.match_fit._estimator
+    est = components.match_fit._estimator.reload_intermediates()
     mp, A, w, S_inv, P, stayer, forms = _collapsed_dense(components, clean,
                                                           kss_exact)
     b = []

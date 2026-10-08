@@ -50,6 +50,21 @@ class _InverseMixin:
         self._load_ident()
         return self
 
+    def unload_intermediates(self):
+        """Drop the cell arrays `reload_intermediates` mapped in, and the
+        cached solver built from them; the files stay.
+
+        A file deleted while still mapped cannot go on NFS: it is renamed to
+        a hidden .nfs file instead, and the run directory holding it is left
+        behind, empty once the process exits. So the leave-out functions
+        unload as soon as they are done.
+        """
+        for a in ("codes", "n", "sums", "st", "ainv", "cmat", "starts"):
+            if hasattr(self, a):
+                setattr(self, a, None)
+        self._reduced_solver = None
+        return self
+
     def _reduced(self):
         """The cached (solve, info) pair for the reduced system.
 

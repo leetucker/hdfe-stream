@@ -16,6 +16,14 @@
   through the streaming engine, whose sort peaked about 1.5x higher. With a
   narrow design in one bucket (8 covariates, 8.5 million rows) the peak falls
   from 4.6 GB to 3.3 GB; the sort is also faster with a wide design.
+- **Empty run directories no longer pile up on NFS.** A file deleted while
+  still open or memory-mapped becomes a hidden .nfs file on NFS, so its run
+  directory could not be removed and was left empty once the process exited.
+  A failed removal is now retried after collecting garbage on every platform
+  (it was Windows only); the leave-out functions release their memory maps as
+  soon as they are done (`reload_intermediates()` maps them back in); and
+  empty run directories more than a minute old are removed by every new fit
+  in the same working directory and by `hdfe_stream.cleanup()`.
 - **The explicit solver builds its matrix faster and in less memory.** The
   reduced matrix S is now written directly in compressed form, one row at a
   time, instead of being assembled from chunks of coordinate triples that
