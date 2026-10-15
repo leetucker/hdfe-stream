@@ -90,6 +90,11 @@ pip install hdfe-stream[formula]     # formula syntax needs pyfixest
 | `all` | all of the above |
 | `test` | the test suite |
 
+On Python 3.15, pyfixest 0.60 (for the `formula` extra) has no wheels yet. It
+builds from source with a Rust toolchain and
+`PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1` set; everything else installs from
+wheels.
+
 Without `formula` you still get `StreamingHDFE`, the lower-level interface that
 takes column names or Polars expressions instead of a formula string.
 

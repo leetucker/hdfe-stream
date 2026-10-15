@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+New features.
 
 - **`connected_components`** finds the connected components of the graph of
   two fixed-effect dimensions (either may be an interaction, `firm_id^year`)
@@ -26,6 +28,13 @@
   `connected_components` does. `sample()` reports the rows they drop as
   `"min_degree"`, `"disconnected"` and `"leave_one_out"`, and
   `diagnostics["connected"]` and the summary count them.
+- **Python 3.15** is supported and tested in CI. pyfixest, which the
+  `formula` extra needs, has no 3.15 wheels yet (0.60.0), and building it
+  from source needs Rust and `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`; the
+  rest of the package installs from wheels.
+
+Changes that can affect existing code.
+
 - **`leave_one_out_connected` and `LeaveOutSet` are removed.** Use
   `connected_components(data, "worker_id + firm_id", leave_one_out=True)`,
   whose `.largest()` is the pruned panel, or `connected="leave_one_out"`
@@ -43,14 +52,20 @@
   0 is the largest (by rows in the estimation sample), as in
   `connected_components`. Ties go to the component with the smallest level of
   that dimension. It was numbered by each component's smallest level.
+- **Removed `hdfe_stream.iter_group_chunks` and `StreamingHDFE.from_formula`.**
+  The first read only the fit's internal row files, sorted by its internal
+  group code, and stays internal; the second duplicated `feols_stream`.
+
+Fixes.
+
 - **The leave-out operator's null space is right with several connected
   components.** `apply_inverse` built one null vector for every number up to
   the largest component label, which with several components left gaps, and
   each gap added a spurious vector. Leave-out estimation runs on a connected
   set and was not affected.
-- **Removed `hdfe_stream.iter_group_chunks` and `StreamingHDFE.from_formula`.**
-  The first read only the fit's internal row files, sorted by its internal
-  group code, and stays internal; the second duplicated `feols_stream`.
+
+Documentation.
+
 - **New example, `connected_sets.py`**, and additions to the others:
   `sample()` and joining the residuals back on `row_id`, `fe_dof`, and CRV3
   (`formulas.py`); `summary_json` (`quickstart.py`); `keep=` and a
