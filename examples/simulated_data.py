@@ -84,6 +84,19 @@ def glm_panel_path(n_workers=N_WORKERS):
     return _ensure("glm_panel.parquet", build)
 
 
+def thin_panel_path(n_workers=N_WORKERS):
+    """A panel with little mobility and short spells, so that its worker-firm
+    network falls apart: 2% of workers move in a year, half of all
+    person-years are observed, and there are 2,000 firms. It has hundreds of
+    connected components, workers seen only once, and firms held to the rest
+    by a single mover -- what connected_sets.py needs to show the difference
+    between the ways of restricting a sample.
+    """
+    return _ensure("thin_panel.parquet",
+                   lambda: simulate_akm(n_workers=n_workers, n_firms=2_000, p_move=0.02,
+                                        p_obs=0.5, seed=3))
+
+
 def workdir(name):
     """Scratch space for one example's intermediates and result files."""
     path = OUTPUT / "work" / name
@@ -95,4 +108,5 @@ if __name__ == "__main__":
     panel_path()
     trends_path()
     glm_panel_path()
+    thin_panel_path()
     print(f"\ndata ready in {OUTPUT}")

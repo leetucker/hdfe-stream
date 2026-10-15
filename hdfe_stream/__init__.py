@@ -56,7 +56,9 @@ group_by a slice of whole fe[0] groups (about batch_rows rows) at a time.
 Pipeline
 --------
 Pass 0 (Polars, streaming)   evaluate the design as Polars expressions; drop
-                             rows with missing / non-finite values; factorize
+                             rows with missing / non-finite values (and, as
+                             asked, outside the largest connected set, and
+                             singletons); factorize
                              the non-streamed FE and cluster ids;
                              hash-partition rows into fe[0] buckets; sort each
                              bucket and assign dense fe[0] codes.
@@ -94,6 +96,8 @@ kernels_glm.py     numba kernels, GLM cell sums and group effects
 formula.py         pyfixest formula -> Polars expressions (input side)
 reporting.py       pyfixest etable/coefplot views (output side)
 feterms.py         'worker_id[t]' / 'firm_id^year' parsing
+connected.py       `connected_components`: components of a pair of FE
+                   dimensions, the largest connected set (also `connected=`)
 results.py         `HDFEResult`, `HDFEMulti`
 workspace.py       run directories, `cleanup()`
 report.py          logging / printing
@@ -101,14 +105,14 @@ utils.py           small shared helpers
 """
 
 from .api import feglm_stream, fepois_stream, feols_stream
+from .connected import ConnectedComponents, connected_components
 from .estimator import StreamingHDFE
 from .glm import StreamingGLM
 from .leaveout_se import ComponentSE
 from .leaveout_weakid import WeakIdDiagnostics
-from .leaveout import leave_one_out_connected, leave_out_kss
+from .leaveout import leave_out_kss
 from .reporting import etable
 from .results import HDFEMulti, HDFEResult
-from .utils import iter_group_chunks
 from .workspace import cleanup
 
 __all__ = [
@@ -123,9 +127,9 @@ __all__ = [
     "leave_out_kss",
     "ComponentSE",
     "WeakIdDiagnostics",
-    "leave_one_out_connected",
+    "connected_components",
+    "ConnectedComponents",
     "cleanup",
-    "iter_group_chunks",
 ]
 
 def _detect_version():

@@ -175,6 +175,12 @@ def _as_lazy(source: Source) -> pl.LazyFrame:
     return pl.scan_parquet(source)
 
 
+def _not_nan(schema, cols):
+    """A NaN in a fixed-effect or cluster column is missing, as a null is
+    (and as in pyfixest): one test per floating-point column."""
+    return [pl.col(c).is_not_nan() for c in cols if schema[c].is_float()]
+
+
 def _row_wise(expr):
     """(True, None) if `expr` is known to be row-wise, else (False, what was
     not recognized)."""

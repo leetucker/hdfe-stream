@@ -303,7 +303,7 @@ class _InverseMixin:
         n_threads = nb.get_num_threads()
         columns, Z, schur_inv = self._border(covariates)
         n_vectors = levels.shape[1]
-        levels, streamed, null_share = self._drop_null_component(
+        levels, streamed, _ = self._drop_null_component(
             levels, covariate_values, streamed)
 
         # pass 1: rho = P^-1 v_0 spread over rows, reduced onto [X, D_o]
@@ -369,7 +369,7 @@ class _InverseMixin:
         comp = np.asarray(self.comp)
         n_components = int(comp.max()) + 1 if len(comp) else 0
 
-        group_component = self._group_components(off[first])
+        group_component = self._group_components()
         vectors = []
         for c in range(n_components):
             streamed = (group_component == c).astype(float)
@@ -396,7 +396,7 @@ class _InverseMixin:
         self._null_basis = (q[:n_groups], q[n_groups:])
         return self._null_basis
 
-    def _group_components(self, level_offset):
+    def _group_components(self):
         """Which connected component each streamed group belongs to."""
         n_groups = self.n_levels[self.g_fe]
         out = np.zeros(n_groups, np.int64)

@@ -285,8 +285,13 @@ class HDFEResult:
         dropped_because  null for those rows; otherwise "missing" (a null in any
                          column the fit uses, a NaN in a fixed effect or
                          cluster, or a non-finite outcome, covariate or
-                         weight), "singleton" (`fixef_rm`) or
-                         "separation" (GLMs)
+                         weight), "min_degree" (a level with too few
+                         distinct partners, `min_degree`), "disconnected"
+                         (outside the largest connected set,
+                         `connected="largest"`), "leave_one_out" (outside
+                         the leave-one-out connected set,
+                         `connected="leave_one_out"`),
+                         "singleton" (`fixef_rm`) or "separation" (GLMs)
 
         Nothing is stored per row: the frame is the source plus an expression
         and the small tables of levels the fit dropped, so it costs a scan of
@@ -329,11 +334,13 @@ class HDFEResult:
                                    maintain_order="left")
                 flags.setdefault(kind, []).append(flag)
         reason = pl.when(~spec["usable"]).then(pl.lit("missing"))
-        for kind in ("singleton", "separation"):
+        for kind in ("min_degree", "disconnected", "leave_one_out", "singleton",
+                     "separation"):
             if kind in flags:
                 reason = reason.when(pl.any_horizontal(
                     [pl.col(f).is_not_null() for f in flags[kind]])).then(pl.lit(kind))
-        levels = ["missing", "singleton", "separation"]
+        levels = ["missing", "min_degree", "disconnected", "leave_one_out", "singleton",
+                  "separation"]
         return (frame.with_columns(reason.otherwise(None).cast(pl.Enum(levels))
                                    .alias("dropped_because"))
                      .with_columns(pl.col("dropped_because").is_null().alias("in_sample"))
@@ -380,6 +387,20 @@ class HDFEResult:
             lines.append(f"identifying {self.fe_names[0]} groups: {self.n_identifying:,}   "
                          f"({self.fe_names[0]} x {self.fe_names[1]}) components: "
                          f"{self.n_components:,}")
+        conn = self.diagnostics.get("connected", {})
+        pruned = conn.get("min_degree", {})
+        if pruned.get("observations"):
+            lines.append(f"dropped by min_degree={tuple(pruned['min_degree'])} on "
+                         f"{' x '.join(conn['fe'])}: {pruned['observations']:,} observations")
+        loo = conn.get("leave_one_out", {})
+        if loo.get("observations"):
+            lines.append(f"dropped outside the leave-one-out connected set of "
+                         f"{' x '.join(conn['fe'])}: {loo['observations']:,} observations")
+        if conn.get("observations"):
+            lines.append(f"dropped outside the largest connected set of "
+                         f"{' x '.join(conn['fe'])}: {conn['observations']:,} observations "
+                         f"in {conn['components'] - 1:,} other component"
+                         + ("s" if conn["components"] > 2 else ""))
         singles = self.diagnostics.get("singletons", {})
         if singles.get("observations"):
             lines.append(f"dropped as singletons: {singles['observations']:,} observations")

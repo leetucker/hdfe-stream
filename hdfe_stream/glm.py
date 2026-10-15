@@ -67,6 +67,7 @@ from .families import get_family
 from .inference import _stack
 from .kernels_base import _nb_assemble, _nb_diag
 from .kernels_glm import _nb_cell_moments, _nb_group_effects
+from .passes import _drop_levels
 from .report import _warn
 from .utils import _norm_vars
 
@@ -208,17 +209,10 @@ class StreamingGLM(StreamingHDFE):
         self._separation_tables = tables
         self.separation["levels"] = {d: t.height for d, t in tables.items()}
 
-        def restrict(frame):
-            for d, t in tables.items():
-                frame = frame.join(t.lazy(), on=self.fe_cols[d], how="anti")
-            return frame
-        return restrict
+        return lambda frame: _drop_levels(frame, tables, self.fe_cols)
 
     # ------------------------------------------------------------ driver
-    def _fit_passes(self, source, keys, extra, default, fe_dof, t0):
-        if any(k.startswith("CRV3:") for k in keys):
-            raise ValueError("CRV3 standard errors are not available for GLMs; use CRV1")
-        self._pass0_code(source, keys, extra)
+    def _after_pass0(self):
         dropped = self.n_before_separation - self.n_obs
         self.separation["observations"] = dropped
         if dropped:
@@ -226,17 +220,11 @@ class StreamingGLM(StreamingHDFE):
                   + ", ".join(f"{v:,} levels of {d}"
                               for d, v in self.separation["levels"].items()) + ")",
                   self.logger)
-        if self.no_fe:
-            self._no_cells()
-        else:
-            self._pass1_cells()
-            self._pass1b_identifying()
-            self._components()
-        self._log("n={:,} cells={:,} identifying groups={:,} cells={:,} components={:,} "
-                  "threads={} ".format(self.n_obs, self.n_cells, self.n_identifying,
-                                       self.n_ident_cells, self.n_components,
-                                       nb.get_num_threads())
-                  + " ".join(f"{f}={v:,}" for f, v in self.n_levels.items()))
+
+    def _fit_passes(self, source, keys, extra, default, fe_dof, t0):
+        if any(k.startswith("CRV3:") for k in keys):
+            raise ValueError("CRV3 standard errors are not available for GLMs; use CRV1")
+        self._run_passes(source, keys, extra)
         nested = {t: self._nested_dims(t) for t in self.clusters}
         ctx = {"k_fe": self._k_fe(fe_dof), "fe_dof": fe_dof, "nested": nested, "default": default, "t0": t0}
         self._layout()

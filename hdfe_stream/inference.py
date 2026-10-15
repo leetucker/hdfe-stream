@@ -289,7 +289,7 @@ class _InferenceMixin:
         k = Axx.shape[0]
         try:
             from pyfixest.core import find_collinear_variables
-            mask, _, all_removed = find_collinear_variables(np.ascontiguousarray(Axx),
+            mask, _, _ = find_collinear_variables(np.ascontiguousarray(Axx),
                                                             self.collin_tol)
             mask = np.asarray(mask, bool)
         except ImportError:   # fallback: sequential pivot test on the Cholesky
@@ -639,7 +639,8 @@ class _InferenceMixin:
                 "cells_per_obs": round(self.n_cells / self.n_obs, 4),
                 "assembly": self.assembly, "nested_in_cluster": nested,
                 "design_evaluated": getattr(self, "design_evaluated", None),
-                "stream": self.stream_choice, "singletons": dict(self.singletons), "fe_params": dict(self.fe_params),
+                "stream": self.stream_choice, "singletons": dict(self.singletons),
+                "connected": dict(self.connected_info), "fe_params": dict(self.fe_params),
                 "slope_redundancy": getattr(self, "slope_redundancy", None) or [],
                 "seconds_total": round(time.time() - ctx["t0"], 2)}
         return HDFEResult(

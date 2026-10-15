@@ -4,7 +4,7 @@
 """
 
 from hdfe_stream import feols_stream
-from simulated_data import panel_path, workdir
+from simulated_data import OUTPUT, panel_path, workdir
 
 # A Parquet path (a glob like "data/part-*.parquet" works too), never loaded
 # into memory as a whole.
@@ -39,3 +39,12 @@ print("observations:", f"{fit.n_obs:,.0f}")
 # The estimated fixed effects, as a lazy scan -- nothing is read until you ask
 print("\nlargest firm effects:")
 print(fit.fixef("firm_id").sort("fe_firm_id", descending=True).head(5).collect())
+
+# The model-level information of the summary (observations, levels, fit
+# statistics, solver), saved as JSON for later. coefficients=True adds the
+# coefficient table. summary_dict() returns the same as a dict, and
+# summary_text() the printed summary as a string.
+path = OUTPUT / "quickstart_fit.json"
+fit.summary_json(path, coefficients=True)
+print(f"\nsummary written to {path.name}:")
+print(fit.summary_json(indent=None)[:240] + " ...")

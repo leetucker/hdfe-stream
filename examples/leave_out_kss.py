@@ -25,7 +25,7 @@ instead, and is what standard errors need; both appear below.
 import numpy as np
 import polars as pl
 
-from hdfe_stream import feols_stream, leave_one_out_connected, leave_out_kss
+from hdfe_stream import connected_components, feols_stream, leave_out_kss
 from hdfe_stream.simulate import simulate_akm, simulate_bottleneck
 from simulated_data import OUTPUT, workdir
 
@@ -62,7 +62,8 @@ print(lo.summary())
 # The estimand is an observation-level moment of the true effects, taken over
 # the sample that survived pruning -- so it must be computed on that sample,
 # not on the panel we started with.
-kept = lo.pruning.data.select("true_worker_effect", "true_firm_effect").collect()
+kept = (lo.fit.sample().filter("in_sample")
+        .select("true_worker_effect", "true_firm_effect").collect())
 alpha = kept["true_worker_effect"].to_numpy()
 psi = kept["true_firm_effect"].to_numpy()
 # Like the reference implementations, the components divide by n - 1.
@@ -96,16 +97,17 @@ print("as this falls, so a short panel needs the correction more, not less.")
 # the only link between two parts of the worker-firm network. Here the simulated
 # panel is well connected and little is lost; on administrative data KSS report
 # losing roughly half the firms.
-p = lo.pruning.diagnostics
+p = lo.pruning
 print(f"\n{'=' * 72}\nwhat pruning cost\n{'=' * 72}")
-print(f"  workers {p['workers_before']:,} -> {p['workers_after']:,}")
-print(f"  firms   {p['firms_before']:,} -> {p['firms_after']:,}")
-print(f"  articulation-point workers removed: {p['cut_workers']:,}")
+for dim in ("worker_id", "firm_id"):
+    print(f"  {dim:<9} {p['levels_before'][dim]:,} -> {p['levels_after'][dim]:,}")
+print(f"  articulation-point workers removed: {p['cut']:,}")
 print(f"  components before pruning: {p['components_before']:,}")
 
-# The pruned panel is available on its own, if you want to fit other things on
-# the same sample.
-print(f"\n  the surviving panel: {lo.pruning.data.select(pl.len()).collect().item():,} rows")
+# The fit says which rows pruning dropped: sample() labels them "leave_one_out".
+# connected_components finds the same set ahead of time, to fit other things on.
+dropped = lo.fit.sample().filter(pl.col("dropped_because") == "leave_one_out")
+print(f"\n  rows dropped by pruning: {dropped.select(pl.len()).collect().item():,}")
 
 # ------------------------------------------------------ the two-step version
 # `leave_out_kss` is a wrapper. If you want the regression in its own right --
@@ -114,8 +116,10 @@ print(f"\n  the surviving panel: {lo.pruning.data.select(pl.len()).collect().ite
 # the collapsed matches. (Leaving out an observation reads the sorted rows and
 # cell tables a fit otherwise deletes, so that needs keep_intermediates=True.)
 print(f"\n{'=' * 72}\nthe same thing in steps, keeping the regression\n{'=' * 72}")
-panel = leave_one_out_connected(str(data))
-fit = feols_stream(FML, panel.data, workdir=workdir("leave_out_steps"),
+panel = (connected_components(str(data), "worker_id + firm_id", leave_one_out=True,
+                              verbose=False)
+         .largest())
+fit = feols_stream(FML, panel, workdir=workdir("leave_out_steps"),
                    stream="worker_id", verbose=False)
 step = fit.leave_out_kss(n_draws=DRAWS, seed=0)
 
@@ -212,7 +216,8 @@ print(weak.summary())
 # reports coverage over many. Note the q = 1 interval is not symmetric about the
 # estimate: the badly estimated direction enters squared, so its uncertainty is
 # skewed, which a normal interval cannot express.
-kept = weak.pruning.data.select("true_worker_effect", "true_firm_effect").collect()
+kept = (weak.fit.sample().filter("in_sample")
+        .select("true_worker_effect", "true_firm_effect").collect())
 a_true = kept["true_worker_effect"].to_numpy()
 p_true = kept["true_firm_effect"].to_numpy()
 weak_truth = {"var(psi)": float(np.var(p_true, ddof=1)),

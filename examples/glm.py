@@ -15,7 +15,7 @@ Neither this package nor pyfixest corrects that bias.
     python examples/glm.py
 """
 
-from hdfe_stream import feglm_stream, fepois_stream
+from hdfe_stream import StreamingGLM, feglm_stream, fepois_stream
 from simulated_data import glm_panel_path, workdir
 
 data = glm_panel_path()
@@ -43,7 +43,8 @@ print(rows)
 # scale, about 0.3 / 1.6).
 for family in ("logit", "probit"):
     fit = feglm_stream("promoted ~ x | firm_id + year", data, family,
-                       workdir=workdir(f"glm_{family}"), verbose=False)
+                       workdir=workdir(f"glm_{family}"), vcov={"CRV1": "firm_id"},
+                       verbose=False)
     print(f"{family:7} firm + year effects:   x = {fit.coef()['x']:.4f}  "
           f"(se {fit.se[0]:.4f}, clustered by firm)")
     fit.cleanup()
@@ -57,5 +58,18 @@ print(f"logit   + worker effects:        x = {wk.coef()['x']:.4f}  "
       f"({sep['observations']:,} rows of workers with an unchanging outcome dropped, "
       f"in {sep['rounds']} round{'' if sep['rounds'] == 1 else 's'})")
 
-for fit in (pois, wk):
+# ------------------------------------------------- the low-level interface
+# StreamingGLM is to fepois_stream and feglm_stream what StreamingHDFE is to
+# feols_stream: column names, or (name, Polars expression) pairs, instead of a
+# formula, so pyfixest is not needed. The Poisson model above, again, with the
+# offset given as an expression:
+import polars as pl  # noqa: E402
+
+low = StreamingGLM("visits", ["x"], ["worker_id", "firm_id", "year"], family="poisson",
+                   offset=pl.col("log_exposure"), workdir=workdir("glm_lowlevel"),
+                   verbose=False).fit(data)
+print(f"\nStreamingGLM:  x = {low.coef()['x']:.8f}   "
+      f"(fepois_stream: {pois.coef()['x']:.8f})")
+
+for fit in (pois, wk, low):
     fit.cleanup()

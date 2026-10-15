@@ -211,9 +211,46 @@ def test_different_seeds_give_different_but_comparable_estimates(estimator,
 # sample selection: the leave-one-out connected set
 # --------------------------------------------------------------------------
 
+from hdfe_stream.connected import connected_components  # noqa: E402
 from hdfe_stream.kernels_graph import (_nb_articulation_points,  # noqa: E402
-                                       _nb_components, build_bipartite)
-from hdfe_stream.leaveout import leave_one_out_connected  # noqa: E402
+                                       _nb_bfs_components)
+
+
+def build_bipartite(left_code, right_code, n_left, n_right):
+    """CSR adjacency for the bipartite graph of distinct matches, for the
+    tests' own networks (the package builds its adjacency from the distinct
+    pairs in connected.py).
+
+    Vertices are the left levels 0..n_left-1 followed by the right levels
+    n_left..n_left+n_right-1. Each match contributes one undirected edge, stored
+    in both directions.
+    """
+    n_vertices = n_left + n_right
+    u = left_code.astype(np.int64)
+    v = right_code.astype(np.int64) + n_left
+
+    # list every edge twice, once from each end, then group by source
+    source = np.concatenate([u, v])
+    target = np.concatenate([v, u])
+    order = np.argsort(source, kind="stable")
+
+    indptr = np.zeros(n_vertices + 1, np.int64)
+    np.cumsum(np.bincount(source, minlength=n_vertices), out=indptr[1:])
+    return indptr, target[order]
+
+
+def loo_set(data):
+    """The leave-one-out connected set of `data`'s workers and firms."""
+    return connected_components(data, FE, leave_one_out=True, verbose=False)
+
+
+def _prune(data):
+    """`data` pruned to its leave-one-out connected set, lazily."""
+    return loo_set(data).largest(data)
+
+
+def kept_levels(cc, d):
+    return set(cc.levels[d].filter(pl.col("component") == 0)[d].to_list())
 
 
 def graph_of(pairs, n_workers, n_firms):
@@ -236,7 +273,7 @@ def cut_vertices_by_brute_force(indptr, indices, n_vertices):
     """
     def components(alive):
         label = np.empty(n_vertices, np.int64)
-        return _nb_components(indptr, indices, alive, label)
+        return _nb_bfs_components(indptr, indices, alive, label)
 
     base = components(np.ones(n_vertices, bool))
     out = np.zeros(n_vertices, bool)
@@ -281,7 +318,7 @@ def test_components_are_found_on_a_disconnected_graph():
     """Two disjoint worker-firm pairs are two components."""
     indptr, indices = graph_of([(0, 0), (1, 1)], 2, 2)
     label = np.empty(4, np.int64)
-    assert _nb_components(indptr, indices, np.ones(4, bool), label) == 2
+    assert _nb_bfs_components(indptr, indices, np.ones(4, bool), label) == 2
 
 
 @pytest.fixture
@@ -298,9 +335,8 @@ def test_pruning_leaves_the_panel_leave_one_out_connected(tmp_path):
     raw = tmp_path / "raw.parquet"
     frame.write_parquet(raw)
 
-    result = leave_one_out_connected(str(raw))
     pruned = tmp_path / "pruned.parquet"
-    result.data.sink_parquet(pruned)
+    _prune(str(raw)).sink_parquet(pruned)
 
     def max_leverage(source, tag):
         est = StreamingHDFE("log_earn", [], FE, workdir=tmp_path / tag,
@@ -316,36 +352,103 @@ def test_pruning_leaves_the_panel_leave_one_out_connected(tmp_path):
 
 
 def test_pruning_is_a_fixed_point(tmp_path, panel_frame):
-    """Deleting all the cut vertices at once cannot create new ones, which is
-    why the algorithm does not iterate. Pruning twice must change nothing."""
+    """The pruning repeats until no cut vertex is left, so pruning what it
+    leaves must change nothing."""
     path = tmp_path / "panel.parquet"
     panel_frame.write_parquet(path)
 
-    once = leave_one_out_connected(str(path))
-    again = leave_one_out_connected(once.data)
-    assert again.diagnostics["cut_workers"] == 0
-    assert again.diagnostics["components_before"] == 1
-    assert np.array_equal(np.sort(again.workers), np.sort(once.workers))
-    assert np.array_equal(np.sort(again.firms), np.sort(once.firms))
+    once = loo_set(str(path))
+    again = loo_set(once.largest(str(path)))
+    assert again.diagnostics["leave_one_out"]["cut"] == 0
+    assert again.diagnostics["leave_one_out"]["components_before"] == 1
+    for d in FE:
+        assert kept_levels(again, d) == kept_levels(once, d)
 
 
 def test_pruning_accepts_a_lazyframe(tmp_path, panel_frame):
     path = tmp_path / "panel.parquet"
     panel_frame.write_parquet(path)
-    from_path = leave_one_out_connected(str(path))
-    from_frame = leave_one_out_connected(panel_frame.lazy())
-    assert np.array_equal(np.sort(from_path.workers), np.sort(from_frame.workers))
+    from_path = loo_set(str(path))
+    from_frame = loo_set(panel_frame.lazy())
+    assert kept_levels(from_path, FE[0]) == kept_levels(from_frame, FE[0])
 
 
 def test_pruned_data_contains_only_surviving_levels(tmp_path, panel_frame):
     path = tmp_path / "panel.parquet"
     panel_frame.write_parquet(path)
-    result = leave_one_out_connected(str(path))
-    kept = result.data.collect()
+    result = loo_set(str(path))
+    kept = result.largest(str(path)).collect()
 
-    assert set(kept["worker_id"].to_list()) <= set(result.workers.tolist())
-    assert set(kept["firm_id"].to_list()) <= set(result.firms.tolist())
-    assert kept.height <= panel_frame.height
+    assert set(kept["worker_id"].to_list()) == kept_levels(result, "worker_id")
+    assert set(kept["firm_id"].to_list()) == kept_levels(result, "firm_id")
+    assert kept.height == result.sizes["rows"][0] <= panel_frame.height
+
+
+def _reference_pruning(frame):
+    """The pruning as `leave_one_out_connected` did it before it was folded
+    into `connected_components`, kept as a reference: the workers and firms
+    it keeps."""
+    matches = frame.group_by(*FE).len("rows")
+    worker_ids = matches[FE[0]].unique().sort().to_numpy()
+    firm_ids = matches[FE[1]].unique().sort().to_numpy()
+    n_workers, n_firms = len(worker_ids), len(firm_ids)
+    worker_code = np.searchsorted(worker_ids, matches[FE[0]].to_numpy())
+    firm_code = np.searchsorted(firm_ids, matches[FE[1]].to_numpy())
+    indptr, indices = build_bipartite(worker_code, firm_code, n_workers, n_firms)
+    label = np.empty(n_workers + n_firms, np.int64)
+
+    def largest(alive):
+        n = _nb_bfs_components(indptr, indices, alive, label)
+        if n == 0:
+            return np.zeros_like(alive)
+        return label == int(np.argmax(np.bincount(label[label >= 0], minlength=n)))
+
+    alive = largest(np.ones(n_workers + n_firms, bool))
+    rows = np.bincount(worker_code, weights=matches["rows"].to_numpy(),
+                       minlength=n_workers)
+    alive[:n_workers] &= ~((rows == 1) & alive[:n_workers])
+    alive = largest(alive)
+    is_cut = np.zeros(n_workers + n_firms, bool)
+    while True:
+        is_cut[:] = False
+        _nb_articulation_points(indptr, indices, is_cut, alive)
+        cut = is_cut[:n_workers] & alive[:n_workers]
+        if not cut.any():
+            break
+        alive[:n_workers] &= ~cut
+        alive = largest(alive)
+    return set(worker_ids[alive[:n_workers]].tolist()), set(firm_ids[alive[n_workers:]].tolist())
+
+
+@pytest.mark.parametrize("spec", [
+    dict(n_workers=600, n_firms=120, p_move=0.03, p_obs=0.35, seed=4),
+    dict(n_workers=3000, n_firms=600, p_move=0.02, seed=1),
+    dict(n_workers=5000, n_firms=500, p_move=0.05, p_obs=0.5, seed=2),
+])
+def test_pruning_matches_the_reference(spec):
+    """The same workers and firms as the pruning on the explicit network, on
+    panels with many components, workers observed once and several rounds of
+    cut vertices."""
+    frame = simulate_akm(**spec)
+    cc = loo_set(frame)
+    workers, firms = _reference_pruning(frame)
+    assert kept_levels(cc, FE[0]) == workers
+    assert kept_levels(cc, FE[1]) == firms
+    lo = cc.diagnostics["leave_one_out"]
+    assert lo["cut"] > 0 or lo["single_observation"] > 0
+
+
+def test_pruning_ignores_missing_levels():
+    """A row with a null firm is in no network. It once made the pruning fail;
+    and treated as a firm, a null would join the workers who have one."""
+    rows = [(1, "F1"), (1, "F2"), (2, "F1"), (2, "F2"), (3, "F1"), (3, "F2"),
+            (4, "G1"), (4, "G2"), (5, "G1"), (5, "G2"), (6, "G1"), (6, "G2"),
+            (1, None), (4, None), (4, None)]
+    frame = pl.DataFrame(rows, schema=FE, orient="row")
+    cc = loo_set(frame)
+    assert cc.diagnostics["leave_one_out"]["components_before"] == 2
+    assert kept_levels(cc, FE[1]) == {"F1", "F2"}
+    assert cc.largest(frame).collect().height == 6
 
 
 def test_pruning_keeps_only_the_largest_component(tmp_path):
@@ -360,23 +463,24 @@ def test_pruning_keeps_only_the_largest_component(tmp_path):
     path = tmp_path / "split.parquet"
     pl.concat([big, small]).write_parquet(path)
 
-    result = leave_one_out_connected(str(path))
-    assert result.diagnostics["components_before"] >= 2
+    result = loo_set(str(path))
+    assert result.diagnostics["leave_one_out"]["components_before"] >= 2
     # nothing from the small island survives
-    assert not any(str(f).startswith("X") for f in result.firms.tolist())
-    assert result.diagnostics["workers_after"] < result.diagnostics["workers_before"]
+    assert not any(str(f).startswith("X") for f in kept_levels(result, "firm_id"))
+    assert result.sizes["worker_id"][0] < result.diagnostics["levels"]["worker_id"]
 
 
 def test_diagnostics_are_internally_consistent(tmp_path, panel_frame):
     path = tmp_path / "panel.parquet"
     panel_frame.write_parquet(path)
-    result = leave_one_out_connected(str(path))
-    d = result.diagnostics
+    result = loo_set(str(path))
+    d, lo = result.diagnostics, result.diagnostics["leave_one_out"]
 
-    assert d["workers_after"] == len(result.workers) <= d["workers_before"]
-    assert d["firms_after"] == len(result.firms) <= d["firms_before"]
-    assert d["matches_after"] <= d["matches_before"]
-    assert d["components_before"] >= 1
+    assert result.n_components == 1
+    for dim in FE:
+        assert result.sizes[dim][0] + lo["levels"][dim] == d["levels"][dim]
+    assert result.sizes["rows"][0] + lo["rows"] == d["rows"]
+    assert lo["components_before"] >= 1
     assert "leave-one-out connected set" in result.summary()
 
 
@@ -611,13 +715,12 @@ def dense_trace_target(est, seen, gcode, sigma2, psi_dim):
 @pytest.fixture(scope="module")
 def trace_case(tmp_path_factory):
     """A fit plus the dense target its trace estimator should converge to."""
-    from hdfe_stream.leaveout import leave_one_out_connected
 
     base = tmp_path_factory.mktemp("trace")
     raw = base / "raw.parquet"
     simulate_akm(n_workers=250, n_firms=25, seed=13).write_parquet(raw)
     path = base / "panel.parquet"
-    leave_one_out_connected(str(raw)).data.sink_parquet(path)
+    _prune(str(raw)).sink_parquet(path)
 
     est = StreamingHDFE("log_earn", [], FE, workdir=base / "work", verbose=False,
                         keep_intermediates=True, solver="explicit", tol=1e-12)
@@ -718,13 +821,12 @@ PROTOTYPES = Path(__file__).resolve().parents[1] / "prototypes"
 @pytest.fixture(scope="module")
 def assembled(tmp_path_factory):
     """A fit on a leave-one-out connected panel, ready for the estimator."""
-    from hdfe_stream.leaveout import leave_one_out_connected
 
     base = tmp_path_factory.mktemp("assembled")
     raw = base / "raw.parquet"
     simulate_akm(n_workers=400, n_firms=40, seed=13).write_parquet(raw)
     path = base / "panel.parquet"
-    leave_one_out_connected(str(raw)).data.sink_parquet(path)
+    _prune(str(raw)).sink_parquet(path)
 
     est = StreamingHDFE("log_earn", [], FE, workdir=base / "work", verbose=False,
                         keep_intermediates=True, outputs="keep",
@@ -859,7 +961,6 @@ def test_an_unpruned_panel_is_refused(tmp_path):
 @pytest.fixture(scope="module")
 def weighted(tmp_path_factory):
     """The same setup as `assembled`, with analytic weights."""
-    from hdfe_stream.leaveout import leave_one_out_connected
 
     base = tmp_path_factory.mktemp("weighted")
     raw = base / "raw.parquet"
@@ -867,7 +968,7 @@ def weighted(tmp_path_factory):
     draws = np.random.default_rng(5).uniform(0.3, 3.0, len(panel))
     panel.with_columns(wt=pl.Series(draws)).write_parquet(raw)
     path = base / "panel.parquet"
-    leave_one_out_connected(str(raw)).data.sink_parquet(path)
+    _prune(str(raw)).sink_parquet(path)
 
     est = StreamingHDFE("log_earn", [], FE, workdir=base / "work", verbose=False,
                         keep_intermediates=True, outputs="keep",
@@ -977,7 +1078,7 @@ def test_headline_function_prunes_fits_and_decomposes(tmp_path):
 def test_the_two_paths_agree_exactly(tmp_path):
     """The headline function is a wrapper over the explicit steps, so the two
     must give the same numbers -- not merely similar ones."""
-    from hdfe_stream import feols_stream, leave_one_out_connected, leave_out_kss
+    from hdfe_stream import feols_stream, leave_out_kss
 
     path = tmp_path / "panel.parquet"
     simulate_akm(n_workers=600, n_firms=50, seed=13).write_parquet(path)
@@ -986,8 +1087,7 @@ def test_the_two_paths_agree_exactly(tmp_path):
     one = leave_out_kss(fml, str(path), workdir=tmp_path / "one", n_draws=64,
                         block=32, seed=4, verbose=False)
 
-    panel = leave_one_out_connected(str(path))
-    fit = feols_stream(fml, panel.data, workdir=tmp_path / "two",
+    fit = feols_stream(fml, _prune(str(path)), workdir=tmp_path / "two",
                        keep_intermediates=True, stream="worker_id",
                        verbose=False)
     two = fit.leave_out_kss(n_draws=64, block=32, seed=4)
@@ -1020,7 +1120,7 @@ def test_a_fit_that_discarded_its_intermediates_refuses_politely(tmp_path):
 
 def test_prune_false_demands_an_already_connected_panel(tmp_path):
     """For callers who pruned upstream: check, do not silently re-prune."""
-    from hdfe_stream import leave_one_out_connected, leave_out_kss
+    from hdfe_stream import leave_out_kss
 
     raw = tmp_path / "raw.parquet"
     simulate_akm(n_workers=600, n_firms=50, seed=21).write_parquet(raw)
@@ -1028,7 +1128,7 @@ def test_prune_false_demands_an_already_connected_panel(tmp_path):
 
     # already pruned: prune=False is fine and does not prune again
     clean = tmp_path / "clean.parquet"
-    leave_one_out_connected(str(raw)).data.sink_parquet(clean)
+    _prune(str(raw)).sink_parquet(clean)
     ok = leave_out_kss(fml, str(clean), workdir=tmp_path / "ok", n_draws=32,
                        block=32, seed=4, prune=False, verbose=False)
     assert ok.pruning is None
@@ -1436,11 +1536,10 @@ def test_weak_id_flags_a_bottleneck(tmp_path):
 
 def test_weak_id_is_quiet_on_a_well_connected_panel(tmp_path):
     path = tmp_path / "panel.parquet"
-    from hdfe_stream.leaveout import leave_one_out_connected
 
     raw = tmp_path / "raw.parquet"
     simulate_akm(n_workers=1500, n_firms=150, seed=11).write_parquet(raw)
-    leave_one_out_connected(str(raw)).data.sink_parquet(path)
+    _prune(str(raw)).sink_parquet(path)
     est = StreamingHDFE("log_earn", [], FE, workdir=tmp_path / "work",
                         verbose=False, keep_intermediates=True, outputs="keep",
                         solver="explicit", tol=1e-12)
@@ -1686,15 +1785,15 @@ def test_pruning_repeats_until_no_cut_vertex_is_left():
     """Deleting a cut vertex can create a new one. W1 links F1, F2 and a
     pendant F3; once it is gone, W2 is the only link between F1 and F2, so a
     single round of pruning leaves a set that is not leave-one-out connected."""
-    from hdfe_stream.leaveout import leave_one_out_connected
 
     spec = [(1, ["F1", "F2", "F3"]), (2, ["F1", "F2"])]
     spec += [(10 * (j + 1) + k, [f, f]) for k in range(3)
              for j, f in enumerate(("F1", "F2", "F3"))]
-    kept = leave_one_out_connected(_tiny_panel(spec))
-    assert kept.diagnostics["pruning_rounds"] == 2
-    assert kept.diagnostics["cut_workers"] == 2
-    movers = (kept.data.collect().group_by(FE[0]).agg(pl.col(FE[1]).n_unique())
+    panel = _tiny_panel(spec)
+    kept = loo_set(panel)
+    assert kept.diagnostics["leave_one_out"]["rounds"] == 2
+    assert kept.diagnostics["leave_one_out"]["cut"] == 2
+    movers = (kept.largest(panel).collect().group_by(FE[0]).agg(pl.col(FE[1]).n_unique())
               .filter(pl.col(FE[1]) > 1))
     assert movers.height == 0
 
@@ -1702,28 +1801,27 @@ def test_pruning_repeats_until_no_cut_vertex_is_left():
 def test_pruning_drops_workers_observed_once():
     """Their leverage is exactly 1, and as pendant vertices they are never
     articulation points, so pruning on the network alone keeps them."""
-    from hdfe_stream.leaveout import leave_one_out_connected
 
     spec = [(1, ["F1", "F2"]), (2, ["F1", "F2"]), (3, ["F2", "F1"]), (99, ["F1"])]
-    kept = leave_one_out_connected(_tiny_panel(spec))
-    assert 99 not in kept.data.collect()[FE[0]].to_list()
-    assert kept.diagnostics["single_observation_workers"] == 1
+    panel = _tiny_panel(spec)
+    kept = loo_set(panel)
+    assert 99 not in kept.largest(panel).collect()[FE[0]].to_list()
+    assert kept.diagnostics["leave_one_out"]["single_observation"] == 1
 
 
 def test_pruned_panel_is_leave_one_out_connected(tmp_path):
     """The property pruning exists to deliver, checked on the outcome: after
     pruning a panel with single observations and a fragile network, no
     observation has leverage 1."""
-    from hdfe_stream.leaveout import leave_one_out_connected
 
     raw = simulate_akm(n_workers=600, n_firms=120, p_move=0.03, p_obs=0.35,
                        seed=4)
     path = tmp_path / "raw.parquet"
     raw.write_parquet(path)
-    kept = leave_one_out_connected(str(path))
-    assert kept.diagnostics["single_observation_workers"] > 0
+    kept = loo_set(str(path))
+    assert kept.diagnostics["leave_one_out"]["single_observation"] > 0
     pruned = tmp_path / "pruned.parquet"
-    kept.data.sink_parquet(pruned)
+    kept.largest(str(path)).sink_parquet(pruned)
     est = StreamingHDFE("log_earn", [], FE, workdir=tmp_path / "work",
                         verbose=False, keep_intermediates=True,
                         solver="explicit", tol=1e-12)
@@ -1758,7 +1856,7 @@ def match_case(tmp_path_factory):
     base = tmp_path_factory.mktemp("match")
     raw = base / "raw.parquet"
     simulate_akm(n_workers=400, n_firms=40, seed=13).write_parquet(raw)
-    clean = leave_one_out_connected(str(raw)).data.collect()
+    clean = _prune(str(raw)).collect()
     got = {}
     for centering in ("weighted", "reference"):
         with warnings.catch_warnings():
@@ -1956,7 +2054,7 @@ def test_weighted_match_level_matches_the_exact_one(tmp_path):
     draws = np.random.default_rng(5).uniform(0.3, 3.0, len(panel))
     raw = tmp_path / "raw.parquet"
     panel.with_columns(wt=pl.Series(draws)).write_parquet(raw)
-    clean = leave_one_out_connected(str(raw)).data.collect()
+    clean = _prune(str(raw)).collect()
     exact = kss_exact.kss_match(kss_exact.Panel.from_frame(clean, weight="wt"),
                                 centering="weighted")
     with warnings.catch_warnings():
@@ -2137,7 +2235,7 @@ XHDFE_MATCH = {
 def _anchor_panel(kss_exact, tmp_path, demeaned):
     raw = tmp_path / "anchor.parquet"
     simulate_akm(n_workers=200, n_firms=20, seed=11).write_parquet(raw)
-    frame = leave_one_out_connected(str(raw)).data.collect()
+    frame = _prune(str(raw)).collect()
     worker = np.unique(frame[FE[0]].to_numpy(), return_inverse=True)[1]
     firm = np.unique(frame[FE[1]].to_numpy(), return_inverse=True)[1]
     y = frame["log_earn"].to_numpy().astype(float)

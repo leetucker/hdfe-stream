@@ -114,6 +114,47 @@ left (`fixef_rm="singleton"`, the default; `fixef_rm="none"` keeps them).
 Finding them costs a few extra passes over the fixed-effect columns and memory
 for the singleton levels, not for the rows.
 
+**Connected sets.** Worker and firm effects are only comparable within a
+connected set: firms linked, directly or through other firms, by workers who
+moved between them. `connected_components(data, "worker_id + firm_id")` finds
+the connected components of the graph of two fixed effects (either may be an
+interaction, `firm_id^year`) by union-find over the rows as they stream, and
+returns small tables, one per dimension, giving each level its component.
+Components are numbered by size, so `component == 0` is the largest.
+`.largest()` is the largest connected set and `.label()` every row with
+its component, both lazily.
+
+`min_degree` first removes levels with too few distinct partners in the other
+dimension (distinct firms for a worker, distinct workers for a firm),
+repeating until none is left, then finds the components of what remains.
+`min_degree=(2, 1)` keeps movers only: workers seen at two or more firms, and
+the firms they were seen at. `min_degree=2` also removes firms with a single
+worker, and repeats, since removing a firm can leave a worker with one firm and
+removing a worker can leave a firm with one worker, until every worker left
+was seen at two or more firms and every firm employed two or more of them (the
+network's "2-core").
+
+`leave_one_out=True` instead prunes to the **leave-one-out connected set** that
+KSS estimation needs (and `leave_out_kss` applies), so it can be found ahead of
+time: the largest connected set, without workers observed only once, and
+without any worker whose departure would split the network into pieces,
+removed repeatedly until none is left. It differs from `min_degree=2`. It keeps
+stayers with at least two observations, which `min_degree=2` removes, and it
+removes movers that `min_degree=2` keeps. Every mover and firm it keeps,
+`min_degree=2` keeps too, and on the movers and firms the two coincide only
+when no single mover holds the network together.
+
+In a fit, `min_degree=` prunes first, then `connected="largest"` keeps the
+largest connected set or `connected="leave_one_out"` the leave-one-out
+connected set, all on the first two fixed effects listed unless
+`connected_fe=` names another pair, and all before singletons are dropped, so
+the fit equals one on data restricted beforehand. `sample()` labels the rows
+they drop `"min_degree"`, `"disconnected"` and `"leave_one_out"`. The
+`component` column of `fixef()` for the first non-streamed dimension is
+numbered the same way, by rows in the estimation sample. With three or more
+fixed effects, connectedness of one pair is necessary for identification but
+not sufficient.
+
 **Covariates.** Transformations (`I(age**2)`, `log(x)`), categoricals (`C(x)`,
 string columns), interactions (`:`, `*`), event-study terms
 (`i(year, treat, ref=2009)`). Terms spanned by the fixed effects are dropped
@@ -163,7 +204,8 @@ order, not the source's, so every row carries `row_id`, its position in the
 source before any row was dropped (`row_id=` renames the column).
 `fit.resid()` joins back onto the source on it, and `fit.sample()` returns the
 source, lazily, with `row_id`, `in_sample` and `dropped_because` (null for rows
-used; otherwise `"missing"`, `"singleton"` or `"separation"`), for looking at
+used; otherwise `"missing"`, `"min_degree"`, `"disconnected"`,
+`"leave_one_out"`, `"singleton"` or `"separation"`), for looking at
 the data net of what the fit dropped:
 
 ```python
@@ -430,6 +472,7 @@ Runnable, on simulated data, no setup — see [examples/](https://github.com/lee
 | [`varying_slopes.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/varying_slopes.py) | worker-specific trends, and the low-level interface |
 | [`out_of_core.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/out_of_core.py) | memory, disk, solvers, logging |
 | [`reporting.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/reporting.py) | tables and plots via pyfixest |
+| [`connected_sets.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/connected_sets.py) | connected components, `min_degree` pruning and the leave-one-out connected set, compared |
 | [`leave_out_kss.py`](https://github.com/leetucker/hdfe-stream/blob/main/examples/leave_out_kss.py) | the KSS bias correction, checked against the effects the data was built from |
 
 ## Simulated data
@@ -497,8 +540,9 @@ print(lo.summary())
 
 It follows Saggio's reference implementation,
 [LeaveOutTwoWay](https://github.com/rsaggio87/LeaveOutTwoWay). It prunes to the
-leave-one-out connected set, leaves out a worker–firm match by default, and
-approximates leverages by random projection. It supports weights, standard
+leave-one-out connected set (which `connected_components(...,
+leave_one_out=True)` finds on its own, ahead of time), leaves out a
+worker–firm match by default, and approximates leverages by random projection. It supports weights, standard
 errors, and KSS's weak-identification diagnostic and q = 1 interval.
 
 **[docs/kss.md](https://github.com/leetucker/hdfe-stream/blob/main/docs/kss.md)** covers the options, the standard errors and their

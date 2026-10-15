@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping, Sequence, Union
+from typing import Mapping, Sequence, Union
 
 import polars as pl
 
@@ -15,4 +15,3 @@ Vcov = Union[str, Mapping[str, str]]
 # column name, (name, expression), or a mapping / sequence of them
 Variables = Union[
     str, tuple, Sequence[Union[str, tuple]], Mapping[str, pl.Expr]]
-Options = Any

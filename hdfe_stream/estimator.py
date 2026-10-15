@@ -11,7 +11,6 @@ import gc
 import logging
 import time
 import traceback
-from pathlib import Path
 from typing import Any, Sequence
 
 import numba as nb
@@ -19,6 +18,7 @@ import polars as pl
 
 from ._columns import GCODE, PREFIX, ccol
 from ._types import PathLike, Source, Variables, Vcov
+from .connected import _min_degree, _parse_pair
 from .feterms import _parse_fe_term
 from .inference import _InferenceMixin
 from .inverse import _InverseMixin
@@ -136,6 +136,36 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
          in memory. It runs after missing values are removed and does not look
          at weights; the number dropped is in diagnostics["singletons"].
          Nothing is dropped without fixed effects.
+    connected : "largest" keeps only the rows in the largest connected set
+         (by rows) of the pair `connected_fe`, by default the first two fixed
+         effects as listed (worker_id and firm_id in "worker_id + firm_id +
+         year"): the largest component of the graph in which each row joins
+         its two levels, as `hdfe_stream.connected_components` finds it.
+         "leave_one_out" keeps the leave-one-out connected set of the pair
+         instead, the sample KSS estimation needs, with its first dimension
+         as the workers (`connected_components(..., leave_one_out=True)`
+         describes it); `leave_out_kss` uses it. Either is found among the
+         rows left after missing values are removed (and `min_degree` has
+         pruned), and comes before the singletons are dropped (and before the
+         separation check of a GLM), so the fit is that of the data
+         restricted beforehand. With two fixed effects the set stays as it
+         is after them; with more, dropping a singleton of a further
+         dimension can split it, and connectedness of one pair is necessary
+         but not sufficient for identification (see `connected_components`).
+         Default None keeps every component. sample() reports the rows
+         dropped as "disconnected" or "leave_one_out"; the counts are in
+         diagnostics["connected"].
+    min_degree : drop the rows of levels of the pair `connected_fe` with
+         fewer distinct partners in the other than this, repeating until none
+         is left, before `connected` and the singletons; an int, or a pair
+         (first, second). (2, 1) keeps movers only: workers seen at two or
+         more firms, with "worker_id + firm_id". As in
+         `connected_components`, which documents it. sample() reports the
+         rows as "min_degree"; the count is in
+         diagnostics["connected"]["min_degree"]. Default 1 drops nothing.
+    connected_fe : the pair of fixed effects `connected` and `min_degree`
+         work on, as "worker_id + firm_id" or ("worker_id", "firm_id"); both
+         must be fixed effects of the model. Default: the first two listed.
     row_id : name of the column that gives each row's position in `source`
          (counted before any row is dropped). It is written to the residual
          file, so `resid()` joins back onto the source on it, and
@@ -188,7 +218,9 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                  rhs_block: int = 8, assembly: str = "auto", max_s_gb: float | None = None,
                  collin_tol: float = 1e-10, collin_tol_rel: float = 1e-6,
                  n_threads: int | None = None, scratch_mb: int = 32,
-                 fixef_rm: str = "singleton", row_id: str = "row_id",
+                 fixef_rm: str = "singleton", connected: str | None = None,
+                 min_degree: int | tuple[int, int] = 1,
+                 connected_fe: str | Sequence[str] | None = None, row_id: str = "row_id",
                  weights: str | pl.Expr | None = None, weights_type: str = "aweights",
                  stream: str | None = None, models: list[dict[str, Any]] | None = None,
                  verbose: bool = True, logger: logging.Logger | None = None,
@@ -242,6 +274,23 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         if fixef_rm not in ("none", "singleton"):
             raise ValueError("fixef_rm must be 'none' or 'singleton'")
         self.fixef_rm = fixef_rm
+        if connected not in (None, "largest", "leave_one_out"):
+            raise ValueError("connected must be None, 'largest' or 'leave_one_out'")
+        self.connected = connected
+        self.min_degree = _min_degree(min_degree)
+        if connected is not None or self.min_degree != (1, 1):
+            if len(self.fe_user) < 2:
+                raise ValueError(
+                    ("min_degree" if connected is None else f"connected={connected!r}")
+                    + " needs at least two fixed effects: it works on the graph of a "
+                    "pair of them")
+        self.connected_fe = tuple(self.fe_user[:2])
+        if connected_fe is not None:
+            self.connected_fe, _ = _parse_pair(connected_fe)
+            other = [d for d in self.connected_fe if d not in self.fe_user]
+            if other:
+                raise ValueError(f"connected_fe names {other}, which are not fixed effects "
+                                 f"of the model ({self.fe_user})")
         if solver not in ("auto", "explicit", "stream_cg", "within"):
             raise ValueError("solver must be 'auto', 'explicit', 'stream_cg' or 'within'")
         if precond not in ("jacobi", "amg"):
@@ -267,7 +316,9 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         self.row_id = row_id
         self.keep = [row_id] + [c for c in dict.fromkeys(keep)
                                 if c not in fe_src and c != row_id]
+        self._pruned_tables, self._disconnected_tables, self._loo_tables = {}, {}, {}
         self._singleton_tables, self._separation_tables = {}, {}
+        self.connected_info = {}
         self._sample_spec = None
         self.tol, self.maxiter = tol, maxiter
         self.batch_rows, self.rgs = batch_rows, row_group_size
@@ -372,8 +423,11 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         return list(dict.fromkeys(cols))
 
 
-    def _fit_passes(self, source, keys, extra, default, fe_dof, t0):
+    def _run_passes(self, source, keys, extra):
+        """Passes 0, 1 and 1b and the connected components: everything a fit
+        does before the solve, shared with StreamingGLM."""
         self._pass0_code(source, keys, extra)
+        self._after_pass0()
         if self.no_fe:
             self._no_cells()
         else:
@@ -381,10 +435,16 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
             self._pass1b_identifying()
             self._components()
         self._log("n={:,} cells={:,} identifying groups={:,} cells={:,} "
-                           "components={:,} threads={} ".format(
-            self.n_obs, self.n_cells, self.n_identifying, self.n_ident_cells,
-            self.n_components, nb.get_num_threads())
-            + " ".join(f"{f}={v:,}" for f, v in self.n_levels.items()))
+                  "components={:,} threads={} ".format(
+                      self.n_obs, self.n_cells, self.n_identifying, self.n_ident_cells,
+                      self.n_components, nb.get_num_threads())
+                  + " ".join(f"{f}={v:,}" for f, v in self.n_levels.items()))
+
+    def _after_pass0(self):
+        """Hook between pass 0 and pass 1 (StreamingGLM reports separation)."""
+
+    def _fit_passes(self, source, keys, extra, default, fe_dof, t0):
+        self._run_passes(source, keys, extra)
 
         # which fixed effects each cluster term nests; checked before the solve
         # so that a CRV3 request that cannot be met fails early
@@ -484,9 +544,3 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                   f"{kept:.2f} GB in {self.workdir}"
                   + (" (removed with the results)" if self.outputs == "auto" else ""))
         return results[0] if len(results) == 1 else HDFEMulti(results)
-
-    @classmethod
-    def from_formula(cls, fml: str, workdir: PathLike | None = None, **options: Any) -> Any:
-        """Estimator for a pyfixest-style formula; call .fit(data, vcov=...)."""
-        from .api import _FormulaEstimator      # api imports this module
-        return _FormulaEstimator(fml, workdir, options)

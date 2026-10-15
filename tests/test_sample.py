@@ -295,12 +295,13 @@ def test_a_dataframe_source_works_for_the_other_entry_points(path):
 
 
 def test_a_dataframe_source_works_for_leave_out(tmp_path):
-    from hdfe_stream import leave_one_out_connected, leave_out_kss
+    from hdfe_stream import connected_components, leave_out_kss
     from hdfe_stream.simulate import simulate_akm
 
     panel = simulate_akm(n_workers=300, n_firms=30, seed=13)
-    pruned = leave_one_out_connected(panel)
-    assert pruned.diagnostics["workers_before"] == 300
+    pruned = connected_components(panel, "worker_id + firm_id", leave_one_out=True,
+                                  verbose=False)
+    assert pruned.diagnostics["levels"]["worker_id"] == 300
     kwargs = dict(n_draws=16, block=32, seed=4, verbose=False)
     fml = "log_earn ~ age_squared | worker_id + firm_id"
     path = tmp_path / "p.parquet"

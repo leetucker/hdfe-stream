@@ -181,23 +181,6 @@ def _nb_spread_groups(starts, w, group_values, out):
                 out[i, j] = value
 
 
-@nb.njit(parallel=True, cache=True)
-def _nb_group_means(starts, w, R, out):
-    """out[g, j] = weighted mean of R over group g."""
-    G = len(starts) - 1
-    m = R.shape[1]
-    for gi in nb.prange(G):
-        s, e = starts[gi], starts[gi + 1]
-        sw = 0.0
-        for i in range(s, e):
-            sw += w[i]
-        inv = 1.0 / sw if sw > 0.0 else 0.0
-        for j in range(m):
-            total = 0.0
-            for i in range(s, e):
-                total += w[i] * R[i, j]
-            out[gi, j] = total * inv
-
 
 @nb.njit(parallel=True, cache=True)
 def _nb_project_coef(starts, codes, offs, w, X, C, RHO, U, out_rows, out_groups):

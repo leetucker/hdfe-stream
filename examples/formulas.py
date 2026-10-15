@@ -8,10 +8,12 @@ memory.
     python examples/formulas.py
 """
 
+import warnings
+
 import polars as pl
 
 from hdfe_stream import feols_stream
-from simulated_data import panel_path, workdir
+from simulated_data import panel_path, thin_panel_path, workdir
 
 data = panel_path()
 
@@ -80,6 +82,55 @@ print(f"\n{'=' * 72}\nmissing values\n{'=' * 72}")
 print(f"rows in the file: {total:,}")
 print(f"rows used:        {with_missing.n_obs:,.0f}")
 
+# sample() says which rows were used and why the others were not: the source,
+# lazily, with `row_id` (each row's position in the file), `in_sample` and
+# `dropped_because`. Nothing is stored per row to make this work.
+rows = with_missing.sample()
+print("\nwhy rows were dropped:")
+print(rows.group_by("dropped_because").len().sort("dropped_because").collect())
+
+# The residual file is in the estimator's own order, but carries `row_id`, so
+# it joins back onto the source -- here to see the residuals by occupation, a
+# column the model did not use.
+by_occ = (rows.join(with_missing.resid().select("row_id", "resid"), on="row_id", how="left")
+              .group_by("occ").agg(pl.col("resid").mean().alias("mean resid"),
+                                   pl.col("resid").is_null().sum().alias("rows not used"))
+              .sort("occ").collect())
+print("\nresiduals joined back onto the source on row_id, by occupation:")
+print(by_occ)
+# row_id= renames the column, for a source that already has one by that name.
+
+# For several models, sample() returns {formula: frame}. Models fitted together
+# on the same fixed effects share one sample: all rows complete in every one of
+# their variables.
+samples = multi.sample()
+used = {f: s.filter("in_sample").select(pl.len()).collect().item() for f, s in samples.items()}
+print(f"\nmulti.sample(): one frame per formula ({len(samples)}), rows used: "
+      + ", ".join(f"{n:,}" for n in sorted(set(used.values()))))
+
+# ------------------------------------------------- fixed-effect degrees of freedom
+# The standard errors count the fixed-effect parameters, net of the redundant
+# ones. fe_dof="exact" (the default) finds those from the connected components:
+# one redundant level per component of the worker-firm network. fe_dof="pyfixest"
+# counts one per fixed effect beyond the first, as pyfixest does. On a connected
+# panel, like the one above, the two agree exactly. On a panel whose network
+# falls apart, pyfixest's count includes a parameter for every component past
+# the first that cannot be estimated, so its standard errors are a little too
+# large. (With three or more fixed effects "exact" is an upper bound, so its
+# standard errors are conservative.)
+thin = thin_panel_path()
+# (the fits below drop a few singletons; their warnings are beside the point here)
+warnings.filterwarnings("ignore", message=".*singleton observations dropped")
+print(f"\n{'=' * 72}\nfe_dof: counting the fixed-effect parameters\n{'=' * 72}")
+print(f"{'panel':<12}{'fe_dof':<10}{'components':>11}{'FE params':>11}{'df':>9}"
+      f"{'se(age_squared)':>17}")
+for name, source in (("connected", data), ("thin", thin)):
+    for dof in ("exact", "pyfixest"):
+        fit = feols_stream("log_earn ~ age_squared | worker_id + firm_id", source,
+                           workdir=workdir("fe_dof"), fe_dof=dof, verbose=False)
+        print(f"{name:<12}{dof:<10}{fit.n_components:>11,}{fit.k_fe:>11,}{fit.df_t:>9,}"
+              f"{fit.se[0]:>17.7f}")
+
 # ---------------------------------------------------------------- collinearity
 # Terms spanned by the fixed effects are dropped, exactly as pyfixest drops
 # them: i(year) duplicates the year effect, and `treat` is constant within
@@ -112,3 +163,20 @@ for key in ["iid", "hetero", "CRV1:worker_id", "CRV1:firm_id", "CRV1:state",
     switched = clustered.with_vcov(key)
     groups = switched.n_clusters.get(key.removeprefix("CRV1:"), "-")
     print(f"{key:<26}{switched.se[0]:>18.6f}{str(groups):>16}")
+
+# CRV3, the cluster jackknife, is computed by downdating the fit, which is exact
+# when every fixed effect is nested within the clusters: here firm-by-year
+# effects, clustered by firm. (OLS and one-way only.)
+nested = feols_stream(
+    "log_earn ~ age_squared + age_cubed | firm_id^year", data,
+    workdir=workdir("crv3"), vcov={"CRV3": "firm_id"}, cluster=["firm_id"],
+    verbose=False)
+print(f"\nfirm-year effects clustered by firm: se(age_squared) "
+      f"CRV3 {nested.se[0]:.6f}, CRV1 {nested.with_vcov({'CRV1': 'firm_id'}).se[0]:.6f}")
+# With fixed effects that are not nested -- worker and firm effects clustered by
+# worker -- the jackknife would have to refit once per cluster, and the fit says so.
+try:
+    feols_stream("log_earn ~ age_squared | worker_id + firm_id", data,
+                 workdir=workdir("crv3"), vcov={"CRV3": "worker_id"}, verbose=False)
+except ValueError as err:
+    print(f"worker and firm effects clustered by worker: {str(err).split('.')[0]}.")

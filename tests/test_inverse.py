@@ -14,6 +14,7 @@ they are for.
 from __future__ import annotations
 
 import numpy as np
+import polars as pl
 import pytest
 import scipy.sparse as sp
 
@@ -522,6 +523,32 @@ def test_the_null_space_is_what_the_design_says_it_is(rich_path, tmp_path):
     q_streamed, q_levels = est._null_space()
     assert q_levels.shape[1] == nullity
     # and it really is the null space: A annihilates every basis vector
+    basis = np.vstack([q_streamed, q_levels])
+    assert np.abs(A[:, :basis.shape[0]] @ basis).max() < 1e-9
+
+
+def test_the_null_space_with_several_components(rich_path, tmp_path):
+    """One null vector per connected component: with the panel plus two
+    disjoint islands of its own rows, there are three. (The component labels
+    must run 0, 1, 2 for this; numbered by their smallest level instead, they
+    once left gaps, each of which added a spurious vector to the basis.)"""
+    panel = pl.read_parquet(rich_path)
+    workers = panel["worker_id"].unique().sort()
+    # island firms sort after the panel's, so their smallest codes are large
+    islands = [panel.filter(pl.col("worker_id") <= workers[k])
+                    .with_columns(pl.col("worker_id") + 10_000_000 * (i + 1),
+                                  (f"zz_island{i}_" + pl.col("firm_id").cast(pl.String))
+                                  .alias("firm_id"))
+               for i, k in enumerate((40, 25))]
+    path = tmp_path / "islands.parquet"
+    pl.concat([panel, *islands]).write_parquet(path)
+    est, seen, gcode, x_columns = coefficient_case(
+        str(path), tmp_path / "null3", [], ["worker_id", "firm_id"], fixef_rm="none")
+    assert est.n_components >= 3
+    A, S = dense_full_design(est, seen, gcode, ["worker_id", "firm_id"], x_columns)
+    nullity = A.shape[1] - np.linalg.matrix_rank(S)
+    q_streamed, q_levels = est._null_space()
+    assert q_levels.shape[1] == nullity == est.n_components
     basis = np.vstack([q_streamed, q_levels])
     assert np.abs(A[:, :basis.shape[0]] @ basis).max() < 1e-9
 

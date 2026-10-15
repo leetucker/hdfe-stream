@@ -29,6 +29,9 @@ fit = feols_stream(
     panel_path(),
     workdir=workdir("akm"),
     vcov={"CRV1": "worker_id"},
+    # carry region into the row-level file, for the decomposition by region
+    # below; the fixed-effect id columns are always there
+    keep=["region"],
     verbose=False,
 )
 
@@ -74,6 +77,22 @@ print(f"\n2 x cov(worker, firm) alone: {sorting:.4f} ({sorting / var_y:.1%} of V
 
 print(f"\nCorrelation of worker and firm effects: {stats['corr_worker_firm']:.3f}")
 print("(positive means assortative matching: better workers at better firms)")
+
+# The same moments by group are a group_by in the same streaming pass. `region`
+# is in the file because the fit was asked to keep it; any column of the source
+# could be (or join the residuals back onto the source on `row_id` instead;
+# see examples/formulas.py).
+by_region = (rows.group_by("region")
+                 .agg(pl.len().alias("rows"),
+                      pl.col("log_earn").var().alias("var_y"),
+                      pl.col("fe_firm_id").var().alias("var_firm"),
+                      (2 * pl.cov("fe_worker_id", "fe_firm_id")).alias("sorting"))
+                 .with_columns((pl.col("var_firm") / pl.col("var_y")).alias("firm share"),
+                               (pl.col("sorting") / pl.col("var_y")).alias("sorting share"))
+                 .sort("region")
+                 .collect(engine="streaming"))
+print("\nby region:")
+print(by_region)
 
 # Identification: worker and firm effects are only comparable within a
 # connected set of firms, linked by workers who moved between them. With more

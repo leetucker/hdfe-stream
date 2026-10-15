@@ -51,8 +51,12 @@ be describing a different model, so there is no "fit then decompose it" path
 that skips this. `prune=False` checks instead of pruning, and fails if the panel
 is not already connected — for callers who pruned upstream.
 
-`leave_one_out_connected(data)` is available on its own if you want the pruned
-panel for something else.
+The pruning is the fit option `connected="leave_one_out"`, so it runs on the
+rows the model can use, and the fit's `sample()` labels the rows it drops
+`"leave_one_out"` (`lo.fit.sample()`); `lo.pruning` has the counts. To find the
+set ahead of time, or to fit other things on it,
+`connected_components(data, "worker_id + firm_id", leave_one_out=True)` returns
+it as a table of the levels kept, and its `.largest()` is the pruned panel.
 
 ## What is left out: a match, or an observation
 
@@ -116,9 +120,9 @@ out an observation reads the sorted rows and cell tables a fit otherwise deletes
 when it finishes, so that needs `keep_intermediates=True`:
 
 ```python
-panel = leave_one_out_connected("data/*.parquet")
-fit   = feols_stream(fml, panel.data, workdir="scratch")
-lo    = fit.leave_out_kss(n_draws=250)
+fit = feols_stream(fml, "data/*.parquet", workdir="scratch",
+                   connected="leave_one_out")
+lo  = fit.leave_out_kss(n_draws=250)
 ```
 
 The two give identical numbers.

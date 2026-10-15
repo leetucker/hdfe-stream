@@ -12,10 +12,11 @@ import polars as pl
 import pyarrow.parquet as pq
 
 from ._columns import BUCKET, GCODE, PREFIX, WCOL, check_source, tcol, vcol
+from .connected import COMPONENT, _find_components
 from .kernels_base import _nb_components, _nb_diag, _nb_union_pairs
 from .kernels_slopes import _nb_diag_sl
 from .report import _warn
-from .utils import _as_lazy, _row_wise, _segments, iter_group_chunks, iter_group_tables
+from .utils import _as_lazy, _not_nan, _row_wise, _segments, iter_group_chunks, iter_group_tables
 
 # Shared-state contract with the other mixins
 # -------------------------------------------
@@ -40,12 +41,6 @@ from .utils import _as_lazy, _row_wise, _segments, iter_group_chunks, iter_group
 # may drop rows from the estimation sample before anything is written;
 # `cells_contiguous`, which sorts each fe[0] group's rows by cell; and
 # `cell_sums`, which passes 1/1b consult before summing the variables per cell.
-
-
-def _not_nan(schema, cols):
-    """A NaN in a fixed-effect or cluster column is missing, as a null is
-    (and as in pyfixest): one test per floating-point column."""
-    return [pl.col(c).is_not_nan() for c in cols if schema[c].is_float()]
 
 
 def _drop_levels(frame, tables, fe_cols):
@@ -94,10 +89,12 @@ class _PassesMixin:
                          .drop_nulls(src)
                          .filter(pl.all_horizontal(finite)))
         lf = evaluate(source)
-        # Row restrictions, in order: singletons, then whatever the subclass
-        # drops (separation, for GLMs), which sees the rows left by the first.
+        # Row restrictions, in order: the largest connected set, singletons,
+        # then whatever the subclass drops (separation, for GLMs); each sees
+        # the rows left by those before it.
         restricts = []
-        for hook in (self._singleton_restriction, self._restrict_sample):
+        for hook in (self._connected_restriction, self._singleton_restriction,
+                     self._restrict_sample):
             restrict = hook(lf)
             if restrict is not None:
                 lf = restrict(lf)
@@ -529,9 +526,91 @@ class _PassesMixin:
             "source": raw, "row_id": self.row_id, "usable": usable,
             "n_raw": raw.select(pl.len()).collect(engine="streaming").item(),
             "fe_cols": dict(self.fe_cols),
-            "tables": {"singleton": dict(self._singleton_tables),
+            "tables": {"min_degree": dict(self._pruned_tables),
+                       "disconnected": dict(self._disconnected_tables),
+                       "leave_one_out": dict(self._loo_tables),
+                       "singleton": dict(self._singleton_tables),
                        "separation": dict(self._separation_tables)},
         }
+
+    def _connected_restriction(self, lf):
+        """A function that drops the rows `min_degree` prunes, then those
+        outside the largest connected set (`connected="largest"`) or the
+        leave-one-out connected set (`connected="leave_one_out"`), all of the
+        pair `connected_fe`; or None when there is nothing to drop.
+
+        All of it comes from one call to `connected.py`'s `_find_components`,
+        as in `connected_components`: pruning first, then the components of
+        what is left. A row survives the pruning when both of its levels do,
+        so the rows a pruning drops are those with a removed level of either
+        dimension (a table of them per dimension). The two levels of a
+        surviving row are in the same component, so the rows outside the
+        largest are those whose level, of either dimension, is outside it,
+        and the dimension with fewer such levels gives the table."""
+        self.connected_info = {}
+        self._pruned_tables, self._disconnected_tables, self._loo_tables = {}, {}, {}
+        if self.connected is None and self.min_degree == (1, 1):
+            return None
+        dims = self.connected_fe
+        loo = self.connected == "leave_one_out"
+        cc = _find_components(lf, dims, self.fe_cols, min_degree=self.min_degree,
+                              batch_rows=self.batch_rows, log=self._log, leave_one_out=loo)
+        diag = cc.diagnostics
+        info = {"fe": list(dims), "rows": diag["rows"]}
+        removed = {d: cc.levels[d][COMPONENT].is_null() for d in dims}
+        if self.min_degree != (1, 1):
+            by_degree = ({d: ~pl.Series(cc._after_min_degree[d]) for d in dims} if loo
+                         else removed)
+            tables = {d: cc.levels[d].filter(by_degree[d]).drop(COMPONENT) for d in dims}
+            pruned = diag["pruned_rows"]
+            info["min_degree"] = {"min_degree": list(self.min_degree), "observations": pruned,
+                                  "levels": {d: t.height for d, t in tables.items()},
+                                  "rounds": diag["pruning_rounds"]}
+            self._pruned_tables = {d: t for d, t in tables.items() if t.height}
+            if pruned:
+                self._log(f"pass 0: min_degree={self.min_degree} on {dims[0]} x {dims[1]}: "
+                          f"{pruned:,} observations dropped")
+            if loo:
+                removed = {d: removed[d] & ~by_degree[d] for d in dims}
+        if loo:
+            lo = diag["leave_one_out"]
+            tables = {d: cc.levels[d].filter(removed[d]).drop(COMPONENT) for d in dims}
+            self._loo_tables = {d: t for d, t in tables.items() if t.height}
+            after = {d: int(cc.sizes[d][0]) if cc.n_components else 0 for d in dims}
+            info["leave_one_out"] = {
+                **lo, "observations": lo["rows"],
+                "levels_before": {d: after[d] + lo["levels"][d] for d in dims},
+                "levels_after": after}
+            self._log(f"pass 0: kept the leave-one-out connected set of {dims[0]} x "
+                      f"{dims[1]}: {lo['rows']:,} observations dropped "
+                      f"({lo['single_observation']:,} {dims[0]} observed once and "
+                      f"{lo['cut']:,} whose removal would disconnect it, in "
+                      f"{lo['rounds']} round(s), and those outside the largest of "
+                      f"{lo['components_before']:,} components)")
+        elif self.connected is not None:
+            kept = cc.sizes["rows"][0] if cc.n_components else 0
+            outside = {d: cc.levels[d].filter(pl.col(COMPONENT) > 0).drop(COMPONENT)
+                       for d in dims}
+            dropped = diag["rows"] - diag.get("pruned_rows", 0) - kept
+            info.update(components=cc.n_components, observations=dropped,
+                        levels={d: t.height for d, t in outside.items()})
+            if cc.n_components > 1:
+                d = min(dims, key=lambda d: outside[d].height)
+                self._disconnected_tables = {d: outside[d]}
+                self._log(f"pass 0: keeping the largest connected set of {dims[0]} x "
+                          f"{dims[1]}: {dropped:,} observations in {cc.n_components - 1:,} "
+                          f"other component{'s' if cc.n_components > 2 else ''} dropped")
+        self.connected_info = info
+        steps = [t for t in (self._pruned_tables, self._disconnected_tables,
+                             self._loo_tables) if t]
+        if not steps:
+            return None
+
+        def restrict(frame):
+            for t in steps:
+                frame = _drop_levels(frame, t, self.fe_cols)
+            return frame
+        return restrict
 
     def _singleton_restriction(self, lf):
         """A function that drops the singleton observations (`fixef_rm`), or
@@ -607,10 +686,31 @@ class _PassesMixin:
         self.offs = np.zeros(0, np.int64)
 
     # ----------------------------------------------------------- components
+    def _rank_components(self, root):
+        """Component labels 0, 1, ... for the levels of fe[1], numbered by
+        the rows in each (component 0 is the largest), from the union-find
+        roots `root`, each the component's smallest fe[1] code. Codes are
+        in sorted order of the levels, so a stable sort gives ties to the
+        component with the smallest fe[1] level: the numbering of
+        `connected_components` on the estimation sample, by rows, with fe[1]
+        as its first dimension."""
+        nl = len(root)
+        is_root = root == np.arange(nl)
+        dense = (np.cumsum(is_root) - 1)[root]
+        f1 = self.o_fe[0]
+        o = self._offsets()[0][f1]
+        rows = np.bincount(dense, weights=self.cnt[o:o + nl], minlength=int(is_root.sum()))
+        order = np.argsort(-rows, kind="stable")
+        rank = np.empty(len(order), np.int64)
+        rank[order] = np.arange(len(order))
+        return rank[dense], len(order)
+
     def _components(self):
         """Connected components of the (fe[0], fe[1]) graph by union-find,
         which the solver and the reported effects use, and the number of
-        components of every pair of dimensions, which `_k_fe` uses.
+        components of every pair of dimensions, which `_k_fe` uses. The
+        labels, on the levels of fe[1], are ranked by size (see
+        `_rank_components`).
 
         A pair with C components has exactly C redundant levels between its
         two dimensions, and each further dimension adds at least one more, so
@@ -624,8 +724,7 @@ class _PassesMixin:
             return
         self._log("computing connected components")
         lab = _nb_components(self.starts, self.codes, self.n_levels[self.o_fe[0]])
-        self.comp = lab
-        self.n_components = int(np.count_nonzero(lab == np.arange(len(lab))))
+        self.comp, self.n_components = self._rank_components(lab)
         self.pair_components[(self.g_fe, self.o_fe[0])] = self.n_components
         if self.slope_vars:
             return

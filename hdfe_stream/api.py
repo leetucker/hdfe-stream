@@ -17,16 +17,6 @@ from .results import HDFEMulti, HDFEResult, _vcov_key
 from .utils import _as_lazy
 
 
-class _FormulaEstimator:
-    def __init__(self, fml: str, workdir: PathLike | None, options: dict[str, Any]) -> None:
-        self.fml, self.workdir, self.options = fml, workdir, options
-
-    def fit(self, data: Source, vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
-            fe_dof: str = "exact") -> HDFEResult | HDFEMulti:
-        return feols_stream(self.fml, data, self.workdir, vcov=vcov, cluster=cluster,
-                            fe_dof=fe_dof, **self.options)
-
-
 def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,
                  vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
                  fe_dof: str = "exact", **options: Any) -> HDFEResult | HDFEMulti:
@@ -49,7 +39,10 @@ def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,
     **options : passed to StreamingHDFE (fixef_rm, stream, weights,
               weights_type, solver, precond, keep, verbose, logger, log_level,
               ...). fixef_rm='singleton' (the default, as in pyfixest) drops
-              singleton observations; 'none' keeps them.
+              singleton observations; 'none' keeps them. connected='largest'
+              keeps only the largest connected set of the first two fixed
+              effects listed, and min_degree= prunes their levels with too
+              few distinct partners first (see `connected_components`).
 
     Varying slopes on the streamed dimension: "y ~ x | worker_id[t] + firm_id".
     The worker FE file then has fe_worker_id (intercept) and fe_worker_id[t] (slope)

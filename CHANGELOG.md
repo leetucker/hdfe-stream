@@ -1,5 +1,61 @@
 # Changelog
 
+## Unreleased
+
+- **`connected_components`** finds the connected components of the graph of
+  two fixed-effect dimensions (either may be an interaction, `firm_id^year`)
+  by union-find over the rows as they stream, holding level-sized arrays
+  only. It returns a table per dimension giving each level its component,
+  numbered by size so that component 0 is the largest (ties go to the
+  component with the smallest level of the first dimension), and a table of
+  component sizes. `largest()` filters the data to the largest connected
+  set and `label()` adds each row's component, both lazily (on the data the
+  components were found in, or on other data passed to them). `min_degree`
+  removes levels with fewer distinct partners in the other dimension,
+  repeating until none is left, before the components are found: `(2, 1)`
+  keeps only movers, `2` the 2-core. `leave_one_out=True` prunes to the
+  leave-one-out connected set of KSS estimation instead. `rank_by` says
+  whether "largest" counts rows (the default) or the levels of one dimension.
+- **`connected=`, `min_degree=` and `connected_fe=`** in `feols_stream`,
+  `fepois_stream`, `feglm_stream` and `StreamingHDFE` restrict the fit to a
+  pair of fixed effects (`connected_fe`, by default the first two listed),
+  among the rows with no missing values and before singletons are dropped:
+  `min_degree` prunes levels with too few distinct partners, then
+  `connected="largest"` keeps the largest connected set of what is left, or
+  `connected="leave_one_out"` the leave-one-out connected set, as
+  `connected_components` does. `sample()` reports the rows they drop as
+  `"min_degree"`, `"disconnected"` and `"leave_one_out"`, and
+  `diagnostics["connected"]` and the summary count them.
+- **`leave_one_out_connected` and `LeaveOutSet` are removed.** Use
+  `connected_components(data, "worker_id + firm_id", leave_one_out=True)`,
+  whose `.largest()` is the pruned panel, or `connected="leave_one_out"`
+  in a fit. The set is the same: on simulated panels with many components,
+  workers observed once and several rounds of cut workers, the workers and
+  firms kept are identical. It is found 5-6 times faster (38s against 218s on
+  150 million rows), and a null worker or firm id no longer makes it fail.
+- **`leave_out_kss` prunes in the fit**, with `connected="leave_one_out"`, so
+  the leave-one-out connected set is that of the rows the model can use:
+  before, rows with a missing outcome or covariate were part of the network
+  being pruned. `lo.pruning` is now a dict of the pruning's counts (the
+  fit's `diagnostics["connected"]["leave_one_out"]`), and the rows it dropped
+  are those `lo.fit.sample()` labels `"leave_one_out"`.
+- **The `component` column of `fixef()` is numbered by size**, so component
+  0 is the largest (by rows in the estimation sample), as in
+  `connected_components`. Ties go to the component with the smallest level of
+  that dimension. It was numbered by each component's smallest level.
+- **The leave-out operator's null space is right with several connected
+  components.** `apply_inverse` built one null vector for every number up to
+  the largest component label, which with several components left gaps, and
+  each gap added a spurious vector. Leave-out estimation runs on a connected
+  set and was not affected.
+- **Removed `hdfe_stream.iter_group_chunks` and `StreamingHDFE.from_formula`.**
+  The first read only the fit's internal row files, sorted by its internal
+  group code, and stays internal; the second duplicated `feols_stream`.
+- **New example, `connected_sets.py`**, and additions to the others:
+  `sample()` and joining the residuals back on `row_id`, `fe_dof`, and CRV3
+  (`formulas.py`); `summary_json` (`quickstart.py`); `keep=` and a
+  decomposition by group (`akm_variance.py`); and `StreamingGLM` (`glm.py`).
+
 ## 0.2.2
 
 - **Polars 2.0 support.** `fit.sample()` returns the source's rows in the source's
@@ -38,11 +94,6 @@
   unchanged up to rounding.
 - **Removed `triple_budget` and `dense_max_levels`** from `StreamingHDFE`. They
   tuned the old way of building S and have no counterpart in the new one.
-- **Per-iteration CG messages are logged at DEBUG.** With `verbose=True`, the
-  "CG iter N: max rel. residual" lines go to the logger at DEBUG, whatever
-  `log_level` is, so they appear only when the logger is enabled for DEBUG.
-  Without a logger they are no longer printed. Other progress messages are
-  unchanged.
 - **Importing hdfe_stream costs a little less memory.** p-values, critical
   values and the weak-identification interval use `scipy.special`'s
   distribution functions instead of `scipy.stats`, which is no longer

@@ -53,8 +53,7 @@ FML = "log_earn ~ age_squared + age_cubed | worker_id + firm_id + year"
 in_memory = pf.feols(FML, data=pl.read_parquet(data).to_pandas(),
                      vcov={"CRV1": "worker_id"}, fixef_rm="none")
 streaming = feols_stream(FML, data, workdir=workdir("rep_same"),
-                         vcov={"CRV1": "worker_id"}, fe_dof="pyfixest",
-                         verbose=False)
+                         vcov={"CRV1": "worker_id"}, verbose=False)
 print("\n\nsame model, pyfixest in memory (1) and hdfe_stream streaming (2):\n")
 print(etable([in_memory, streaming], type="df").to_string())
 

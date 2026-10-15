@@ -112,7 +112,14 @@ Were W2 kept, `leave_out_components` would find leverage 1 and raise "not
 leave-one-out connected".
 
 The pruned sample matches xhdfe's row for row on three panels, with the same
-number of rounds (3, 1, 2). Diagnostics report `pruning_rounds`.
+number of rounds (3, 1, 2). Diagnostics report the rounds
+(`lo.pruning["rounds"]`).
+
+The pruning runs on the rows the model can use: it is the fit's
+`connected="leave_one_out"`, which comes after rows with a missing outcome,
+covariate or fixed effect are dropped. A row the regression cannot use connects
+nothing in it, so it cannot keep a worker or firm in the set. On complete data
+this changes nothing.
 
 ### 1.3 Workers with a single observation  ·  *agrees*
 
@@ -125,8 +132,8 @@ number of rounds (3, 1, 2). Diagnostics report `pruning_rounds`.
 A worker seen once has leverage exactly 1: the worker effect is determined by that
 observation. A pendant worker is never an articulation point, so pruning alone
 never removes it, and the leverage check would raise. Tested on a minimal
-panel. The resulting sample matches xhdfe's. Diagnostics report
-`single_observation_workers`.
+panel. The resulting sample matches xhdfe's. Diagnostics report them
+(`lo.pruning["single_observation"]`).
 
 ### 1.4 The graph searched for articulation points  ·  *Numerical*
 

@@ -51,7 +51,6 @@ from ._types import PathLike, Source
 from .report import _log
 
 from .results import HDFEResult
-from .utils import _as_lazy
 
 if TYPE_CHECKING:
     import polars as pl
@@ -284,152 +283,6 @@ class _LeaveOutMixin:
 
 
 # --------------------------------------------------------------------------
-# sample selection: the leave-one-out connected set
-# --------------------------------------------------------------------------
-
-@dataclass
-class LeaveOutSet:
-    """The result of pruning a panel to its leave-one-out connected set."""
-
-    data: "object"                # a Polars LazyFrame, filtered
-    workers: np.ndarray           # surviving levels of the streamed dimension
-    firms: np.ndarray             # surviving levels of the other dimension
-    diagnostics: dict = field(default_factory=dict)
-
-    def summary(self) -> str:
-        d = self.diagnostics
-        return (
-            "leave-one-out connected set\n"
-            f"  workers {d['workers_before']:,} -> {d['workers_after']:,} "
-            f"({d['workers_after'] / max(d['workers_before'], 1):.1%})\n"
-            f"  firms   {d['firms_before']:,} -> {d['firms_after']:,} "
-            f"({d['firms_after'] / max(d['firms_before'], 1):.1%})\n"
-            f"  matches {d['matches_before']:,} -> {d['matches_after']:,}\n"
-            f"  articulation-point workers removed: {d['cut_workers']:,} "
-            f"in {d['pruning_rounds']} round(s)\n"
-            f"  workers observed once, removed: "
-            f"{d['single_observation_workers']:,}\n"
-            f"  components before pruning: {d['components_before']:,}")
-
-
-def leave_one_out_connected(data: Source, worker: str = "worker_id",
-                            firm: str = "firm_id") -> LeaveOutSet:
-    """Prune a panel to the largest leave-one-out connected set.
-
-    Leave-out estimation needs every fixed effect to stay estimable when any
-    single observation is dropped, which for a two-way model means the bipartite
-    worker-firm network must stay connected when any one worker is removed. That
-    fails exactly at the workers who are *articulation points* of the network.
-    Following LeaveOutTwoWay (`pruning_unbal_v3.m`) and VarianceComponentsHDFE.jl:
-
-        1. take the largest connected component
-        2. drop workers observed only once -- their leverage is exactly 1
-        3. delete every worker that is an articulation point, and take the
-           largest connected component of what is left
-        4. repeat 3 until no articulation point remains
-
-    Step 3 has to be repeated: deleting cut vertices can create new ones. In a
-    4-cycle W1-F1-W2-F2-W1 with a firm attached only to W1, W1 is a cut vertex,
-    and once it is gone W2 is the only link between F1 and F2. Step 2 needs doing
-    only once, because a worker seen once is a pendant vertex and removing a
-    pendant never creates a cut vertex.
-
-    `data` is a Parquet path, glob, Polars LazyFrame or DataFrame. The return value's
-    `.data` is the same source filtered to the surviving workers and firms, ready
-    to pass to `feols_stream` or `StreamingHDFE.fit`.
-
-    Expect this to remove a lot: in KSS's own application it drops roughly half
-    the firms, mostly ones attached to a single mover. That is a property of the
-    estimand, not of this implementation -- the leave-out parameters are simply
-    not identified off those firms.
-
-    Only the network is held in memory, never the rows: one vertex per worker and
-    per firm, one edge per distinct match.
-    """
-    import polars as pl
-
-    from .kernels_graph import (_nb_articulation_points, _nb_components,
-                                build_bipartite)
-
-    frame = _as_lazy(data)
-
-    # one streaming pass for the distinct matches and how many rows each has
-    matches = (frame.group_by(worker, firm).len("rows")
-               .collect(engine="streaming"))
-    worker_ids = matches[worker].unique().sort()
-    firm_ids = matches[firm].unique().sort()
-    n_workers, n_firms = len(worker_ids), len(firm_ids)
-
-    # map ids to dense codes by sorted search, which works for any id type
-    worker_code = np.searchsorted(worker_ids.to_numpy(), matches[worker].to_numpy())
-    firm_code = np.searchsorted(firm_ids.to_numpy(), matches[firm].to_numpy())
-
-    indptr, indices = build_bipartite(worker_code, firm_code, n_workers, n_firms)
-    n_vertices = n_workers + n_firms
-
-    # step 1: the largest connected component
-    alive = np.ones(n_vertices, bool)
-    label = np.empty(n_vertices, np.int64)
-    n_components = _nb_components(indptr, indices, alive, label)
-    if n_components > 1:
-        sizes = np.bincount(label[label >= 0], minlength=n_components)
-        alive = label == int(np.argmax(sizes))
-
-    def largest(alive):
-        n_left = _nb_components(indptr, indices, alive, label)
-        if n_left == 0:
-            return np.zeros_like(alive)
-        sizes = np.bincount(label[label >= 0], minlength=n_left)
-        return label == int(np.argmax(sizes))
-
-    # step 2: workers observed once. A worker's rows all sit at firms in its own
-    # component, so its row count is fixed by the data, not by the pruning.
-    rows_per_worker = np.bincount(worker_code, weights=matches["rows"].to_numpy(),
-                                  minlength=n_workers)
-    single = (rows_per_worker == 1) & alive[:n_workers]
-    single_observation = int(single.sum())
-    alive[:n_workers] &= ~single
-    alive = largest(alive)
-
-    # steps 3-4: delete articulation-point workers until there are none
-    cut_workers, rounds = 0, 0
-    is_cut = np.zeros(n_vertices, bool)
-    while True:
-        is_cut[:] = False
-        _nb_articulation_points(indptr, indices, is_cut, alive)
-        cut = is_cut[:n_workers] & alive[:n_workers]
-        if not cut.any():
-            break
-        cut_workers += int(cut.sum())
-        rounds += 1
-        alive[:n_workers] &= ~cut
-        alive = largest(alive)
-
-    keep_workers = worker_ids.to_numpy()[alive[:n_workers]]
-    keep_firms = firm_ids.to_numpy()[alive[n_workers:]]
-    kept_matches = int((alive[worker_code] & alive[n_workers + firm_code]).sum())
-
-    # `implode` makes the membership test unambiguous: the right-hand side is
-    # one list to look inside, not a column to compare against element by
-    # element. Polars deprecated the bare form.
-    filtered = frame.filter(
-        pl.col(worker).is_in(pl.Series(worker, keep_workers).implode())
-        & pl.col(firm).is_in(pl.Series(firm, keep_firms).implode()))
-
-    return LeaveOutSet(
-        data=filtered, workers=keep_workers, firms=keep_firms,
-        diagnostics={
-            "workers_before": n_workers, "workers_after": len(keep_workers),
-            "firms_before": n_firms, "firms_after": len(keep_firms),
-            "matches_before": matches.height, "matches_after": kept_matches,
-            "cut_workers": cut_workers, "components_before": n_components,
-            "single_observation_workers": single_observation,
-            "pruning_rounds": rounds,
-        },
-    )
-
-
-# --------------------------------------------------------------------------
 # the bias term: Hutchinson's trace estimator
 # --------------------------------------------------------------------------
 
@@ -612,7 +465,7 @@ class LeaveOutComponents:
     se: object = None
     weak_id: object = None
     diagnostics: dict = field(default_factory=dict)
-    pruning: object = None
+    pruning: dict | None = None
     fit: object = None
     match_fit: object = None
 
@@ -645,11 +498,12 @@ class LeaveOutComponents:
                       f"  max leverage {d['max_leverage']:.6f}   "
                       f"mean sigma2 {d['sigma2_mean']:.6f}"]
         if self.pruning is not None:
-            p = self.pruning.diagnostics
+            p = self.pruning
+            a, f = p["fe"]
             lines.append(
-                f"  sample: {p['workers_before']:,} -> {p['workers_after']:,} "
-                f"{d['alpha']}, {p['firms_before']:,} -> {p['firms_after']:,} "
-                f"{d['psi']} after pruning to the leave-one-out connected set")
+                f"  sample: {p['levels_before'][a]:,} -> {p['levels_after'][a]:,} "
+                f"{a}, {p['levels_before'][f]:,} -> {p['levels_after'][f]:,} "
+                f"{f} after pruning to the leave-one-out connected set")
         wide = self.se is not None
         confidence = self.diagnostics.get("confidence", 0.95)
         from scipy.special import ndtri
@@ -763,7 +617,8 @@ class _ComponentsMixin:
         intermediates, read for its residuals and fitted effects.
 
         The panel must be leave-one-out connected -- see
-        `leave_one_out_connected` -- or some observation's leave-one-out
+        `connected_components(..., leave_one_out=True)` and the fit option
+        `connected="leave_one_out"` -- or some observation's leave-one-out
         residual is undefined and this will say so.
 
         With weights the target is the *weighted* variance decomposition, and
@@ -828,8 +683,8 @@ class _ComponentsMixin:
             raise ValueError(
                 f"maximum leverage is {worst:.6f}: the panel is not leave-one-out "
                 f"connected (leaving out one {unit} at a time), so the leave-out "
-                f"residual is undefined for at least one {unit}. Prune with "
-                "hdfe_stream.leaveout.leave_one_out_connected() and refit")
+                f"residual is undefined for at least one {unit}. Refit with "
+                "connected='leave_one_out', or use hdfe_stream.leave_out_kss, which does")
 
         # The plug-in moments have to be weighted the same way the trace is,
         # since the bias is subtracted from them: _nb_trace_moments accumulates
@@ -1173,7 +1028,11 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
        worker-firm network; they are removed, repeatedly, until none is left,
        and workers observed once are dropped too. **This changes the estimation
        sample**, often substantially -- in KSS's own application it removes
-       about half the firms -- which is why it happens before the fit;
+       about half the firms. It is the fit's `connected="leave_one_out"`, so
+       it runs on the rows the model can use, and the fit's `sample()` says
+       which rows it dropped (`"leave_one_out"`);
+       `connected_components(..., leave_one_out=True)` finds the same set on
+       its own, ahead of time;
     2. the model is fitted on what survives;
     3. leverages are approximated by random projection, and from them the bias.
 
@@ -1198,7 +1057,8 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
 
     `prune=False` skips step 1 and fails if the panel is not already
     leave-one-out connected, for callers who have pruned upstream and want to be
-    told if they are wrong.
+    told if they are wrong. The result's `pruning` holds the counts of step 1
+    (the fit's diagnostics["connected"]), or None without it.
 
     Extra options are passed to the fit, so `weights=` and the memory knobs
     remain available. `fixef_rm` defaults to "none" here, because the pruning
@@ -1206,7 +1066,7 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
     """
     from .api import feols_stream
     from .feterms import _parse_fe, _parse_fe_term
-    from .report import _log, _warn
+    from .report import _warn
 
     if "|" not in fml:
         raise ValueError(
@@ -1224,25 +1084,9 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
             f"psi must be one of the fixed effects other than {alpha!r} "
             f"(which plays the part of alpha); got {psi!r} from {dimensions}")
 
-    pruning = None
     if prune:
-        pruning = leave_one_out_connected(data, worker=alpha, firm=psi)
-        d = pruning.diagnostics
-        message = (
-            f"pruned to the leave-one-out connected set: "
-            f"{d['workers_before']:,} -> {d['workers_after']:,} {alpha}, "
-            f"{d['firms_before']:,} -> {d['firms_after']:,} {psi}, "
-            f"{d['cut_workers']:,} articulation-point {alpha} removed in "
-            f"{d['pruning_rounds']} round(s), "
-            f"{d['single_observation_workers']:,} observed once")
-        _log(verbose, message, logger)
-        dropped = 1.0 - d["firms_after"] / max(d["firms_before"], 1)
-        if dropped > 0.2:
-            _warn(f"leave-one-out pruning removed {dropped:.0%} of {psi}; "
-                  "the components below describe the surviving set, which is "
-                  "the sample the leave-out parameters are identified on, not "
-                  "the panel you supplied", logger)
-        data = pruning.data
+        options.setdefault("connected", "leave_one_out")
+        options.setdefault("connected_fe", (alpha, psi))
 
     # the streamed dimension is pinned so that the pair the sample was pruned on
     # is the pair the decomposition is about
@@ -1271,6 +1115,16 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
                                    weak_interval=weak_interval,
                                    confidence=confidence, centering=centering,
                                    se_variance=se_variance)
+    pruning = fit.diagnostics.get("connected", {}).get("leave_one_out")
+    if pruning is not None:
+        before, after = pruning["levels_before"], pruning["levels_after"]
+        dropped = 1.0 - after[psi] / max(before[psi], 1)
+        if dropped > 0.2:
+            _warn(f"leave-one-out pruning removed {dropped:.0%} of {psi}; "
+                  "the components below describe the surviving set, which is "
+                  "the sample the leave-out parameters are identified on, not "
+                  "the panel you supplied", logger)
+        pruning = {"fe": [alpha, psi], **pruning}
     components.pruning = pruning
     components.fit = fit
     return components

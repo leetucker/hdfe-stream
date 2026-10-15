@@ -186,7 +186,6 @@ def leave_out_match(row_fit, alpha, psi, workdir, n_draws, seed, block,
     estimator = match_fit._estimator
     estimator.reload_intermediates()
     estimator._match_person_years = person_years
-    estimator._leave_out_level = "match"
 
     try:
         stayers = stayer_sigma2(row_fit, match_fit, alpha, psi)
