@@ -1,6 +1,7 @@
 include README.md CHANGELOG.md CITATION.cff LICENSE.md
 graft tests
 graft docs
+prune docs/_build
 prune benchmarks
 prune prototypes
 prune examples

@@ -20,42 +20,76 @@ from .utils import _as_lazy
 def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,
                  vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
                  fe_dof: str = "exact", **options: Any) -> HDFEResult | HDFEMulti:
-    """
-    Out-of-core OLS with high-dimensional fixed effects from a pyfixest-style
-    formula, e.g. "y ~ x1 + i(year, treat, ref=2010) | worker_id + firm_id^year".
-    Any number of fixed effects works, including one ("y ~ x | worker_id",
-    a within regression) and none ("y ~ x", OLS with an intercept).
+    """Out-of-core OLS with high-dimensional fixed effects, from a
+    pyfixest-style formula.
 
-    data    : Parquet path/glob or Polars LazyFrame; a DataFrame also works, but
-              is already in memory, which the library is built to avoid.
-    workdir : directory under which run directories are created (default:
-              $HDFE_STREAM_WORKDIR if set, else the system temporary
-              directory); see StreamingHDFE for the
-              outputs=, save_resid= and keep_intermediates= options.
-    vcov    : as in pyfixest; default 'iid', also as in pyfixest. {'CRV3': var}
-              (one-way, OLS) needs every fixed effect nested within the
-              clusters, or none.
-    cluster : extra cluster specs to compute CRV1 for (one-way or 'a+b').
-    **options : passed to StreamingHDFE (fixef_rm, stream, weights,
-              weights_type, solver, precond, keep, verbose, logger, log_level,
-              ...). fixef_rm='singleton' (the default, as in pyfixest) drops
-              singleton observations; 'none' keeps them. connected='largest'
-              keeps only the largest connected set of the first two fixed
-              effects listed, and min_degree= prunes their levels with too
-              few distinct partners first (see `connected_components`).
+    Any number of fixed effects works, including one (``"y ~ x | worker_id"``,
+    a within regression) and none (``"y ~ x"``, OLS with an intercept).
 
-    Varying slopes on the streamed dimension: "y ~ x | worker_id[t] + firm_id".
-    The worker FE file then has fe_worker_id (intercept) and fe_worker_id[t] (slope)
-    columns; the residual file's fe_worker_id column is the worker's total
-    contribution for that row.
+    Parameters
+    ----------
+    fml : str
+        The formula, in pyfixest syntax, e.g.
+        ``"y ~ x1 + i(year, treat, ref=2010) | worker_id + firm_id^year"``.
+        Several outcomes (``y1 + y2 ~ ...``) and stepwise sets (``sw()``,
+        ``csw()``, ``sw0()``, ``csw0()``) give several models. Varying slopes
+        on the streamed dimension: ``"y ~ x | worker_id[t] + firm_id"``. IV:
+        ``"y ~ x | fe | endog ~ z"``, estimated by 2SLS.
+    data : str, Path, polars.LazyFrame or polars.DataFrame
+        A Parquet path or glob, or a Polars LazyFrame. A DataFrame also works,
+        but is already in memory, which the library is built to avoid.
+    workdir : str or Path, optional
+        Directory under which run directories are created. Default: the
+        ``HDFE_STREAM_WORKDIR`` environment variable if set, else the system
+        temporary directory. See `StreamingHDFE` for the ``outputs=``,
+        ``save_resid=`` and ``keep_intermediates=`` options.
+    vcov : str or dict, default "iid"
+        As in pyfixest: ``"iid"``, ``"hetero"`` (or ``"HC1"``),
+        ``{"CRV1": "var"}`` or ``"CRV1:var"``, with multi-way clustering as
+        ``{"CRV1": "a+b"}``. ``{"CRV3": var}`` (one-way, OLS) needs every fixed
+        effect nested within the clusters, or none.
+    cluster : str or sequence of str, optional
+        Further cluster specifications to compute CRV1 for (one-way, or
+        ``"a+b"``), so that `HDFEResult.with_vcov` can switch to them.
+    fe_dof : {"exact", "pyfixest"}, default "exact"
+        How the fixed-effect parameters are counted for the degrees of
+        freedom; see `StreamingHDFE.fit`.
+    **options
+        Passed to `StreamingHDFE`: ``fixef_rm``, ``connected``,
+        ``min_degree``, ``connected_fe``, ``stream``, ``weights``,
+        ``weights_type``, ``solver``, ``precond``, ``keep``, the memory
+        options, ``verbose``, ``logger``, ``log_level``, and the rest.
+        ``fixef_rm="singleton"`` (the default, as in pyfixest) drops singleton
+        observations; ``"none"`` keeps them. ``connected="largest"`` keeps only
+        the largest connected set of the first two fixed effects listed, and
+        ``min_degree=`` prunes their levels with too few distinct partners
+        first (see `connected_components`).
 
-    IV formulas ("y ~ x | fe | endog ~ z") are estimated by 2SLS; each result
-    carries its first-stage regressions (`first_stage`) and the Wald F of the
-    excluded instruments computed with the same vcov (`f_stat_1st_stage`).
+    Returns
+    -------
+    HDFEResult or HDFEMulti
+        One result, or several when the formula expands to several models.
+
+    Notes
+    -----
+    With varying slopes, the worker fixed-effect file has ``fe_worker_id``
+    (intercept) and ``fe_worker_id[t]`` (slope) columns; the residual file's
+    ``fe_worker_id`` column is the worker's total contribution for that row.
+
+    IV results carry their first-stage regressions (``first_stage``) and the
+    Wald F of the excluded instruments computed with the same vcov
+    (``f_stat_1st_stage``).
 
     All models with the same fixed effects share one set of passes and one
     solve, and are estimated on the rows where *all* of their variables are
     non-missing (pyfixest drops missing values model by model).
+
+    Examples
+    --------
+    >>> fit = feols_stream(
+    ...     "log_earn ~ age_squared + age_cubed | worker_id + firm_id + year",
+    ...     "data/*.parquet", workdir="scratch", vcov={"CRV1": "worker_id"})
+    >>> fit.summary()
     """
     def estimators(fe, g):
         yield StreamingHDFE(y=list(g["y"].items()), x=list(g["x"].items()), fe=list(fe),
@@ -94,29 +128,48 @@ def fepois_stream(fml: str, data: Source, workdir: PathLike | None = None,
                   fe_dof: str = "exact", offset: str | pl.Expr | None = None,
                   iwls_tol: float = 1e-8, iwls_maxiter: int = 25,
                   separation_check: bool = True, **options: Any) -> HDFEResult | HDFEMulti:
-    """
-    Out-of-core Poisson regression (log link) with high-dimensional fixed
-    effects, from a pyfixest-style formula, e.g.
-    "trade ~ log_dist | exporter^year + importer^year". Estimated by
-    iteratively reweighted least squares; each step is one read of the rows
-    and one solve of the fixed effects (see `StreamingGLM`).
+    """Out-of-core Poisson regression (log link) with high-dimensional fixed
+    effects, from a pyfixest-style formula.
 
-    data, workdir, vcov, cluster, fe_dof, **options : as in `feols_stream`,
-              except that the vcov may not be CRV3, and IV formulas and
-              varying slopes are not available. weights= and weights_type=
-              work as in pyfixest's fepois.
-    offset  : column name added to the linear predictor with a coefficient of
-              one (e.g. log exposure).
-    iwls_tol, iwls_maxiter : convergence tolerance on the relative change in
-              deviance, and the most IRLS steps (pyfixest's defaults).
-    separation_check : drop fixed-effect levels whose outcome is zero on
-              every row (their effect would be minus infinity), as pyfixest's
-              "fe" check, which it runs by default. Covariates that separate
-              the outcome (its "ir" check) are not detected.
+    Estimated by iteratively reweighted least squares; each step is one read
+    of the rows and one solve of the fixed effects (see `StreamingGLM`).
 
-    The dependent variable must be nonnegative. Each dependent variable is
-    its own set of IRLS fits (the separation check depends on it); models of
-    the same outcome share pass 0.
+    Parameters
+    ----------
+    fml : str
+        The formula, e.g. ``"trade ~ log_dist | exporter^year + importer^year"``.
+        IV formulas and varying slopes are not available.
+    data, workdir, cluster, fe_dof
+        As in `feols_stream`.
+    vcov : str or dict, default "iid"
+        As in `feols_stream`, except that it may not be CRV3.
+    offset : str or polars.Expr, optional
+        A column added to the linear predictor with a coefficient of one
+        (e.g. log exposure).
+    iwls_tol : float, default 1e-8
+        Convergence tolerance on the relative change in deviance,
+        ``|dev - dev_old| / (0.1 + |dev|)`` (pyfixest's default).
+    iwls_maxiter : int, default 25
+        The most IRLS steps (pyfixest's default). A fit that reaches it warns,
+        and ``diagnostics["irls"]["converged"]`` is False.
+    separation_check : bool, default True
+        Drop fixed-effect levels whose outcome is zero on every row (their
+        effect would be minus infinity), as pyfixest's ``"fe"`` check, which
+        it runs by default. Covariates that separate the outcome (its ``"ir"``
+        check) are not detected.
+    **options
+        As in `feols_stream`. ``weights=`` and ``weights_type=`` work as in
+        pyfixest's ``fepois``.
+
+    Returns
+    -------
+    HDFEResult or HDFEMulti
+
+    Notes
+    -----
+    The dependent variable must be nonnegative. Each dependent variable is its
+    own set of IRLS fits (the separation check depends on it); models of the
+    same outcome share pass 0.
     """
     return _fit_glm(fml, data, "poisson", workdir, vcov, cluster, fe_dof,
                     dict(options, offset=offset, iwls_tol=iwls_tol, iwls_maxiter=iwls_maxiter,
@@ -127,21 +180,39 @@ def feglm_stream(fml: str, data: Source, family: str, workdir: PathLike | None =
                  vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
                  fe_dof: str = "exact", iwls_tol: float = 1e-8, iwls_maxiter: int = 25,
                  separation_check: bool = True, **options: Any) -> HDFEResult | HDFEMulti:
-    """
-    Out-of-core logit or probit regression with high-dimensional fixed
-    effects, from a pyfixest-style formula: `family` is "logit" or "probit".
+    """Out-of-core logit or probit regression with high-dimensional fixed
+    effects, from a pyfixest-style formula.
+
     Estimated by iteratively reweighted least squares, with step-halving, as
-    pyfixest's feglm (see `StreamingGLM`).
+    pyfixest's ``feglm`` (see `StreamingGLM`).
 
-    Arguments as in `fepois_stream`, without the offset. The dependent
-    variable must be 0 or 1. The separation check drops fixed-effect levels
-    whose outcome is the same on every row (all 0 or all 1), repeating until
-    none is left; pyfixest's "fe" check drops only levels whose outcome is
-    all 0, once.
+    Parameters
+    ----------
+    fml : str
+        The formula. IV formulas and varying slopes are not available.
+    data : str, Path, polars.LazyFrame or polars.DataFrame
+        As in `feols_stream`.
+    family : {"logit", "probit"}
+        The model.
+    workdir, vcov, cluster, fe_dof, iwls_tol, iwls_maxiter, **options
+        As in `fepois_stream`.
+    separation_check : bool, default True
+        Drop fixed-effect levels whose outcome is the same on every row (all 0
+        or all 1), repeating until none is left. pyfixest's ``"fe"`` check
+        drops only levels whose outcome is all 0, once.
 
-    Weights (weights=, weights_type=) multiply each row's log-likelihood, as
-    in fepois; pyfixest's feglm takes none. Frequency weights give exactly
-    the fit of the data with each row repeated that many times.
+    Returns
+    -------
+    HDFEResult or HDFEMulti
+
+    Notes
+    -----
+    The dependent variable must be 0 or 1.
+
+    Weights (``weights=``, ``weights_type=``) multiply each row's
+    log-likelihood, as in ``fepois``; pyfixest's ``feglm`` takes none.
+    Frequency weights give exactly the fit of the data with each row repeated
+    that many times.
 
     No correction is made for the incidental parameter problem: with fixed
     effects estimated from few observations each, the coefficients are

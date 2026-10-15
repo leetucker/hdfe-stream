@@ -99,4 +99,5 @@ without re-running anything.
 
 `akm_benchmark.py --memory-sweep N_WORKERS` is a separate measurement: how
 hdfe_stream's peak memory responds to `rows_per_bucket` and `batch_rows` on one
-panel. Its table is in the main README.
+panel. Its table is in the documentation, under
+[AKM regression](https://leetucker.github.io/hdfe-stream/benchmarks/akm.html#trading-memory-for-time).

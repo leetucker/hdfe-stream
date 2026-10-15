@@ -63,27 +63,44 @@ WEAK_ID_THRESHOLD = 0.1
 
 @dataclass
 class WeakIdDiagnostics:
-    """The eigenvalue diagnostic for the three components.
+    """KSS's weak-identification diagnostic for the three components:
+    ``LeaveOutComponents.weak_id``.
 
-    For each component name:
+    Each attribute but `threshold` and `diagnostics` is a dict keyed by
+    component.
 
-        eigenvalues   the leading eigenvalues of S^- Q, largest in magnitude
-                      first (signed: the covariance's can be negative)
-        sum_sq        sum of all squared eigenvalues, tr((S^- Q)^2), estimated
-        sum_sq_se     Monte Carlo standard error of that estimate
-        ratios        lambda_l^2 / sum_sq for the leading eigenvalues
-        q             KSS's threshold rule; 0 means the normal interval is
-                      justified. When every reported ratio clears the threshold
-                      the true q may be larger, which `q_capped` records.
-        q_borderline  a ratio lies within two Monte Carlo standard errors of the
-                      threshold, so q could go either way at this draw budget;
-                      raise `n_draws` to resolve it
-        f_stat        b1^2 / V[b1] for the leading direction: how well its
-                      nuisance parameter is identified. Large values mean the
-                      delta-method (normal) interval is less at risk even when
-                      q >= 1 (KSS Remark 10).
-        bounds        Lanczos error bound on each reported eigenvalue
-        converged     whether the leading two eigenvalues met the tolerance
+    Attributes
+    ----------
+    eigenvalues : dict
+        The leading eigenvalues of S^- Q, largest in magnitude first (signed:
+        the covariance's can be negative).
+    sum_sq : dict
+        The sum of all squared eigenvalues, tr((S^- Q)^2), estimated.
+    sum_sq_se : dict
+        The Monte Carlo standard error of that estimate.
+    ratios : dict
+        lambda_l^2 / sum_sq for the leading eigenvalues.
+    q : dict
+        KSS's threshold rule; 0 means the normal interval is justified.
+    q_capped : dict
+        True when every reported ratio clears the threshold, so the true q
+        may be larger.
+    q_borderline : dict
+        True when a ratio lies within two Monte Carlo standard errors of the
+        threshold, so q could go either way at this draw budget; raise
+        ``diagnose_draws`` to resolve it.
+    f_stat : dict
+        b1^2 / V[b1] for the leading direction: how well its nuisance
+        parameter is identified. Large values mean the delta-method (normal)
+        interval is less at risk even when q >= 1 (KSS Remark 10).
+    bounds : dict
+        The Lanczos error bound on each reported eigenvalue.
+    converged : dict
+        Whether the leading two eigenvalues met the tolerance.
+    threshold : float
+        KSS's threshold on lambda^2 / sum lambda^2, 0.1.
+    diagnostics : dict
+        Settings and timings.
     """
 
     eigenvalues: dict
@@ -109,6 +126,7 @@ class WeakIdDiagnostics:
         return [name for name in COMPONENTS if self.q[name] >= 1]
 
     def summary(self) -> str:
+        """A table of the ratios, q and F for each component."""
         lines = [f"weak-identification diagnostic (KSS threshold "
                  f"{self.threshold:g} on lambda^2 / sum lambda^2)",
                  f"{'component':<18}{'lam1^2/sum':>11}{'lam2^2/sum':>11}"

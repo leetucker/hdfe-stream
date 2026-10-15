@@ -181,7 +181,7 @@ log earnings the reference's variance estimate is negative and truncated to
 zero, because it uses the raw outcome with an essentially unsmoothed σ̃.
 `kss_match_se` is the package's version. It follows the reference by default
 (`se_variance="person_year"`), except for the differences listed in
-`docs/kss_methodological_differences.md` §5.7, which also has the coverage study
+`docs/kss/differences.md` §5.7, which also has the coverage study
 and the `"match"` option that goes beyond the reference.
 
 ## Not implemented

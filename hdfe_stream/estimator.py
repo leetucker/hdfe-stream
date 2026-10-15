@@ -59,149 +59,207 @@ def _polars_panic_message(exc):
 class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                     _LeaveOutMixin, _TraceMixin, _ComponentsMixin,
                     _StandardErrorMixin, _WeakIdMixin):
-    """
-    Low-level interface (see `feols_stream` for formulas).
+    """Low-level interface: column names or Polars expressions instead of a
+    formula (see `feols_stream` for formulas). It needs no pyfixest.
+
+    Build the estimator, then call `fit` on the data.
 
     Parameters
     ----------
-    y : dependent variable(s): a column name, or a list of names and/or
-        (name, Polars expression) pairs. Each y is estimated as its own model
+    y : str, tuple or list
+        Dependent variable(s): a column name, or a list of names and/or
+        ``(name, polars.Expr)`` pairs. Each y is estimated as its own model
         (sharing one solve) unless `models` says otherwise.
-    x : covariates, as for `y`. May be empty (FE-only model).
-    fe : fixed-effect dimensions, e.g. ["worker_id", "firm_id", "year"] or
-         ["worker_id", "firm_id^year"] ('^' interacts columns). One dimension may carry
-         varying slopes, "worker_id[t]" or "worker_id[t, t2]" (fixest syntax;
-         FE intercepts plus slopes); it is then the streamed dimension.
-         One dimension is a within regression: the streamed dimension is
-         demeaned group by group and there is nothing left to solve for.
-         None (or []) is ordinary least squares: the rows are read in
-         batches and never grouped, and an "Intercept" column is added to
-         each model's covariates unless `models` lists them explicitly.
-    stream : name of the dimension to stream. Default: the dimension with
-         slopes, else the highest approximate cardinality (ties: listed
-         first). The choice is logged and stored in diagnostics["stream"];
-         pass it explicitly when cardinality is a poor guide (e.g. firm-year
-         effects that outnumber workers in a subsample).
-    workdir : directory under which each fit creates its own run directory
-         (hdfe_run_<time>_<id>/) for intermediate and result files. Default:
-         the HDFE_STREAM_WORKDIR environment variable if set, else the
-         system temporary directory (honors TMPDIR). Put it on a disk
-         with room for several times the input's Parquet size (the sorted
-         working copy of the rows is less compressible than typical input;
-         about 4-5x in tests); diagnostics["disk_peak_gb"] reports it.
-    outputs : "auto" (default): result files (residuals, fixed effects) are
-             deleted when all result objects of the fit are garbage-collected
-             or the interpreter exits; keep the result alive while using
-             resid()/fixef(), or collect/sink what you need.
-         "keep": result files stay until result.cleanup() or
-             hdfe_stream.cleanup(workdir). Intermediates are always removed.
-    save_resid : write the row-level residual file (the largest output;
-         default True). With False, resid() is unavailable.
-    keep_intermediates : keep the intermediate files, and on errors the run
-         directory. Needed for leave-out (Kline-Saggio-Solvsten) estimation,
-         which reads the sorted rows and cell tables after the fit; see
-         `HDFEResult.leave_out_kss`. Otherwise for debugging. It also widens
-         the pass-0 sort key so the stored row order is a function of the data,
-         which is what makes the leave-out draws reproducible.
-    solver : "auto" (default): "explicit" unless S would exceed `max_s_gb`,
-             then "stream_cg".
-         "explicit": build S = D_o' M_0 D_o once as a sparse matrix and
-             iterate in memory. RAM ~ nnz(S): grows with distinct level
-             co-occurrences (firm-year pairs, firm pairs sharing a mover),
-             not with rows.
-         "stream_cg": never form S; each iteration streams the identifying
-             cells. Fallback when S is too big.
-         "within": identifying cells in RAM, solved by `within`.
-    precond : "jacobi" (default) or "amg" (pyamg smoothed aggregation;
-         explicit solver only).
-    max_s_gb : size cap for S (default: 25% of physical memory).
-    rhs_block : variables solved at a time; bounds solver memory at about
-         6 x (total non-streamed levels) x rhs_block doubles.
-    assembly : "cells" (within-cell cross-products computed in pass 1),
-         "rows" (an extra row pass after the solve; no m^2 aggregation
-         columns), or "auto" (cells when there are at most 8 variables).
-    collin_tol : tolerance for dropping collinear covariates (pyfixest's
-         algorithm applied to the residualized X'X).
-    collin_tol_rel : also drop a covariate when its variation left after
-         removing the fixed effects is below this share of its raw variation
-         (default 1e-6, i.e. residual SD < 0.1% of raw SD).
-    fixef_rm : "singleton" (default, as in pyfixest) drops observations whose
-         level of some fixed effect appears in no other observation, repeating
-         until none is left, since dropping one can create another in a
-         different dimension. They contribute nothing to the coefficients but
-         count toward N, the number of clusters and the fixed-effect
-         parameters. "none" keeps them. The search takes a few extra passes
-         over the fixed-effect columns (one per dimension per round, and
-         typically two or three rounds), and holds one row per singleton level
-         in memory. It runs after missing values are removed and does not look
-         at weights; the number dropped is in diagnostics["singletons"].
-         Nothing is dropped without fixed effects.
-    connected : "largest" keeps only the rows in the largest connected set
-         (by rows) of the pair `connected_fe`, by default the first two fixed
-         effects as listed (worker_id and firm_id in "worker_id + firm_id +
-         year"): the largest component of the graph in which each row joins
-         its two levels, as `hdfe_stream.connected_components` finds it.
-         "leave_one_out" keeps the leave-one-out connected set of the pair
-         instead, the sample KSS estimation needs, with its first dimension
-         as the workers (`connected_components(..., leave_one_out=True)`
-         describes it); `leave_out_kss` uses it. Either is found among the
-         rows left after missing values are removed (and `min_degree` has
-         pruned), and comes before the singletons are dropped (and before the
-         separation check of a GLM), so the fit is that of the data
-         restricted beforehand. With two fixed effects the set stays as it
-         is after them; with more, dropping a singleton of a further
-         dimension can split it, and connectedness of one pair is necessary
-         but not sufficient for identification (see `connected_components`).
-         Default None keeps every component. sample() reports the rows
-         dropped as "disconnected" or "leave_one_out"; the counts are in
-         diagnostics["connected"].
-    min_degree : drop the rows of levels of the pair `connected_fe` with
-         fewer distinct partners in the other than this, repeating until none
-         is left, before `connected` and the singletons; an int, or a pair
-         (first, second). (2, 1) keeps movers only: workers seen at two or
-         more firms, with "worker_id + firm_id". As in
-         `connected_components`, which documents it. sample() reports the
-         rows as "min_degree"; the count is in
-         diagnostics["connected"]["min_degree"]. Default 1 drops nothing.
-    connected_fe : the pair of fixed effects `connected` and `min_degree`
-         work on, as "worker_id + firm_id" or ("worker_id", "firm_id"); both
-         must be fixed effects of the model. Default: the first two listed.
-    row_id : name of the column that gives each row's position in `source`
-         (counted before any row is dropped). It is written to the residual
-         file, so `resid()` joins back onto the source on it, and
-         `HDFEResult.sample()` adds it to the source. The source must not
-         already have a column of this name (default "row_id").
-    weights : column name or Polars expression with strictly positive
-         weights (weighted least squares; rows with missing weights are
-         dropped).
-    weights_type : "aweights" (default; N = rows) or "fweights" (frequency
-         weights; N = sum of weights), as in pyfixest.
-    keep : extra columns to carry into the residual output.
-    n_buckets / rows_per_bucket : rows are hash-partitioned by fe[0] into
-         buckets so the sort is bucket-sized.
-    batch_rows : rows per chunk when streaming Parquet, and per slice of
-         whole fe[0] groups when building the cell table.
-    scratch_mb : budget, in MB, for the row-blocked scratch the leave-out passes
-         hold (default 32). Those passes want about a dozen float64 columns per
-         row of the chunk, so the chunk is shrunk below `batch_rows` as needed to
-         stay inside this. It bounds memory only -- every random vector involved
-         is keyed on the absolute row ordinal, so results do not depend on it.
-         Raising it trades memory for speed and the default sits at the knee: on
-         a 1.3M-row panel, 32 MB runs the correction in 30s holding 67 MB, while
-         512 MB gets to 20s but holds 669 MB.
-    cells_in_memory : load the identifying cells into RAM instead of
-         memory-mapping them.
-    n_threads : numba threads (default: all available).
-    verbose : emit progress messages (default True).
-    logger : a logging.Logger; if given, progress messages go to it (at
-         `log_level`, default INFO) as they happen, per-iteration CG residuals
-         go to it at DEBUG (and are not printed without a logger), and warnings (dropped
-         collinear variables, non-convergence, negative variances) go to
-         logger.warning. Default: print to stdout / warnings module.
-    models : list of {"fml", "y", "x"} dicts selecting which of the variables
-         enter each model; all models share passes 0-1 and the solve. An IV
-         model adds "iv": {"endog": [...], "z": [...]}, where z lists the
-         full instrument set (excluded instruments and exogenous regressors).
+    x : str, tuple, list or None
+        Covariates, as for `y`. May be empty (a model of fixed effects only).
+    fe : sequence of str
+        Fixed-effect dimensions, e.g. ``["worker_id", "firm_id", "year"]`` or
+        ``["worker_id", "firm_id^year"]`` (``^`` interacts columns). One
+        dimension may carry varying slopes, ``"worker_id[t]"`` or
+        ``"worker_id[t, t2]"`` (fixest syntax: fixed-effect intercepts plus
+        slopes); it is then the streamed dimension. One dimension is a within
+        regression: the streamed dimension is demeaned group by group and
+        there is nothing left to solve for. None (or ``[]``) is ordinary least
+        squares: the rows are read in batches and never grouped, and an
+        ``"Intercept"`` column is added to each model's covariates unless
+        `models` lists them explicitly.
+    workdir : str or Path, optional
+        Directory under which each fit creates its own run directory
+        (``hdfe_run_<time>_<id>/``) for intermediate and result files.
+        Default: the ``HDFE_STREAM_WORKDIR`` environment variable if set, else
+        the system temporary directory (honors ``TMPDIR``). Put it on a disk
+        with room for several times the input's Parquet size (the sorted
+        working copy of the rows is less compressible than typical input;
+        about 4-5x in tests); ``diagnostics["disk_peak_gb"]`` reports it.
+    stream : str, optional
+        Name of the dimension to stream. Default: the dimension with slopes,
+        else the highest approximate cardinality (ties: listed first). The
+        choice is logged and stored in ``diagnostics["stream"]``; pass it
+        explicitly when cardinality is a poor guide (e.g. firm-year effects
+        that outnumber workers in a subsample).
+    weights : str or polars.Expr, optional
+        Column name or Polars expression with strictly positive weights
+        (weighted least squares; rows with missing weights are dropped).
+    weights_type : {"aweights", "fweights"}, default "aweights"
+        Analytic weights (N = rows) or frequency weights (N = sum of
+        weights), as in pyfixest.
+    fixef_rm : {"singleton", "none"}, default "singleton"
+        ``"singleton"`` (as in pyfixest) drops observations whose level of
+        some fixed effect appears in no other observation, repeating until
+        none is left, since dropping one can create another in a different
+        dimension. They contribute nothing to the coefficients but count
+        toward N, the number of clusters and the fixed-effect parameters.
+        ``"none"`` keeps them. The search takes a few extra passes over the
+        fixed-effect columns (one per dimension per round, and typically two
+        or three rounds), and holds one row per singleton level in memory. It
+        runs after missing values are removed and does not look at weights;
+        the number dropped is in ``diagnostics["singletons"]``. Nothing is
+        dropped without fixed effects.
+    connected : {"largest", "leave_one_out"}, optional
+        ``"largest"`` keeps only the rows in the largest connected set (by
+        rows) of the pair `connected_fe`, by default the first two fixed
+        effects as listed (worker_id and firm_id in
+        ``"worker_id + firm_id + year"``): the largest component of the graph
+        in which each row joins its two levels, as `connected_components`
+        finds it. ``"leave_one_out"`` keeps the leave-one-out connected set of
+        the pair instead, the sample KSS estimation needs, with its first
+        dimension as the workers (``connected_components(...,
+        leave_one_out=True)`` describes it); `leave_out_kss` uses it. Either
+        is found among the rows left after missing values are removed (and
+        `min_degree` has pruned), and comes before the singletons are dropped
+        (and before the separation check of a GLM), so the fit is that of the
+        data restricted beforehand. With two fixed effects the set stays as it
+        is after them; with more, dropping a singleton of a further dimension
+        can split it, and connectedness of one pair is necessary but not
+        sufficient for identification (see `connected_components`). Default
+        None keeps every component. `HDFEResult.sample` reports the rows
+        dropped as ``"disconnected"`` or ``"leave_one_out"``; the counts are
+        in ``diagnostics["connected"]``.
+    min_degree : int or (int, int), default 1
+        Drop the rows of levels of the pair `connected_fe` with fewer distinct
+        partners in the other than this, repeating until none is left, before
+        `connected` and the singletons; an int, or a pair (first, second).
+        ``(2, 1)`` keeps movers only: workers seen at two or more firms, with
+        ``"worker_id + firm_id"``. As in `connected_components`, which
+        documents it. `HDFEResult.sample` reports the rows as
+        ``"min_degree"``; the count is in
+        ``diagnostics["connected"]["min_degree"]``. The default, 1, drops
+        nothing.
+    connected_fe : str or (str, str), optional
+        The pair of fixed effects `connected` and `min_degree` work on, as
+        ``"worker_id + firm_id"`` or ``("worker_id", "firm_id")``; both must
+        be fixed effects of the model. Default: the first two listed.
+    models : list of dict, optional
+        ``{"fml", "y", "x"}`` dicts selecting which of the variables enter
+        each model; all models share passes 0-1 and the solve. An IV model
+        adds ``"iv": {"endog": [...], "z": [...]}``, where z lists the full
+        instrument set (excluded instruments and exogenous regressors).
+
+    Other Parameters
+    ----------------
+    solver : {"auto", "explicit", "stream_cg", "within"}, default "auto"
+        ``"auto"``: ``"explicit"`` unless S would exceed `max_s_gb`, then
+        ``"stream_cg"``. ``"explicit"``: build S = D_o' M_0 D_o once as a
+        sparse matrix and iterate in memory; its memory is about nnz(S), which
+        grows with distinct level co-occurrences (firm-year pairs, firm pairs
+        sharing a mover), not with rows. ``"stream_cg"``: never form S; each
+        iteration streams the identifying cells; the fallback when S is too
+        big. ``"within"``: identifying cells in memory, solved by the
+        ``within`` package (no varying slopes).
+    precond : {"jacobi", "amg"}, default "jacobi"
+        ``"amg"`` is pyamg smoothed aggregation, for the explicit solver
+        only.
+    tol : float, default 1e-10
+        Conjugate-gradient convergence tolerance, on each column's residual
+        relative to its right-hand side.
+    maxiter : int, default 5000
+        The most conjugate-gradient iterations; a solve that reaches it warns.
+    max_s_gb : float, optional
+        Size cap for S. Default: 25% of physical memory.
+    rhs_block : int, default 8
+        Variables solved at a time; bounds solver memory at about
+        6 x (total non-streamed levels) x rhs_block doubles.
+    batch_rows : int, default 2_000_000
+        Rows per chunk when streaming Parquet, and per slice of whole groups
+        of the streamed dimension when building the cell table.
+    rows_per_bucket : int, default 20_000_000
+        Target rows per bucket: rows are hash-partitioned by the streamed
+        dimension into buckets so the sort is bucket-sized.
+    n_buckets : int, optional
+        The number of buckets, instead of `rows_per_bucket`.
+    row_group_size : int, default 500_000
+        Rows per row group of the working and result Parquet files.
+    assembly : {"auto", "cells", "rows"}, default "auto"
+        ``"cells"``: within-cell cross-products computed in pass 1;
+        ``"rows"``: an extra row pass after the solve, with no m^2
+        aggregation columns; ``"auto"``: cells when there are at most 8
+        variables.
+    collin_tol : float, default 1e-10
+        Tolerance for dropping collinear covariates (pyfixest's algorithm
+        applied to the residualized X'X).
+    collin_tol_rel : float, default 1e-6
+        Also drop a covariate when its variation left after removing the
+        fixed effects is below this share of its raw variation (the default
+        means residual SD < 0.1% of raw SD).
+    cells_in_memory : bool, default False
+        Load the identifying cells into memory instead of memory-mapping
+        them.
+    n_threads : int, optional
+        Numba threads. Default: all available.
+    scratch_mb : int, default 32
+        Budget, in MB, for the row-blocked scratch the leave-out passes hold.
+        Those passes want about a dozen float64 columns per row of the chunk,
+        so the chunk is shrunk below `batch_rows` as needed to stay inside
+        this. It bounds memory only: every random vector involved is keyed on
+        the absolute row ordinal, so results do not depend on it. Raising it
+        trades memory for speed and the default sits at the knee: on a
+        1.3M-row panel, 32 MB runs the correction in 30s holding 67 MB, while
+        512 MB gets to 20s but holds 669 MB.
+    keep : sequence of str, optional
+        Extra columns to carry into the residual output.
+    row_id : str, default "row_id"
+        Name of the column that gives each row's position in the source
+        (counted before any row is dropped). It is written to the residual
+        file, so `HDFEResult.resid` joins back onto the source on it, and
+        `HDFEResult.sample` adds it to the source. The source must not
+        already have a column of this name.
+    outputs : {"auto", "keep"}, default "auto"
+        ``"auto"``: result files (residuals, fixed effects) are deleted when
+        all result objects of the fit are garbage-collected or the interpreter
+        exits; keep the result alive while using ``resid()`` and ``fixef()``,
+        or collect or sink what you need. ``"keep"``: result files stay until
+        `HDFEResult.cleanup` or `hdfe_stream.cleanup`. Intermediates are
+        always removed.
+    save_resid : bool, default True
+        Write the row-level residual file (the largest output). With False,
+        ``resid()`` is unavailable.
+    keep_intermediates : bool, default False
+        Keep the intermediate files, and on errors the run directory. Needed
+        for leave-out (Kline-Saggio-Solvsten) estimation when leaving out an
+        observation, which reads the sorted rows and cell tables after the
+        fit; see `HDFEResult.leave_out_kss`. Otherwise for debugging. It also
+        widens the pass-0 sort key so the stored row order is a function of
+        the data, which is what makes the leave-out draws reproducible.
+    verbose : bool, default True
+        Emit progress messages.
+    logger : logging.Logger, optional
+        If given, progress messages go to it (at `log_level`) as they happen,
+        per-iteration CG residuals go to it at DEBUG (and are not printed
+        without a logger), and warnings (dropped collinear variables,
+        non-convergence, negative variances) go to ``logger.warning``.
+        Default: print to stdout and warn through the warnings module.
+    log_level : int, default logging.INFO
+        The level progress messages are logged at.
+
+    Examples
+    --------
+    >>> import polars as pl
+    >>> est = StreamingHDFE(
+    ...     y="y",
+    ...     x=["x", ("late", (pl.col("year") >= 2010).cast(pl.Float64))],
+    ...     fe=["worker_id[t]", "firm_id"],
+    ...     workdir="scratch")
+    >>> fit = est.fit("data/*.parquet", vcov={"CRV1": "firm_id"})
     """
 
     # Hooks for subclasses (see passes.py): sort each fe[0] group's rows by
@@ -490,25 +548,37 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
     # --------------------------------------------------------------- driver
     def fit(self, source: Source, vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
             fe_dof: str = "exact") -> HDFEResult | HDFEMulti:
-        """
-        source : Parquet path/glob, a Polars LazyFrame, or a DataFrame.
-        vcov   : default vcov: 'iid', 'hetero'/'HC1', {'CRV1': var} or
-                 'CRV1:var'; multi-way clustering as {'CRV1': 'a+b'} (any
-                 number of ways). {'CRV3': var} is the cluster jackknife
-                 (one-way, OLS), available when every fixed effect is nested
-                 within the clusters or there are none; see `_check_crv3`. iid and hetero are always computed; switch
-                 with result.with_vcov(...).
-        cluster: further cluster specs to compute CRV1 for, e.g.
-                 ["firm_id", "worker_id+firm_id"]. Any column or 'a^b' combination works;
-                 fe[0] itself and the other FE dimensions reuse their codes.
-        fe_dof : 'exact' counts one redundant level per connected component of
-                 the pair of FE dimensions with the most components, plus one
-                 per further dimension: exact with two dimensions, and with
-                 more a conservative count (never more redundant levels than
-                 there are) that does not depend on their order. For CRV1, a
-                 pair of FEs both nested in the clusters is not used.
-                 'pyfixest' counts one per dimension beyond the first.
-        Returns an HDFEResult, or an HDFEMulti when there are several models.
+        """Fit the model(s) to the data.
+
+        Parameters
+        ----------
+        source : str, Path, polars.LazyFrame or polars.DataFrame
+            A Parquet path or glob, a Polars LazyFrame, or a DataFrame.
+        vcov : str or dict, default "iid"
+            The default vcov: ``"iid"``, ``"hetero"`` (or ``"HC1"``),
+            ``{"CRV1": var}`` or ``"CRV1:var"``; multi-way clustering as
+            ``{"CRV1": "a+b"}`` (any number of ways). ``{"CRV3": var}`` is the
+            cluster jackknife (one-way, OLS), available when every fixed
+            effect is nested within the clusters or there are none. iid and
+            hetero are always computed; switch with `HDFEResult.with_vcov`.
+        cluster : str or sequence of str, optional
+            Further cluster specifications to compute CRV1 for, e.g.
+            ``["firm_id", "worker_id+firm_id"]``. Any column or ``"a^b"``
+            combination works; the streamed dimension and the other fixed
+            effects reuse their codes.
+        fe_dof : {"exact", "pyfixest"}, default "exact"
+            ``"exact"`` counts one redundant level per connected component of
+            the pair of fixed-effect dimensions with the most components, plus
+            one per further dimension: exact with two dimensions, and with
+            more a conservative count (never more redundant levels than there
+            are) that does not depend on their order. For CRV1, a pair of
+            fixed effects both nested in the clusters is not used.
+            ``"pyfixest"`` counts one per dimension beyond the first.
+
+        Returns
+        -------
+        HDFEResult or HDFEMulti
+            One result, or several when there are several models.
         """
         t0 = time.time()
         default = _vcov_key(vcov)

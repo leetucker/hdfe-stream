@@ -351,7 +351,7 @@ final configuration), conservative, while the normal interval falls to 50–94%.
 rests on had been sitting in cells of ~11 rows.
 
 With **six** bridges (`max x̃² ≈ 0.04`, still λ₁²/Σλ² = 0.90–0.99) — inside the
-theorem, and the design reported in docs/kss.md:
+theorem, and the design reported in docs/kss/inference.md:
 
 | δ | component | normal | **q = 1** | oracle Σ |
 |---|---|---|---|---|

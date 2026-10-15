@@ -180,21 +180,36 @@ def _base_dir(workdir=None):
 def cleanup(workdir: str | Path | None = None,
             older_than_hours: float | None = None, force: bool = False,
             dry_run: bool = False) -> list[tuple[str, int]]:
-    """Remove leftover run directories (e.g. from killed processes) in
-    `workdir` (default: $HDFE_STREAM_WORKDIR if set, else the system
-    temporary directory). Only directories
-    created by hdfe_stream (they carry a marker file) are touched, and empty
-    ones named like them (whose files were deleted but which could not be
-    removed while a file in them was still open, as on NFS); every new fit
-    removes those too.
+    """Remove leftover run directories, e.g. from killed processes.
+
+    Only directories created by hdfe_stream (they carry a marker file) are
+    touched, and empty ones named like them (whose files were deleted but
+    which could not be removed while a file in them was still open, as on
+    NFS); every new fit removes those too.
 
     Runs of this process are removed unless a fit is still running in them
-    (this includes result files of finished fits; their resid()/fixef() stop
-    working). Skipped unless force=True: runs of other processes still alive
-    on this host, runs from other hosts (their liveness can't be checked),
-    and runs younger than `older_than_hours` if given.
-    Returns a list of (path, bytes) that were (or, with dry_run, would be)
-    removed.
+    (this includes result files of finished fits; their ``resid()`` and
+    ``fixef()`` stop working). Skipped unless ``force=True``: runs of other
+    processes still alive on this host, runs from other hosts (their liveness
+    can't be checked), and runs younger than `older_than_hours` if given.
+
+    Parameters
+    ----------
+    workdir : str or Path, optional
+        The directory to sweep. Default: the ``HDFE_STREAM_WORKDIR``
+        environment variable if set, else the system temporary directory.
+    older_than_hours : float, optional
+        Skip runs younger than this.
+    force : bool, default False
+        Remove runs of live processes and of other hosts too.
+    dry_run : bool, default False
+        List what would be removed, and remove nothing.
+
+    Returns
+    -------
+    list of (str, int)
+        ``(path, bytes)`` for each run that was (or, with `dry_run`, would
+        be) removed.
     """
     base = _base_dir(workdir)
     host, removed = socket.gethostname(), []

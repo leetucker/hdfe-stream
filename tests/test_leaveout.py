@@ -1714,7 +1714,7 @@ def test_weak_interval_matches_dense(bottleneck_fit, component):
     # smoothed sigma2, whose regressors are random-projection estimates here and
     # exact in the reference: on this design V[b1] moves by about +-25% across
     # seeds of the same streaming fit, while with exact regressors it does not
-    # move at all (docs/kss_methodological_differences.md, 5.3). The tolerances are
+    # move at all (docs/kss/differences.md, 5.3). The tolerances are
     # set from that measured dispersion, not from the solver's precision.
     assert piece["sigma"][0, 0] == pytest.approx(ref["Sigma"][0, 0], rel=0.5)
     assert piece["sigma"][1, 1] == pytest.approx(ref["Sigma"][1, 1], rel=0.3)
@@ -1978,7 +1978,7 @@ def test_centerings_agree_when_every_spell_is_equally_long(tmp_path):
 def test_weighted_centering_does_not_depend_on_the_outcomes_location(
         tmp_path):
     """Adding a constant to the outcome leaves the weighted centering's
-    estimate unchanged; the reference's moves (docs/kss_methodological_differences.md
+    estimate unchanged; the reference's moves (docs/kss/differences.md
     3.4), which is the case for having the option."""
     import warnings
 
@@ -2248,7 +2248,7 @@ def test_prototype_reproduces_xhdfe_match_level_inference(outcome, tmp_path):
     """The point estimate and theta_c exactly; the standard error to within
     xhdfe's own simulation error; and zero where xhdfe's is zero -- which, with
     the outcome as log earnings, it is: the variance estimate comes out
-    negative and is truncated (docs/kss_methodological_differences.md 5.7)."""
+    negative and is truncated (docs/kss/differences.md 5.7)."""
     kss_exact = _kss_exact()
     panel = _anchor_panel(kss_exact, tmp_path, outcome == "demeaned")
     ref = XHDFE_MATCH[outcome]

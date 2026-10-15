@@ -186,7 +186,7 @@ being automatic. The projection question does not separate the two approaches.
 |---|---|
 | what the estimand is, and the exact form of the correction | **settled** (this file) |
 | σ̂² conventions (demeaned outcome, stayers) | **settled** — LeaveOutTwoWay's: own `σ̂²` at observation level, `sigma_for_stayers` at match level |
-| standard errors when leaving out a match | **built** — reference: `leave_out_COMPLETE` with `'matches'` (beta there). `xhdfe_match_se` ports xhdfe's port of it literally and reproduces it; `kss_match_se` is the package's version (reference by default, documented differences), streaming agrees with it within 10%; coverage in `docs/kss_methodological_differences.md` §5.7 |
+| standard errors when leaving out a match | **built** — reference: `leave_out_COMPLETE` with `'matches'` (beta there). `xhdfe_match_se` ports xhdfe's port of it literally and reproduces it; `kss_match_se` is the package's version (reference by default, documented differences), streaming agrees with it within 10%; coverage in `docs/kss/differences.md` §5.7 |
 | leaving out a match, as the references do by default | **built** — `kss_match()` here agrees with xhdfe to 5e-14–5e-12; `hdfe_stream/leaveout_match.py` agrees with it within Monte Carlo error, stayers' `σ̂²` to 1e-12 |
 | pruning as the references do it (iterated, single-observation workers dropped) | **fixed** — matches xhdfe row for row on three panels |
 | a trustworthy reference to test against | **settled** (Monte Carlo + pytwoway) |

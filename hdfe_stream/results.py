@@ -55,6 +55,94 @@ def _dump_json(obj: Any, path: str | Path | None, indent: int | None) -> str:
 
 @dataclass
 class HDFEResult:
+    """The result of one model: coefficients, standard errors, fit statistics,
+    and lazy access to the fixed effects and the row-level output.
+
+    Returned by `feols_stream`, `fepois_stream`, `feglm_stream` and
+    `StreamingHDFE.fit` (or within an `HDFEMulti`). The fixed effects and
+    residuals are Parquet files in the fit's run directory, which live as
+    long as this object (unless the fit used ``outputs="keep"``): collect or
+    sink what you need from `fixef` and `resid` before dropping it.
+
+    Attributes
+    ----------
+    fml : str
+        The model's formula.
+    depvar : str
+        The dependent variable.
+    coefnames : list of str
+        Coefficient names, as pyfixest names them.
+    beta : numpy.ndarray
+        The coefficients, in the order of `coefnames`.
+    se : numpy.ndarray
+        Their standard errors, under the current vcov.
+    vcov : numpy.ndarray
+        The variance-covariance matrix of the coefficients.
+    vcov_type : str
+        Which vcov that is: ``"iid"``, ``"hetero"``, ``"CRV1:var"``, ...
+    all_vcovs : dict
+        Every vcov computed at fit time, for `with_vcov`.
+    n_clusters : dict
+        The number of clusters of each clustering computed.
+    df_t : int
+        Degrees of freedom of the t distribution for p-values.
+    n_obs : int
+        Observations used (the sum of the weights for frequency weights).
+    fe_names : list of str
+        The fixed-effect dimensions.
+    n_levels : dict
+        The number of levels of each dimension.
+    k_fe : int
+        Fixed-effect parameters, net of the redundant ones (see ``fe_dof`` in
+        `StreamingHDFE.fit`).
+    n_components : int
+        Connected components of the first two dimensions.
+    n_identifying : int
+        Groups of the streamed dimension that carry identifying information
+        (movers, in an AKM model).
+    rss : float
+        Residual sum of squares; nan for GLMs.
+    r2 : float
+        R-squared; nan for GLMs.
+    adj_r2 : float
+        Adjusted R-squared; nan for GLMs.
+    r2_within : float
+        Within R-squared, net of the fixed effects; nan for GLMs.
+    adj_r2_within : float
+        Adjusted within R-squared; nan for GLMs.
+    rmse : float
+        Root mean squared error; nan for GLMs.
+    family : str or None
+        ``"poisson"``, ``"logit"`` or ``"probit"`` for a GLM; None for OLS.
+    deviance : float
+        For a GLM, the deviance; nan for OLS.
+    loglik : float
+        For a GLM, the log-likelihood; nan for OLS.
+    pseudo_r2 : float
+        For a GLM, McFadden's pseudo R-squared; nan for OLS.
+    is_iv : bool
+        Whether the model was estimated by 2SLS.
+    first_stage : list of HDFEResult
+        For IV, the first-stage regressions.
+    f_stat_1st_stage : list of float
+        For IV, the Wald F of the excluded instruments, under the same vcov.
+    collin_vars : list of str
+        Covariates dropped as collinear.
+    weights : str or None
+        The weights column, if any.
+    weights_type : str
+        ``"aweights"`` or ``"fweights"``.
+    solver_info : dict
+        The solver used, its iterations, convergence and timing.
+    diagnostics : dict
+        Everything else the fit recorded: the streamed dimension and why
+        (``"stream"``), dropped observations (``"singletons"``,
+        ``"connected"``, ``"separation"``), IRLS steps (``"irls"``), disk and
+        time (``"disk_peak_gb"``, ``"seconds_total"``), and more.
+    paths : dict
+        The result files.
+    """
+
     fml: str
     depvar: str
     coefnames: list
@@ -97,9 +185,11 @@ class HDFEResult:
 
     @property
     def se(self) -> np.ndarray:
+        """Standard errors, under the current vcov."""
         return np.sqrt(np.diag(self.vcov))
 
     def coef(self) -> dict:
+        """The coefficients, as ``{name: estimate}``."""
         return dict(zip(self.coefnames, self.beta))
 
     def tidy(self) -> pl.DataFrame:
@@ -117,9 +207,11 @@ class HDFEResult:
         }, schema_overrides={"Coefficient": pl.Utf8})
 
     def with_vcov(self, vcov: Vcov) -> "HDFEResult":
-        """Switch among the vcovs computed in pass 2: 'iid', 'hetero', or a
-        cluster variable given as {'CRV1': var} or 'CRV1:var' (likewise
-        CRV3, when it was the fit's vcov)."""
+        """A copy of this result with another of the vcovs computed at fit
+        time: ``"iid"``, ``"hetero"``, or a clustering given as
+        ``{"CRV1": var}`` or ``"CRV1:var"`` (likewise CRV3, when it was the
+        fit's vcov). Ask for clusterings at fit time with ``vcov=`` or
+        ``cluster=``."""
         import copy
         key = _vcov_key(vcov)
         if key not in self.all_vcovs:
@@ -131,10 +223,10 @@ class HDFEResult:
         return out
 
     def to_pyfixest(self) -> Any:
-        """A pyfixest Feols (Feiv for IV) view of this result, for
-        pf.etable, pf.summary, pf.coefplot, ... Only the stored results are
-        available; methods that need the data (predict, re-computing vcov,
-        wild bootstrap) are not."""
+        """A pyfixest ``Feols`` (``Feiv`` for IV) view of this result, for
+        ``pf.etable``, ``pf.summary``, ``pf.coefplot`` and ``pf.iplot``. Only
+        the stored results are available; methods that need the data
+        (``predict``, recomputing the vcov, the wild bootstrap) are not."""
         from .reporting import _to_pyfixest   # reporting imports this module
         return _to_pyfixest(self)
 
@@ -152,46 +244,52 @@ class HDFEResult:
         own right as well. The top-level `hdfe_stream.leave_out_kss` is the
         usual one, and does the whole sequence.
 
-        The fit must be on a panel that is already leave-one-out connected. If
-        you have not pruned, use the top-level function: pruning changes the
-        estimation sample, so a fit made before pruning is a fit of a different
-        model.
+        The fit must be on a panel that is already leave-one-out connected
+        (fit with ``connected="leave_one_out"``, or on data pruned with
+        ``connected_components(..., leave_one_out=True)``). If you have not
+        pruned, use the top-level function: pruning changes the estimation
+        sample, so a fit made before pruning is a fit of a different model.
 
-        `leave_out` is the unit left out:
+        Parameters
+        ----------
+        n_draws, seed, block, psi, se, se_draws, se_trace, diagnose, diagnose_draws, weak_interval, confidence
+            As in `hdfe_stream.leave_out_kss`.
+        leave_out : {"match", "observation"}, default "match"
+            The unit left out. ``"match"`` is a whole worker-firm spell, as
+            LeaveOutTwoWay, VarianceComponentsHDFE.jl and xhdfe do by default.
+            It is robust to errors correlated within a spell. Everything
+            except the worker and firm effects is partialled out first and the
+            data collapsed to one row per match, so this fit is the
+            regression, not the leave-out one. Standard errors for var(psi)
+            and the covariance, following LeaveOutTwoWay's
+            leave_out_COMPLETE, whose match-level option is marked beta there.
+            ``"observation"`` is a single person-year, and needs this fit made
+            with ``keep_intermediates=True``.
+        stayers : str, optional
+            At observation level only (``"own"`` by default); at match level
+            the reference's within-match rule is used.
+        centering : {"reference", "weighted"}, default "reference"
+            At match level only. ``"reference"`` is LeaveOutTwoWay's:
+            sqrt(w) ybar less its mean over matches. ``"weighted"`` centers
+            ybar at its weighted mean first. They coincide when spells are of
+            equal length or the outcome is centered near zero; otherwise both
+            are unbiased but the reference's carries the outcome's level into
+            sigma2, and with log earnings its standard deviation was 1.7 to 3
+            times the weighted one's (docs/kss/differences.md, 3.4).
+        se_variance : {"person_year", "match"}, default "person_year"
+            At match level with ``se=True``: how each match's error variance
+            is estimated. ``"person_year"`` is the reference implementation's
+            (leave_out_COMPLETE, matches, beta there), from the person-year
+            residuals, pooling the variation within the spell; it assumes
+            errors independent within a spell and needs an unweighted fit.
+            ``"match"`` goes beyond the reference: the collapsed
+            leave-match-out estimate alone, which stays right when errors are
+            correlated within a spell, at the cost of more noise
+            (docs/kss/differences.md, 5.7).
 
-          "match"        (default) a whole worker-firm spell, as LeaveOutTwoWay,
-                         VarianceComponentsHDFE.jl and xhdfe do by default. It is
-                         robust to errors correlated within a spell. Everything
-                         except the worker and firm effects is partialled out
-                         first and the data collapsed to one row per match, so
-                         this fit is the regression, not the leave-out one.
-                         Standard errors for var(psi) and the covariance,
-                         following LeaveOutTwoWay's leave_out_COMPLETE, whose
-                         match-level option is marked beta there.
-          "observation"  a single person-year. Needs this fit made with
-                         `keep_intermediates=True`.
-
-        `stayers` applies at observation level only ("own" by default; see
-        `leave_out_components`); at match level the reference's within-match
-        rule is used.
-
-        `centering` applies at match level only. "reference" (default) is
-        LeaveOutTwoWay's: sqrt(w) ybar less its mean over matches. "weighted"
-        centers ybar at its weighted mean first. They coincide when spells are
-        of equal length or the outcome is centered near zero; otherwise both are
-        unbiased but the reference's carries the outcome's level into sigma2,
-        and with log earnings its standard deviation was 1.7 to 3 times the
-        weighted one's (docs/kss_methodological_differences.md).
-
-        `se_variance` applies at match level with `se=True`: how each match's
-        error variance is estimated. "person_year" (default) is the reference
-        implementation's (leave_out_COMPLETE, matches, beta there), from the
-        person-year residuals, pooling the variation within the spell; it
-        assumes errors independent within a spell and needs an unweighted fit.
-        "match" goes beyond the reference: the collapsed leave-match-out
-        estimate alone, which stays right when errors are correlated within a
-        spell, at the cost of more noise (docs/kss_methodological_differences.md
-        5.7).
+        Returns
+        -------
+        LeaveOutComponents
         """
         if self.family:
             raise ValueError("leave-out variance components are for linear models; "
@@ -259,8 +357,11 @@ class HDFEResult:
         return pl.scan_parquet(path)
 
     def fixef(self, name: str) -> pl.LazyFrame:
-        """Lazy scan of one dimension's estimated fixed effects. The file lives
-        as long as this result object (outputs='auto'): collect or sink what
+        """Lazy scan of one dimension's estimated fixed effects: one row per
+        level, with its effect (``fe_<name>``, and a column per slope with
+        varying slopes), its number of observations and, for the first
+        non-streamed dimension, its connected component. The file lives as
+        long as this result object (``outputs="auto"``): collect or sink what
         you need before dropping the result."""
         if name not in self.paths["fe"]:
             raise KeyError(f"{name!r} is not a fixed effect of this model; it has "
@@ -268,30 +369,33 @@ class HDFEResult:
         return self._scan(self.paths["fe"][name], f"fixed effects for {name!r}")
 
     def resid(self) -> pl.LazyFrame:
-        """Lazy scan of row-level output (FE contributions + residuals); same
-        lifetime caveat as fixef(). The `row_id` column is each row's position
-        in the source, so the residuals join back onto `sample()` (or onto the
-        source with `with_row_index("row_id")`) on it. The file is in the
-        estimator's own order, not the source's; sort by `row_id` to restore it."""
+        """Lazy scan of the row-level output: the outcome, ``xb``, each row's
+        fixed effects and the residual (for GLMs also ``eta``, ``fitted`` and
+        ``resid_working``), plus any ``keep=`` columns. Same lifetime caveat as
+        `fixef`. The ``row_id`` column is each row's position in the source,
+        so the residuals join back onto `sample` (or onto the source with
+        ``with_row_index("row_id")``) on it. The file is in the estimator's
+        own order, not the source's; sort by ``row_id`` to restore it."""
         return self._scan(self.paths["resid"], "residual")
 
     def sample(self, check: bool = True) -> pl.LazyFrame:
-        """The source, lazily, with three columns added saying what the fit did
-        with each row:
+        """The source, lazily, with three columns added saying what the fit
+        did with each row.
 
-        row_id           the row's position in the source (first column); the
-                         same column `resid()` carries
-        in_sample        True for the rows the model was estimated on
-        dropped_because  null for those rows; otherwise "missing" (a null in any
-                         column the fit uses, a NaN in a fixed effect or
-                         cluster, or a non-finite outcome, covariate or
-                         weight), "min_degree" (a level with too few
-                         distinct partners, `min_degree`), "disconnected"
-                         (outside the largest connected set,
-                         `connected="largest"`), "leave_one_out" (outside
-                         the leave-one-out connected set,
-                         `connected="leave_one_out"`),
-                         "singleton" (`fixef_rm`) or "separation" (GLMs)
+        ``row_id``
+            The row's position in the source (the first column); the same
+            column `resid` carries.
+        ``in_sample``
+            True for the rows the model was estimated on.
+        ``dropped_because``
+            Null for those rows. Otherwise ``"missing"`` (a null in any column
+            the fit uses, a NaN in a fixed effect or cluster, or a non-finite
+            outcome, covariate or weight), ``"min_degree"`` (a level with too
+            few distinct partners, ``min_degree``), ``"disconnected"`` (outside
+            the largest connected set, ``connected="largest"``),
+            ``"leave_one_out"`` (outside the leave-one-out connected set,
+            ``connected="leave_one_out"``), ``"singleton"`` (``fixef_rm``) or
+            ``"separation"`` (GLMs).
 
         Nothing is stored per row: the frame is the source plus an expression
         and the small tables of levels the fit dropped, so it costs a scan of
@@ -302,10 +406,18 @@ class HDFEResult:
         metadata in the plan, and reading a rewritten file fails); a LazyFrame
         is only if its plan is, which a group_by, an unordered join or a
         random sample is not.
-        With `check` the source's row count is compared with the count at the
-        fit, which catches a plan that returns a different number of rows each
-        time it runs, not one that returns the same rows in a different
-        order."""
+
+        Parameters
+        ----------
+        check : bool, default True
+            Compare the source's row count with the count at the fit. This
+            catches a plan that returns a different number of rows each time
+            it runs, not one that returns the same rows in a different order.
+
+        Returns
+        -------
+        polars.LazyFrame
+        """
         spec = self._sample
         if spec is None:
             raise ValueError("this result holds no reference to its source (it was "
@@ -489,15 +601,22 @@ class HDFEResult:
         _emit(self.summary_text(), logger, level)
 
 class HDFEMulti:
-    """Results of a formula that expands to several models."""
+    """Results of a formula that expands to several models.
+
+    Iterate over it, or take one model with `fetch_model`, to get each
+    `HDFEResult`; ``len()`` counts them. The models are in the formula's
+    order, and keyed by formula in ``all_fitted_models``.
+    """
 
     def __init__(self, results: Iterable[HDFEResult]) -> None:
         self.all_fitted_models = {r.fml: r for r in results}
 
     def fetch_model(self, i: int) -> HDFEResult:
+        """The i-th model, in the formula's order."""
         return list(self.all_fitted_models.values())[i]
 
     def to_pyfixest(self) -> list:
+        """A pyfixest view of each model (see `HDFEResult.to_pyfixest`)."""
         return [r.to_pyfixest() for r in self]
 
     def sample(self, check: bool = True) -> dict[str, pl.LazyFrame]:
@@ -520,10 +639,12 @@ class HDFEMulti:
         return False
 
     def tidy(self) -> pl.DataFrame:
+        """Every model's coefficient table, with a column ``fml`` first."""
         return pl.concat([r.tidy().with_columns(pl.lit(f).alias("fml"))
                           for f, r in self.all_fitted_models.items()]).select("fml", pl.all().exclude("fml"))
 
     def summary_text(self) -> str:
+        """Every model's report, as one string."""
         return "\n\n".join(r.summary_text() for r in self.all_fitted_models.values())
 
     def summary_dict(self, coefficients: bool = False) -> dict:

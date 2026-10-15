@@ -23,7 +23,7 @@ Both libraries run at their defaults otherwise, and the script checks that the
 coefficients agree before reporting a size. For logit they agree to the
 tolerance the iterations reach rather than to rounding: pyfixest keeps workers
 whose outcome is 1 in every year, whose effects then drift toward infinity,
-and hdfe_stream drops them (see docs/glm.md).
+and hdfe_stream drops them (see docs/examples/glm.md).
 """
 
 from __future__ import annotations

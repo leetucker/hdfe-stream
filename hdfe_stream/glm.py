@@ -99,26 +99,48 @@ class _State:
 
 
 class StreamingGLM(StreamingHDFE):
-    """
-    Low-level GLM interface (see `fepois_stream` and `feglm_stream` for
-    formulas): one dependent variable, any number of models of it.
+    """Low-level GLM interface: column names or Polars expressions instead of
+    a formula (see `fepois_stream` and `feglm_stream` for formulas). One
+    dependent variable, any number of models of it.
 
-    Parameters, beyond `StreamingHDFE`'s
-    ------------------------------------
-    family : "poisson" (log link), "logit" or "probit".
-    offset : column name or Polars expression added to the linear predictor
-         with a coefficient of one (e.g. log exposure).
-    iwls_tol, iwls_maxiter : IRLS convergence tolerance on the relative
-         change in deviance, and the most steps (pyfixest's defaults).
-    separation_check : drop fixed-effect levels whose outcome is always zero
-         (Poisson) or never varies (logit, probit), for logit and probit
-         repeating until none is left (default True). Covariates that
-         separate the outcome are not detected.
+    Takes `StreamingHDFE`'s parameters, and these. ``assembly`` does not apply
+    (the cross-products come from each step's row pass), and varying slopes,
+    IV and CRV3 are not available. With ``solver="auto"`` the first step
+    builds S and later steps use ``"stream_cg"``.
 
-    `assembly` does not apply (the cross-products come from each step's row
-    pass), and varying slopes, IV and CRV3 are not available. With
-    solver="auto" the first step builds S and later steps use stream_cg (see
-    `_wls`).
+    Parameters
+    ----------
+    y : str or tuple
+        The dependent variable: a column name, or a ``(name, polars.Expr)``
+        pair.
+    x : str, tuple, list or None
+        Covariates, as in `StreamingHDFE`.
+    fe : sequence of str
+        Fixed-effect dimensions, as in `StreamingHDFE`, without varying
+        slopes.
+    family : {"poisson", "logit", "probit"}, default "poisson"
+        Poisson (log link), logit or probit.
+    offset : str or polars.Expr, optional
+        Column name or Polars expression added to the linear predictor with a
+        coefficient of one (e.g. log exposure).
+    iwls_tol : float, default 1e-8
+        IRLS convergence tolerance on the relative change in deviance
+        (pyfixest's default).
+    iwls_maxiter : int, default 25
+        The most IRLS steps (pyfixest's default).
+    separation_check : bool, default True
+        Drop fixed-effect levels whose outcome is always zero (Poisson) or
+        never varies (logit, probit), for logit and probit repeating until
+        none is left. Covariates that separate the outcome are not detected.
+    **options
+        `StreamingHDFE`'s other parameters.
+
+    Examples
+    --------
+    >>> import polars as pl
+    >>> fit = StreamingGLM("visits", ["x"], ["worker_id", "firm_id", "year"],
+    ...                    family="poisson", offset=pl.col("log_exposure"),
+    ...                    workdir="scratch").fit("data/*.parquet")
     """
 
     cells_contiguous = True
@@ -390,7 +412,7 @@ class StreamingGLM(StreamingHDFE):
         # the cells after that. S has to be rebuilt whenever the weights
         # change, and on the AKM panels rebuilding it cost more than streaming
         # the cells once per CG iteration, the more so as later steps start
-        # from the previous solution and need fewer iterations (docs/glm.md).
+        # from the previous solution and need fewer iterations (docs/examples/glm.md).
         # AMG needs S, so with it S is rebuilt every step.
         if self.solver == "auto":
             self.solver = ("explicit" if self.precond == "amg" and info["solver"] != "stream_cg"

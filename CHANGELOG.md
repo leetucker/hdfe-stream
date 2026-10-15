@@ -66,6 +66,19 @@ Fixes.
 
 Documentation.
 
+- **A documentation site**, at
+  [leetucker.github.io/hdfe-stream](https://leetucker.github.io/hdfe-stream/),
+  built with Sphinx from `docs/` and published by a new GitHub Actions
+  workflow. It has a page for each example, a section on leave-out variance
+  components (bringing together `docs/kss.md`, the methodological differences
+  and a derivation of the correction), a page for each benchmark, a function
+  reference built from the docstrings, and this changelog. `docs/kss.md`,
+  `docs/glm.md` and `docs/kss_methodological_differences.md` moved into it,
+  and the README is shorter, pointing to it. The public docstrings are now
+  numpydoc, documenting every option, including `tol`, `maxiter`,
+  `row_group_size` and `log_level` of `StreamingHDFE`, and the attributes of
+  `HDFEResult` and the other result classes. `pip install
+  "hdfe-stream[docs]"` installs what building it needs.
 - **New example, `connected_sets.py`**, and additions to the others:
   `sample()` and joining the residuals back on `row_id`, `fe_dof`, and CRV3
   (`formulas.py`); `summary_json` (`quickstart.py`); `keep=` and a

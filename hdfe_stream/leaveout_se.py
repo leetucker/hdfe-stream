@@ -45,7 +45,7 @@ predictions. Neither is available to a streaming implementation -- the first is
 a per-observation graph search, the second is O(n^2) -- and neither is in
 Saggio's reference implementation either, which instead smooths the ordinary
 leave-out sigma2 against (P_ii, B_ii) and estimates the trace by simulation.
-That is what is done here. See docs/kss.md for the measured coverage.
+That is what is done here. See docs/kss/inference.md for the measured coverage.
 """
 
 from __future__ import annotations
@@ -71,7 +71,32 @@ COMPONENTS = ("var(psi)", "var(alpha)", "cov(psi, alpha)")
 
 @dataclass
 class ComponentSE:
-    """Standard errors for the three components, and the parts they came from."""
+    """Standard errors for the three components, and the parts they came
+    from: ``LeaveOutComponents.se``.
+
+    Attributes
+    ----------
+    se : dict
+        The standard error of each component; nan where none is reported.
+    variance : dict
+        The estimated variance of each component's estimator.
+    first_term : dict
+        The first term of that variance, ``4 sum_i sigma2_i (C mu)_i^2``.
+    trace_term : dict
+        The second, ``2 tr(C Omega C Omega)``.
+    se_conservative : dict
+        The standard error from the first term alone, which is conservative.
+    theta : dict
+        The estimand recomputed as the quadratic form ``y'Cy``, an
+        independent check on the point estimate.
+    n_draws : int
+        Draws for the trace term.
+    weak : dict or None
+        For each weakly identified component, the q = 1 interval
+        (``"interval"``) and the pieces it was computed from.
+    diagnostics : dict
+        Settings and timings.
+    """
 
     se: dict
     variance: dict
@@ -86,6 +111,7 @@ class ComponentSE:
     weak: dict = None
 
     def summary(self) -> str:
+        """A table of the estimates and their standard errors."""
         lines = [f"leave-out standard errors ({self.n_draws} draws)",
                  f"{'component':<20}{'estimate':>12}{'se':>11}"
                  f"{'se (cons.)':>12}{'trace share':>13}",
@@ -586,7 +612,7 @@ class _StandardErrorMixin:
         error by under five percent and coverage by well under a point.
 
         Leaving out a match, the rows are matches and four things change
-        (`leave_out_match`, and docs/kss_methodological_differences.md 5.7):
+        (`leave_out_match`, and docs/kss/differences.md 5.7):
 
           * `stayer_rows` marks the matches of workers seen at one firm. Their
             leverage is one, and for var(psi) and cov their B_ii is exactly

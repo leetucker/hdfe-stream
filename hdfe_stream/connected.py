@@ -44,19 +44,27 @@ COMPONENT, IN_LARGEST = "component", "in_largest"
 @dataclass
 class ConnectedComponents:
     """The connected components of the graph of two fixed-effect dimensions,
-    as returned by `connected_components`.
+    as returned by `connected_components`: small level tables, not rows.
 
-    fe          the two dimensions, e.g. ("worker_id", "firm_id^year")
-    levels      {dimension: DataFrame}: every level of the dimension found in a
-                complete row (its column, or columns for an interaction), and
-                its `component`. Components are numbered by size, so
-                `component == 0` is the largest; levels removed by
-                `min_degree` have a null component.
-    sizes       one row per component, in order: `component`, `rows`, and the
-                number of levels of each dimension (a column named after it)
-    min_degree  (first dimension, second dimension), as used
-    leave_one_out  whether this is the leave-one-out connected set, as used
-    diagnostics counts and timings (see `summary()`)
+    Attributes
+    ----------
+    fe : (str, str)
+        The two dimensions, e.g. ``("worker_id", "firm_id^year")``.
+    levels : dict of str to polars.DataFrame
+        ``{dimension: DataFrame}``: every level of the dimension found in a
+        complete row (its column, or columns for an interaction), and its
+        ``component``. Components are numbered by size, so
+        ``component == 0`` is the largest; levels removed by ``min_degree`` or
+        ``leave_one_out`` have a null component.
+    sizes : polars.DataFrame
+        One row per component, in order: ``component``, ``rows``, and the
+        number of levels of each dimension (a column named after it).
+    min_degree : (int, int)
+        (first dimension, second dimension), as used.
+    leave_one_out : bool
+        Whether this is the leave-one-out connected set.
+    diagnostics : dict
+        Counts and timings (see `summary`).
     """
 
     fe: tuple[str, str]
@@ -80,6 +88,7 @@ class ConnectedComponents:
 
     @property
     def n_components(self) -> int:
+        """The number of components."""
         return self.sizes.height
 
     def _cols(self, d):
@@ -139,11 +148,10 @@ class ConnectedComponents:
     def label(self, data: Source | None = None) -> pl.LazyFrame:
         """The data (by default the data the components were found in, as
         for `largest`), lazily and in its original order, with two columns
-        added:
-        `component` (UInt32), the row's component, null when the row is in
-        none (a null or NaN level, or a level removed by `min_degree` or
-        `leave_one_out`); and
-        `in_largest`, whether the row is in the largest component.
+        added: ``component`` (UInt32), the row's component, null when the row
+        is in none (a null or NaN level, or a level removed by ``min_degree``
+        or ``leave_one_out``); and ``in_largest``, whether the row is in the
+        largest component.
 
         It joins the full level table of the dimension with fewer levels
         (and, after pruning, the smaller list of the other's removed or
@@ -169,6 +177,8 @@ class ConnectedComponents:
         return lf.with_columns((pl.col(COMPONENT) == 0).fill_null(False).alias(IN_LARGEST))
 
     def summary(self) -> str:
+        """A short report: the components, the largest, and what pruning
+        removed."""
         d, s = self.diagnostics, self.sizes
         d0, d1 = self.fe
         lines = [f"connected components of {d0} x {d1}"]
@@ -207,87 +217,109 @@ def connected_components(data: Source, fe: str | Sequence[str], *,
     """Connected components of the graph of two fixed-effect dimensions, and
     so the largest connected set.
 
-        cc = connected_components("data/*.parquet", "worker_id + firm_id")
-        cc.sizes                       # rows and levels per component
-        akm = cc.largest()             # the largest connected set, lazily
-        rows = cc.label()              # every row, with its component
+    The graph has one vertex per level of each dimension, and each row joins
+    its two levels. Its components are found by union-find over the rows as
+    they stream.
 
-    data : Parquet path or glob, Polars LazyFrame, or DataFrame. It is read
-        in batches and never held in memory.
-    fe : the two dimensions, as a formula's fixed-effect part
-        ("worker_id + firm_id") or a pair of names (("worker_id", "firm_id")).
-        Either may be an interaction ("firm_id^year"). Rows with a null or
-        NaN in any of their columns are in no component.
-    min_degree : remove every level with fewer distinct partners in the other
-        dimension (distinct firms for a worker, distinct workers for a firm)
-        than this, repeating until none is left, before finding the
-        components. An int applies to both dimensions; a pair is (first,
-        second). (2, 1) keeps only movers: workers seen at two or more firms,
-        and the firms they were seen at. 2 also drops firms with a single
-        worker, and so on until every worker and firm left has two partners.
-        (1, k) keeps firms with at least k distinct workers. Partners are
-        distinct levels, so a worker with many rows at one firm has one; with
-        firm_id^year, a worker who stays at a firm for two years has two.
-        The default, 1, removes nothing. min_degree=2 is not the
+    Parameters
+    ----------
+    data : str, Path, polars.LazyFrame or polars.DataFrame
+        Parquet path or glob, Polars LazyFrame, or DataFrame. It is read in
+        batches and never held in memory.
+    fe : str or (str, str)
+        The two dimensions, as a formula's fixed-effect part
+        (``"worker_id + firm_id"``) or a pair of names
+        (``("worker_id", "firm_id")``). Either may be an interaction
+        (``"firm_id^year"``). Rows with a null or NaN in any of their columns
+        are in no component.
+    min_degree : int or (int, int), default 1
+        Remove every level with fewer distinct partners in the other dimension
+        (distinct firms for a worker, distinct workers for a firm) than this,
+        repeating until none is left, before finding the components. An int
+        applies to both dimensions; a pair is (first, second). ``(2, 1)``
+        keeps only movers: workers seen at two or more firms, and the firms
+        they were seen at. ``2`` also drops firms with a single worker, and so
+        on until every worker and firm left has two partners. ``(1, k)`` keeps
+        firms with at least k distinct workers. Partners are distinct levels,
+        so a worker with many rows at one firm has one; with
+        ``firm_id^year``, a worker who stays at a firm for two years has two.
+        The default, 1, removes nothing. ``min_degree=2`` is not the
         leave-one-out connected set: see below.
-    leave_one_out : prune to the leave-one-out connected set that
-        Kline-Saggio-Solvsten estimation needs (`leave_out_kss` applies it),
-        in which every effect stays estimable when any one worker is dropped.
-        The first dimension plays the workers. Following LeaveOutTwoWay's
-        `pruning_unbal_v3.m` and VarianceComponentsHDFE.jl:
+    leave_one_out : bool, default False
+        Prune to the leave-one-out connected set that Kline-Saggio-Solvsten
+        estimation needs (`leave_out_kss` applies it), in which every effect
+        stays estimable when any one worker is dropped. The first dimension
+        plays the workers. Following LeaveOutTwoWay's ``pruning_unbal_v3.m``
+        and VarianceComponentsHDFE.jl:
 
-            1. take the largest connected component
-            2. drop workers observed only once (their leverage is exactly 1)
-            3. remove every worker whose removal would split the network (an
-               articulation point), and take the largest piece left
-            4. repeat 3 until no such worker is left
+        1. take the largest connected component;
+        2. drop workers observed only once (their leverage is exactly 1);
+        3. remove every worker whose removal would split the network (an
+           articulation point), and take the largest piece left;
+        4. repeat 3 until no such worker is left.
 
         Step 3 repeats because removing one such worker can make another. The
         result is one component, 0; every other level's component is null.
-        Unlike min_degree=2 it keeps stayers seen at least twice, and it
-        removes movers that min_degree=2 keeps, so neither set contains the
-        other, although every mover and firm it keeps min_degree=2 keeps too.
-        With min_degree, the pruning by degree comes first. Expect it to
-        remove a lot: in KSS's own application, about half the firms, mostly
-        ones attached to a single mover.
-    rank_by : what "largest" means: "rows" (the default), or the name of
-        either dimension to count its levels. Ties go to the component whose
-        smallest level of the first dimension sorts first.
-    batch_rows : rows per batch as the data streams.
-    verbose, logger, log_level : progress messages, as for `feols_stream`.
+        Unlike ``min_degree=2`` it keeps stayers seen at least twice, and it
+        removes movers that ``min_degree=2`` keeps, so neither set contains
+        the other, although every mover and firm it keeps ``min_degree=2``
+        keeps too. With ``min_degree``, the pruning by degree comes first.
+        Expect it to remove a lot: in KSS's own application, about half the
+        firms, mostly ones attached to a single mover.
+    rank_by : str, default "rows"
+        What "largest" means: ``"rows"``, or the name of either dimension to
+        count its levels. Ties go to the component whose smallest level of
+        the first dimension sorts first.
+    batch_rows : int, default 2_000_000
+        Rows per batch as the data streams.
+    verbose, logger, log_level
+        Progress messages, as for `feols_stream`.
 
-    Returns a `ConnectedComponents`: small level tables, not rows. Its
-    `largest()` and `label()` apply them to the data lazily; it keeps a
-    reference to `data` for that (a DataFrame is then kept alive with it),
-    and either takes other data with the same levels instead.
+    Returns
+    -------
+    ConnectedComponents
+        Small level tables, not rows. Its `ConnectedComponents.largest` and
+        `ConnectedComponents.label` apply them to the data lazily; it keeps a
+        reference to `data` for that (a DataFrame is then kept alive with it),
+        and either takes other data with the same levels instead.
 
+    Notes
+    -----
     Pruning comes first, then the components: the components are those of
     what is left, so the largest one is connected and every level in it has
-    at least `min_degree` partners in it. (Taking the largest component first
-    and pruning it can disconnect it, once min_degree exceeds 2.)
+    at least ``min_degree`` partners in it. (Taking the largest component
+    first and pruning it can disconnect it, once ``min_degree`` exceeds 2.)
 
-    Memory. Without pruning: the level tables themselves, about 20 bytes
+    **Memory.** Without pruning: the level tables themselves, about 20 bytes
     more per level, and a batch of rows. Pruning also holds the distinct
     pairs, at 12 bytes each, and briefly about twice that while they are
-    merged; leave_one_out adds the network's adjacency, about 8 bytes per
-    pair more, and 50 per level. In practice the peak is set by Polars finding the distinct levels
-    and reading the Parquet: on 150 million rows with 25 million 9-character
-    worker ids, about 1.3 GB above what a bare scan of the two columns takes.
+    merged; ``leave_one_out`` adds the network's adjacency, about 8 bytes per
+    pair more, and 50 per level. In practice the peak is set by Polars
+    finding the distinct levels and reading the Parquet: on 150 million rows
+    with 25 million 9-character worker ids, about 1.3 GB above what a bare
+    scan of the two columns takes.
 
-    With three or more fixed-effect dimensions, connectedness of one pair is
-    necessary for the effects to be identified but not sufficient: a further
-    dimension can make levels of the pair redundant that no graph of the pair
-    shows (year effects, say, when every move between firms coincides with a
-    change of year). The components here are those of the pair only; they
-    are not combined with any other dimension, which would be wrong rather
-    than conservative, since two firms sharing years are not comparable
-    unless a worker moves between them.
+    **Three or more dimensions.** Connectedness of one pair is necessary for
+    the effects to be identified but not sufficient: a further dimension can
+    make levels of the pair redundant that no graph of the pair shows (year
+    effects, say, when every move between firms coincides with a change of
+    year). The components here are those of the pair only; they are not
+    combined with any other dimension, which would be wrong rather than
+    conservative, since two firms sharing years are not comparable unless a
+    worker moves between them.
 
-    The same set is what `feols_stream(..., connected="largest")` keeps,
-    without pruning, of the first two fixed effects listed in the formula,
-    but found among the rows the model can use (rows with a missing outcome
-    or covariate do not connect anything there). Filter those out before
-    calling this to get the same rows.
+    **In a fit.** The same set is what ``feols_stream(...,
+    connected="largest")`` keeps, without pruning, of the first two fixed
+    effects listed in the formula, but found among the rows the model can use
+    (rows with a missing outcome or covariate do not connect anything there).
+    Filter those out before calling this to get the same rows.
+
+    Examples
+    --------
+    >>> cc = connected_components("data/*.parquet", "worker_id + firm_id")
+    >>> cc.sizes                       # rows and levels per component
+    >>> akm = cc.largest()             # the largest connected set, lazily
+    >>> rows = cc.label()              # every row, with its component
     """
     dims, fe_cols = _parse_pair(fe)
     k = _min_degree(min_degree)

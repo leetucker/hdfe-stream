@@ -18,7 +18,7 @@ conventions, and use 200 random-projection draws (xhdfe's default; hdfe_stream's
 is 250). "standard errors" adds each library's component standard errors at its
 own defaults for that step: xhdfe simulates the trace term with 1,000 draws of
 the full quadratic form, hdfe_stream estimates it with 200 Hutchinson draws
-(docs/kss_methodological_differences.md, 5.2).
+(docs/kss/differences.md, 5.2).
 
 xhdfe needs the data in memory, so reading it is counted, as in the regression
 benchmark; hdfe_stream reads the Parquet file itself. xhdfe runs on its CPU

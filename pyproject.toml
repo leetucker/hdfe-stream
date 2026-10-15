@@ -38,7 +38,7 @@ dependencies = [
 Homepage = "https://github.com/leetucker/hdfe-stream"
 Source = "https://github.com/leetucker/hdfe-stream"
 Issues = "https://github.com/leetucker/hdfe-stream/issues"
-Documentation = "https://github.com/leetucker/hdfe-stream/tree/main/docs"
+Documentation = "https://leetucker.github.io/hdfe-stream/"
 Changelog = "https://github.com/leetucker/hdfe-stream/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
@@ -55,6 +55,14 @@ all = ["hdfe-stream[within,amg,formula]"]
 benchmark = [
     "hdfe-stream[formula]",
     "matplotlib>=3.7",
+]
+# docs/: the documentation site, built with Sphinx (see docs/conf.py)
+docs = [
+    "sphinx>=8.0",
+    "myst-parser>=4.0",
+    "furo>=2024.8.6",
+    "sphinx-copybutton>=0.5",
+    "sphinx-design>=0.6",
 ]
 # the test suite compares against pyfixest and exercises the optional solvers,
 # so it needs every extra

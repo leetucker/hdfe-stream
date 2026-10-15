@@ -143,7 +143,7 @@ for index, key in enumerate(truth):
     print(f"{key:<18}{column.mean():>11.5f}{np.ptp(column):>11.5f}"
           f"{np.ptp(column) / abs(column.mean()):>11.2%}")
 
-print("\nThat spread shrinks with more draws; docs/kss.md reports it across five")
+print("\nThat spread shrinks with more draws; docs/kss/draws.md reports it across five")
 print("seeds at 250 and 1,000 draws. What matters is that it is small next to the")
 print("sampling uncertainty of the components themselves -- about a tenth of the")
 print("standard error when leaving out a match -- so the approximation is not")
@@ -152,7 +152,8 @@ print("what limits this answer.")
 # `se=True` adds standard errors and 95% intervals. This section leaves out an
 # observation, so that all three components get one. Leaving out a match
 # reports them for var(psi) and the covariance only, following LeaveOutTwoWay's
-# leave_out_COMPLETE, whose match-level option is marked beta (see docs/kss.md).
+# leave_out_COMPLETE, whose match-level option is marked beta (see
+# docs/kss/inference.md).
 # The estimator is a quadratic form y'Cy whose kernel has a zero diagonal by
 # construction, which is what makes it unbiased and what makes its variance
 #
@@ -169,8 +170,8 @@ print(with_se.summary())
 
 # Do the intervals contain the answer the data was built from? With three
 # components and one draw of the data this is an anecdote, not a coverage study
-# -- docs/kss.md reports coverage measured over many redraws -- but it is the
-# check worth making on your own data's scale.
+# -- docs/kss/inference.md reports coverage measured over many redraws -- but it
+# is the check worth making on your own data's scale.
 print(f"\n{'component':<18}{'truth':>10}{'leave-out':>11}{'se':>10}"
       f"{'z':>7}{'covers':>8}")
 for key, true_value in truth.items():
@@ -212,10 +213,10 @@ weak = leave_out_kss("log_earn ~ 1 | worker_id + firm_id", str(weak_data),
                      leave_out="observation", se=True, verbose=False)
 print(weak.summary())
 
-# Against the truth, once more. One draw of the data is an anecdote; docs/kss.md
-# reports coverage over many. Note the q = 1 interval is not symmetric about the
-# estimate: the badly estimated direction enters squared, so its uncertainty is
-# skewed, which a normal interval cannot express.
+# Against the truth, once more. One draw of the data is an anecdote;
+# docs/kss/inference.md reports coverage over many. Note the q = 1 interval is
+# not symmetric about the estimate: the badly estimated direction enters
+# squared, so its uncertainty is skewed, which a normal interval cannot express.
 kept = (weak.fit.sample().filter("in_sample")
         .select("true_worker_effect", "true_firm_effect").collect())
 a_true = kept["true_worker_effect"].to_numpy()

@@ -1,7 +1,7 @@
 """Simulated matched employer-employee panels with AKM structure.
 
 Used by the test suite and the examples, and useful for trying the library out
-before pointing it at real data:
+before pointing it at real data::
 
     from hdfe_stream import feols_stream
     from hdfe_stream.simulate import simulate_akm
@@ -19,8 +19,9 @@ to connect the firms into one component.
 `simulate_rich` adds the columns the wider feature set needs -- categoricals,
 coarser cluster variables, weights, instruments, a second outcome, a column
 with missing values -- and `simulate_trends` adds worker-specific time trends
-for varying-slopes (FEIS) models. All three take a `seed` and are
-deterministic.
+for varying-slopes (FEIS) models. `simulate_bottleneck` builds a panel whose
+variance components are weakly identified, for leave-out estimation. All of
+them take a `seed` and are deterministic.
 
 Only numpy and Polars are used, so nothing here needs the optional
 dependencies.
@@ -33,7 +34,7 @@ from typing import Any, Iterable
 import numpy as np
 import polars as pl
 
-__all__ = ["simulate_akm", "simulate_rich", "simulate_trends"]
+__all__ = ["simulate_akm", "simulate_rich", "simulate_trends", "simulate_bottleneck"]
 
 DEFAULT_YEARS = range(2005, 2015)
 
@@ -45,21 +46,34 @@ def simulate_akm(n_workers: int = 50_000, n_firms: int | None = None,
                  keep_effects: bool = False) -> pl.DataFrame:
     """An AKM panel: one row per worker-year actually observed.
 
+    Worker and firm effects are positively assorted -- better workers tend to
+    be at better firms -- so the firm effect is not orthogonal to the worker
+    effect and the fixed effects genuinely have to be estimated jointly.
+
     Parameters
     ----------
-    n_workers, n_firms : panel size. `n_firms` defaults to n_workers / 15,
-        which keeps firms large enough to be identified.
-    years : the years observed (default 2005-2014).
-    p_move : probability a worker changes firm between consecutive years.
+    n_workers : int, default 50_000
+        The number of workers.
+    n_firms : int, optional
+        The number of firms. Default: n_workers / 15 (at least 50), which
+        keeps firms large enough to be identified.
+    years : iterable of int
+        The years observed (default 2005-2014).
+    p_move : float, default 0.08
+        Probability a worker changes firm between consecutive years.
         Mobility is what connects firms, so lowering it a lot will split the
         data into several components.
-    p_obs : probability a worker is observed in a given year, so the panel is
+    p_obs : float, default 0.85
+        Probability a worker is observed in a given year, so the panel is
         unbalanced.
-    sd_worker, sd_firm, sd_noise : standard deviations of the worker effect,
-        the firm effect and the residual.
-    seed : anything accepted by `np.random.default_rng`.
-    keep_effects : also return the worker and firm effects that generated the
-        data, as `true_worker_effect` and `true_firm_effect`. Off by default so
+    sd_worker, sd_firm, sd_noise : float
+        Standard deviations of the worker effect (0.4), the firm effect (0.25)
+        and the residual (0.3).
+    seed : int or anything `numpy.random.default_rng` accepts, default 0
+        The seed; the panel is deterministic given it.
+    keep_effects : bool, default False
+        Also return the worker and firm effects that generated the data, as
+        ``true_worker_effect`` and ``true_firm_effect``. Off by default so
         they cannot be used as regressors by accident. Useful for checking an
         estimator against a known answer -- in particular for bias corrections
         to variance components, where the quantity being estimated is a moment
@@ -67,14 +81,15 @@ def simulate_akm(n_workers: int = 50_000, n_firms: int | None = None,
 
     Returns
     -------
-    A Polars DataFrame, shuffled so it is not sorted on disk, with columns
-    worker_id (int64, deliberately not dense), firm_id (string), year (int32),
-    age (float), age_squared, age_cubed (age polynomials scaled into a sane
-    range) and log_earn (the outcome).
+    polars.DataFrame
+        Shuffled so it is not sorted on disk, with columns ``worker_id``
+        (int64, deliberately not dense), ``firm_id`` (string), ``year``
+        (int32), ``age`` (float), ``age_squared``, ``age_cubed`` (age
+        polynomials scaled into a sane range) and ``log_earn`` (the outcome).
 
-    Worker and firm effects are positively assorted -- better workers tend to
-    be at better firms -- so the firm effect is not orthogonal to the worker
-    effect and the fixed effects genuinely have to be estimated jointly.
+    Examples
+    --------
+    >>> simulate_akm(n_workers=1_000_000).write_parquet("sim.parquet")
     """
     if n_firms is None:
         n_firms = max(n_workers // 15, 50)
@@ -132,21 +147,36 @@ def simulate_rich(n_workers: int = 50_000, n_firms: int | None = None, seed: Any
                   extra_seed: Any = 9, **kwargs: Any) -> pl.DataFrame:
     """`simulate_akm` plus the columns that exercise the wider feature set.
 
-    Adds, on top of the base panel:
+    On top of the base panel, it adds:
 
-    state, region   coarse firm-level groupings, for clustering on something
-                    that is not a fixed effect (`region` is coarser still)
-    cohort          year-of-birth decade, another non-FE cluster variable
-    treat, occ, cat a binary, an integer-coded and a string categorical, for
-                    C(), i() and interaction terms
-    y2              a second outcome, for multiple-estimation formulas
-    x_na            a covariate that is null in ~5% of rows
-    wa, wf          analytic and frequency weights
-    z1, z2, x2      two instruments and the endogenous regressor they predict
-    y_iv            an outcome that depends on x2, for 2SLS
+    - ``state``, ``region``: coarse firm-level groupings, for clustering on
+      something that is not a fixed effect (``region`` is coarser still);
+    - ``cohort``: year-of-birth decade, another non-fixed-effect cluster
+      variable;
+    - ``treat``, ``occ``, ``cat``: a binary, an integer-coded and a string
+      categorical, for ``C()``, ``i()`` and interaction terms;
+    - ``y2``: a second outcome, for multiple-estimation formulas;
+    - ``x_na``: a covariate that is null in about 5% of rows;
+    - ``wa``, ``wf``: analytic and frequency weights;
+    - ``z1``, ``z2``, ``x2``: two instruments and the endogenous regressor
+      they predict;
+    - ``y_iv``: an outcome that depends on ``x2``, for 2SLS.
 
-    `log_earn` also picks up an occupation effect and a post-2010 treatment
-    effect, so `i(year, treat)` event-study terms have something to find.
+    ``log_earn`` also picks up an occupation effect and a post-2010 treatment
+    effect, so ``i(year, treat)`` event-study terms have something to find.
+
+    Parameters
+    ----------
+    n_workers, n_firms, seed
+        As in `simulate_akm`.
+    extra_seed : default 9
+        The seed of the added columns.
+    **kwargs
+        Passed to `simulate_akm`.
+
+    Returns
+    -------
+    polars.DataFrame
     """
     df = simulate_akm(n_workers=n_workers, n_firms=n_firms, seed=seed, **kwargs)
     rng = np.random.default_rng(extra_seed)
@@ -185,18 +215,29 @@ def simulate_trends(n_workers: int = 600, n_firms: int = 60, seed: Any = 3,
                     **kwargs: Any) -> pl.DataFrame:
     """`simulate_akm` plus worker-specific time trends, for FEIS models.
 
-    Each worker gets their own linear and quadratic trend in `t` (the year as
-    a float), so `y ~ x | worker_id[t] + firm_id` is the correctly specified
-    model and a plain worker intercept is not. Adds:
+    Each worker gets their own linear and quadratic trend in ``t`` (the year
+    as a float), so ``y ~ x | worker_id[t] + firm_id`` is the correctly
+    specified model and a plain worker intercept is not. It adds:
 
-    t, t2      the year, and its centered square
-    x, v       an exogenous covariate and an unobservable
-    xe, z      an endogenous regressor and its instrument
-    wa         analytic weights
-    y          the outcome, generated with the worker trends in it
+    - ``t``, ``t2``: the year, and its centered square;
+    - ``x``, ``v``: an exogenous covariate and an unobservable;
+    - ``xe``, ``z``: an endogenous regressor and its instrument;
+    - ``wa``: analytic weights;
+    - ``y``: the outcome, generated with the worker trends in it.
 
     Defaults are small because the brute-force comparison for varying slopes
     needs one dummy per worker per slope.
+
+    Parameters
+    ----------
+    n_workers, n_firms, seed
+        As in `simulate_akm`, with smaller defaults (600, 60 and 3).
+    **kwargs
+        Passed to `simulate_akm`.
+
+    Returns
+    -------
+    polars.DataFrame
     """
     df = simulate_akm(n_workers=n_workers, n_firms=n_firms, seed=seed, **kwargs)
     rng = np.random.default_rng(seed)
@@ -242,35 +283,43 @@ def simulate_bottleneck(n_bridge: int = 6, firms_per_block: int = 8,
                         keep_effects: bool = False) -> pl.DataFrame:
     """A panel whose AKM variance components are weakly identified.
 
-    Two blocks of firms with plenty of mobility inside each and only `n_bridge`
-    workers moving between them: a bottleneck in the mobility network. The
-    difference between the blocks' average firm effects is then one linear
-    combination of the effects that is estimated far worse than the rest, so
-    one eigenvalue dominates the estimator's variance -- KSS's weakly identified
-    case, where the normal interval undercovers and the q = 1 interval is the
-    one to use. `leave_out_kss(..., se=True)` reports both.
+    Two blocks of firms with plenty of mobility inside each and only
+    `n_bridge` workers moving between them: a bottleneck in the mobility
+    network. The difference between the blocks' average firm effects is then
+    one linear combination of the effects that is estimated far worse than
+    the rest, so one eigenvalue dominates the estimator's variance -- KSS's
+    weakly identified case, where the normal interval undercovers and the
+    q = 1 interval is the one to use. ``leave_out_kss(..., se=True)`` reports
+    both.
 
     Parameters
     ----------
-    n_bridge : workers moving between the blocks. Fewer is weaker; with only
-        one or two, the leading direction rests on so few rows that even the
-        q = 1 theory's conditions fail, and six is a comfortable middle.
-    firms_per_block, movers_per_block, stayers_per_firm : the size of each block.
-        Movers are observed four years across two firms of their block, stayers
-        three years at one.
-    block_gap : added to every firm effect in the second block. It sets how far
-        the badly estimated direction's true value is from zero, which is what
-        decides whether the ordinary interval merely widens or badly undercovers.
-    sd_worker, sd_firm, sd_noise : standard deviations of the effects and the
-        residual.
-    seed : anything accepted by `np.random.default_rng`.
-    keep_effects : also return the effects that generated the data, as in
+    n_bridge : int, default 6
+        Workers moving between the blocks. Fewer is weaker; with only one or
+        two, the leading direction rests on so few rows that even the q = 1
+        theory's conditions fail, and six is a comfortable middle.
+    firms_per_block, movers_per_block, stayers_per_firm : int
+        The size of each block (8, 150 and 8). Movers are observed four years
+        across two firms of their block, stayers three years at one.
+    block_gap : float, default 0.5
+        Added to every firm effect in the second block. It sets how far the
+        badly estimated direction's true value is from zero, which is what
+        decides whether the ordinary interval merely widens or badly
+        undercovers.
+    sd_worker, sd_firm, sd_noise : float
+        Standard deviations of the effects (0.4 and 0.3) and the residual
+        (0.15).
+    seed : int or anything `numpy.random.default_rng` accepts, default 0
+        The seed.
+    keep_effects : bool, default False
+        Also return the effects that generated the data, as in
         `simulate_akm`.
 
     Returns
     -------
-    A Polars DataFrame with worker_id, firm_id and log_earn (and, with
-    `keep_effects`, true_worker_effect and true_firm_effect).
+    polars.DataFrame
+        With ``worker_id``, ``firm_id`` and ``log_earn`` (and, with
+        `keep_effects`, ``true_worker_effect`` and ``true_firm_effect``).
     """
     rng = np.random.default_rng(seed)
     n_firms = 2 * firms_per_block

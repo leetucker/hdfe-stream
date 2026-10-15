@@ -7,7 +7,7 @@ extension of that methodology. Where it departs from the published reference
 implementations, this document says so, with what the references do, what this
 package does, why, and the measured effect.
 
-How to use the implementation is in [kss.md](kss.md); this document is only
+How to use the implementation is in [leave-out variance components](index.md); this document is only
 about how it differs from the references.
 
 Everything below was checked against the source code, not documentation alone,

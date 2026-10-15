@@ -453,7 +453,41 @@ class _TraceMixin:
 
 @dataclass
 class LeaveOutComponents:
-    """KSS leave-out variance components, with the plug-in ones for comparison."""
+    """KSS leave-out variance components, with the plug-in ones for
+    comparison, as returned by `leave_out_kss`.
+
+    The three components are keyed ``"var(psi)"``, ``"var(alpha)"`` and
+    ``"cov(psi, alpha)"``.
+
+    Attributes
+    ----------
+    plug_in : dict
+        The plug-in components, computed from the estimated effects.
+    bias : dict
+        The estimated bias of each.
+    leave_out : dict
+        The bias-corrected components: plug-in less bias.
+    n_obs : int
+        Observations (person-years) in the decomposition.
+    n_movers : int
+        Movers' observations, or movers' matches when leaving out a match.
+    leverages : JLALeverages
+        The random-projection leverages.
+    trace : TraceEstimate
+        The bias term's trace estimate.
+    se : ComponentSE or None
+        Standard errors, with ``se=True``.
+    weak_id : WeakIdDiagnostics or None
+        The weak-identification diagnostic, when it ran.
+    diagnostics : dict
+        Settings and summary statistics (maximum leverage, mean sigma2, ...).
+    pruning : dict or None
+        Counts of the pruning to the leave-one-out connected set.
+    fit : HDFEResult
+        The regression the components are from.
+    match_fit : HDFEResult or None
+        When leaving out a match, the collapsed match-level regression.
+    """
 
     plug_in: dict
     bias: dict
@@ -482,6 +516,8 @@ class LeaveOutComponents:
         })
 
     def summary(self) -> str:
+        """A report of the components, with the standard errors, intervals
+        and diagnostic when they were computed."""
         d = self.diagnostics
         lines = [f"leave-out variance components ({d['psi']} and {d['alpha']})"]
         if d.get("leave_out") == "match":
@@ -554,7 +590,7 @@ class LeaveOutComponents:
                         and key not in weak):
                     lines.append(f"{key}: no q = 1 interval when leaving out a "
                                  "match, since stayers load on its weak "
-                                 "direction (docs/kss_methodological_differences.md)")
+                                 "direction (docs/kss/differences.md)")
             shown = [k for k in self.plug_in if "interval" in weak.get(k, {})]
             if shown:
                 level = weak[shown[0]]["confidence"]
@@ -815,7 +851,7 @@ class _ComponentsMixin:
 
         What the variance formula needs per collapsed row is the variance of
         sqrt(T) times the match mean. Two estimates of it
-        (docs/kss_methodological_differences.md 5.7):
+        (docs/kss/differences.md 5.7):
 
           "match"        beyond the reference. The collapsed leave-match-out
                          sigma2 itself, weighted-
@@ -1011,10 +1047,6 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
                   **options: Any) -> LeaveOutComponents:
     """Kline-Saggio-Solvsten leave-out variance components, end to end.
 
-        lo = leave_out_kss("log_earn ~ age_squared | worker_id + firm_id",
-                           "data/*.parquet", workdir="scratch")
-        lo.summary()
-
     The plug-in AKM decomposition is biased -- upward for the variances, toward
     zero for the covariance -- because the fixed effects are estimated with
     error. This removes that bias, following Kline, Saggio and Solvsten (2020),
@@ -1022,47 +1054,104 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
 
     Three things happen, in this order, because the order matters:
 
-    1. the panel is pruned to its largest leave-one-out connected set. Leave-out
-       estimation needs every effect to stay estimable when any one match is
-       dropped, and that fails at workers who are articulation points of the
-       worker-firm network; they are removed, repeatedly, until none is left,
-       and workers observed once are dropped too. **This changes the estimation
-       sample**, often substantially -- in KSS's own application it removes
-       about half the firms. It is the fit's `connected="leave_one_out"`, so
-       it runs on the rows the model can use, and the fit's `sample()` says
-       which rows it dropped (`"leave_one_out"`);
-       `connected_components(..., leave_one_out=True)` finds the same set on
-       its own, ahead of time;
-    2. the model is fitted on what survives;
-    3. leverages are approximated by random projection, and from them the bias.
+    1. The panel is pruned to its largest leave-one-out connected set.
+       Leave-out estimation needs every effect to stay estimable when any one
+       match is dropped, and that fails at workers who are articulation points
+       of the worker-firm network; they are removed, repeatedly, until none is
+       left, and workers observed once are dropped too. **This changes the
+       estimation sample**, often substantially -- in KSS's own application it
+       removes about half the firms. It is the fit's
+       ``connected="leave_one_out"``, so it runs on the rows the model can
+       use, and the fit's ``sample()`` says which rows it dropped
+       (``"leave_one_out"``); ``connected_components(...,
+       leave_one_out=True)`` finds the same set on its own, ahead of time.
+    2. The model is fitted on what survives.
+    3. Leverages are approximated by random projection, and from them the
+       bias.
 
-    `leave_out="match"` (default) leaves out a whole worker-firm match, as
-    LeaveOutTwoWay, VarianceComponentsHDFE.jl and xhdfe do: the fit's
-    partialled-out outcome is collapsed to one row per match and the correction
-    runs on that weighted regression (see `leaveout_match`). Stayers' variances
-    follow LeaveOutTwoWay's within-match rule, and `centering` chooses how
-    sigma2 centers the outcome ("reference", the default, or "weighted"; see
-    `HDFEResult.leave_out_kss`). With `se=True` there, standard errors are
-    reported for var(psi) and the covariance, following leave_out_COMPLETE's
-    match-level option (beta there), and `se_variance` chooses how each match's
-    error variance is estimated.
-    `leave_out="observation"` leaves out one row at a time; `stayers` applies
-    there ("own" by default) and all three components get standard errors.
+    Parameters
+    ----------
+    fml : str
+        A formula with at least two fixed effects, e.g.
+        ``"log_earn ~ age_squared | worker_id + firm_id"``. One outcome only.
+    data : str, Path, polars.LazyFrame or polars.DataFrame
+        As in `feols_stream`.
+    workdir : str or Path, optional
+        As in `feols_stream`.
+    psi : str, optional
+        The non-streamed dimension whose variance is wanted (the firms); the
+        streamed dimension plays the part of alpha (the workers). Both default
+        to the first two fixed effects in the formula, and the streamed
+        dimension is pinned to the first so that the sample that was pruned
+        and the decomposition that follows are about the same pair.
+    n_draws : int, default 250
+        Random-projection draws for the leverages, and Hutchinson draws for
+        the bias term. A budget, not a function of the sample size: KSS use
+        250-500 on panels with millions of effects.
+    seed : int, default 0
+        The seed of every random draw. Results are reproducible from it.
+    block : int, optional
+        Draws per block (each block is one solve with that many right-hand
+        sides and two passes over the rows).
+    prune : bool, default True
+        False skips step 1 and fails if the panel is not already leave-one-out
+        connected, for callers who have pruned upstream and want to be told if
+        they are wrong.
+    leave_out : {"match", "observation"}, default "match"
+        ``"match"`` leaves out a whole worker-firm match, as LeaveOutTwoWay,
+        VarianceComponentsHDFE.jl and xhdfe do: the fit's partialled-out
+        outcome is collapsed to one row per match and the correction runs on
+        that weighted regression. Stayers' variances follow LeaveOutTwoWay's
+        within-match rule. With ``se=True``, standard errors are reported for
+        var(psi) and the covariance, following leave_out_COMPLETE's
+        match-level option (beta there). ``"observation"`` leaves out one row
+        at a time, and all three components get standard errors.
+    stayers : str, optional
+        At observation level only: how a stayer's variance is estimated
+        (``"own"`` by default, its own leave-out estimate).
+    se : bool, default False
+        Compute standard errors and intervals for the components.
+    se_draws : int, optional
+        Draws for the trace term of the standard errors. Default: `n_draws`.
+    se_trace : bool, default True
+        Include the trace term. Without it the standard errors are
+        conservative, and cost about three fewer solves per draw.
+    diagnose : bool, optional
+        Run KSS's weak-identification diagnostic. Default: when ``se=True``.
+    diagnose_draws : int, default 64
+        The diagnostic's draw budget.
+    weak_interval : bool, default True
+        For every component the diagnostic flags (q >= 1), also compute KSS's
+        q = 1 interval, which stays valid under weak identification.
+    confidence : float, default 0.95
+        The level of both intervals.
+    centering : {"reference", "weighted"}, default "reference"
+        At match level: how sigma2 centers the outcome; see
+        `HDFEResult.leave_out_kss`.
+    se_variance : {"person_year", "match"}, default "person_year"
+        At match level with ``se=True``: how each match's error variance is
+        estimated; see `HDFEResult.leave_out_kss`.
+    verbose : bool, default True
+        Emit progress messages.
+    logger : logging.Logger, optional
+        As in `StreamingHDFE`.
+    **options
+        Passed to the fit, so ``weights=`` and the memory options remain
+        available. ``fixef_rm`` defaults to ``"none"`` here, because the
+        pruning has settled the sample.
 
-    `psi` names the non-streamed dimension whose variance is wanted (the firms);
-    the streamed dimension plays the part of alpha (the workers). Both default
-    to the first two fixed effects in the formula, and the streamed dimension is
-    pinned to the first so that the sample that was pruned and the decomposition
-    that follows are about the same pair.
+    Returns
+    -------
+    LeaveOutComponents
+        Its ``pruning`` holds the counts of step 1 (the fit's
+        ``diagnostics["connected"]``), or None without it, and ``fit`` the
+        regression.
 
-    `prune=False` skips step 1 and fails if the panel is not already
-    leave-one-out connected, for callers who have pruned upstream and want to be
-    told if they are wrong. The result's `pruning` holds the counts of step 1
-    (the fit's diagnostics["connected"]), or None without it.
-
-    Extra options are passed to the fit, so `weights=` and the memory knobs
-    remain available. `fixef_rm` defaults to "none" here, because the pruning
-    has settled the sample. Several outcomes at once are not supported.
+    Examples
+    --------
+    >>> lo = leave_out_kss("log_earn ~ age_squared | worker_id + firm_id",
+    ...                    "data/*.parquet", workdir="scratch")
+    >>> print(lo.summary())
     """
     from .api import feols_stream
     from .feterms import _parse_fe, _parse_fe_term

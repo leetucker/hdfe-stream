@@ -27,14 +27,14 @@ Two details follow the reference exactly because they change numbers:
     is the default, `centering="reference"`; `centering="weighted"` centers ybar
     at its weighted mean first. Both are unbiased, but with the outcome far
     from zero the reference's is several times more variable (see
-    docs/kss_methodological_differences.md, 3.4);
+    docs/kss/differences.md, 3.4);
   * a stayer's single match cannot be left out -- its leverage is 1 -- so it
     gets `sigma_for_stayers.m`: its own person-year residuals from the collapsed
     fit, with leverage 1/T_i, as (y_it - ybar) e_it / (1 - 1/T_i), averaged over
     the match. Under errors correlated within the spell this targets a slightly
     different variance than the movers' match-level estimate; that is the
     reference's choice, kept here and recorded in
-    docs/kss_methodological_differences.md.
+    docs/kss/differences.md.
 
 Standard errors: the reference implementation is LeaveOutTwoWay's
 `leave_out_COMPLETE` with leave_out_level='matches', an option its
@@ -45,7 +45,7 @@ against that port. What is kept:
   * b = 0 on stayers' matches;
   * no standard error for var(alpha);
   * by default (se_variance="person_year"), its person-year error variance.
-What differs, and why, is in docs/kss_methodological_differences.md 5.7: the
+What differs, and why, is in docs/kss/differences.md 5.7: the
 centered outcome, the smoother, no user weights with the default variance
 source, no q = 1 interval for the covariance, and the "match" variance source,
 which goes beyond the reference.

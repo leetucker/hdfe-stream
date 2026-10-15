@@ -172,8 +172,32 @@ def _tex_labels(models: list, labels: dict | None, felabels: dict | None) -> tup
 
 
 def etable(models: Any, **kwargs: Any) -> Any:
-    """pf.etable for streaming results (HDFEResult, HDFEMulti, or a list that
-    may mix them with ordinary pyfixest models). kwargs go to pf.etable."""
+    """``pf.etable`` for streaming results: a regression table of
+    `HDFEResult` and `HDFEMulti` models, mixed freely with ordinary pyfixest
+    models.
+
+    A multi-model result expands into one column per model. The spacing of
+    the fixed-effect side is normalized, so ``"a + b"`` and ``"a+b"`` share a
+    row (``pf.etable`` itself matches rows on the literal text). With
+    ``type="tex"``, labels are escaped for LaTeX.
+
+    Parameters
+    ----------
+    models : HDFEResult, HDFEMulti, or a list of them and pyfixest models
+        The models, one column each.
+    **kwargs
+        Passed to ``pf.etable``: ``type``, ``model_stats``, ``labels``,
+        ``felabels``, ``file_name``, ...
+
+    Returns
+    -------
+    object
+        What ``pf.etable`` returns for the ``type`` asked for.
+
+    Examples
+    --------
+    >>> etable([fit1, fit2], type="df", model_stats=["N", "se_type", "r2"])
+    """
     import pyfixest as pf
     if isinstance(models, (HDFEResult, HDFEMulti)):
         models = [models]

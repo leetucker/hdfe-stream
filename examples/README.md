@@ -15,6 +15,9 @@ space and result files, and nothing in it is needed afterwards.
 Run them from anywhere; paths are resolved relative to the example file, not
 your working directory.
 
+The [documentation](https://leetucker.github.io/hdfe-stream/examples/index.html)
+has a page for each, explaining what it shows, with its output.
+
 ## The files
 
 | File | What it shows |
