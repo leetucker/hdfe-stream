@@ -63,6 +63,13 @@ by_firms = connected_components(small, FE, rank_by="firm_id", verbose=False)
 print(f"\nranked by firms instead of rows: {by_firms.sizes['firm_id'].to_list()} firms "
       f"in components 0 and 1")
 
+# To keep every row and flag the largest set, label() is the way: it joins the
+# smaller dimension's level table onto the rows, lazily, and adds `component`
+# and `in_largest`. (largest() filters instead.) Call connected_components once
+# and reuse it: finding the components is the work, applying them is a join.
+flagged = cc.label().collect()
+print("\nrows in the largest set:", flagged["in_largest"].sum(), "of", flagged.height)
+
 # One label() per setting, side by side: a null component means the row is in
 # no component -- its id is missing, or one of its levels was removed.
 settings = {

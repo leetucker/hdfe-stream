@@ -23,6 +23,29 @@ rows = cc.label()              # every row, with its component
 dimension instead. Rows with a missing id are in no component: a missing firm
 is not one big firm that every such worker shares.
 
+## Flagging the largest connected set
+
+To keep every row and mark the ones in the largest set, use `.label()`: it adds
+`component` (null for a row in no component) and `in_largest`. It does what you
+would do by hand, a left join of the smaller dimension's level table onto the
+rows, and it is lazy, so the rows stream through the join and are never held.
+After `min_degree=` or `leave_one_out=True` it also checks the other dimension's
+levels, which a join on one dimension alone would miss.
+
+```python
+cc = connected_components("data/*.parquet", "worker_id + firm_id")
+flagged = cc.label()                  # lazy: the data plus component, in_largest
+flagged.sink_parquet("flagged.parquet")
+```
+
+To drop the other rows instead, `.largest()` filters with a semi-join (or an
+anti-join, whichever level list is shorter). Doing the join yourself, or testing
+`is_in` against the component-0 levels, gives the same answer in the same time:
+on 8.5 million rows and 3,391 components each took under 0.1 s once the
+components were found, and the cost of a fit-sized pass over the data is the
+reading, not the join. The time is in `connected_components` itself, so call it
+once and reuse `cc` for `largest()`, `label()` and `sizes`.
+
 ## Three ways of restricting the sample
 
 The largest connected set
