@@ -1,4 +1,4 @@
-"""Passes 0, 1 and 1b: build the design, reduce rows to identifying cells,
+"""Passes 0 and 1: build the design, reduce rows to identifying cells,
 and find connected components.
 """
 
@@ -9,14 +9,13 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
-import pyarrow.parquet as pq
 
 from ._columns import BUCKET, GCODE, PREFIX, WCOL, check_source, tcol, vcol
 from .connected import COMPONENT, _find_components
-from .kernels_base import _nb_components, _nb_diag, _nb_union_pairs
-from .kernels_slopes import _nb_diag_sl
+from .kernels_base import _nb_components, _nb_diag, _nb_rhs, _nb_run_sums, _nb_union_pairs
+from .kernels_slopes import _nb_diag_sl, _nb_rhs_sl
 from .report import _warn
-from .utils import _as_lazy, _not_nan, _row_wise, _segments, iter_group_chunks, iter_group_tables
+from .utils import _as_lazy, _not_nan, _row_wise, _segments, iter_group_chunks
 
 # Shared-state contract with the other mixins
 # -------------------------------------------
@@ -39,8 +38,17 @@ from .utils import _as_lazy, _not_nan, _row_wise, _segments, iter_group_chunks, 
 #
 # Hooks a subclass may override (StreamingGLM does): _restrict_sample, which
 # may drop rows from the estimation sample before anything is written;
-# `cells_contiguous`, which sorts each fe[0] group's rows by cell; and
-# `cell_sums`, which passes 1/1b consult before summing the variables per cell.
+# `cells_contiguous`, which always sorts each fe[0] group's rows by cell; and
+# `cell_sums`, which pass 1 consults before summing the variables per cell.
+
+
+# Blocks of cells pass 1's kernel splits its sums into: fixed, so that they
+# do not depend on the thread count
+_RUN_BLOCKS = 256
+
+# The rows are not sorted into cells (collapse_cells="auto") when about this
+# share of them are distinct combinations of fixed-effect levels already
+_DISTINCT_ENOUGH = 0.9
 
 
 def _drop_levels(frame, tables, fe_cols):
@@ -123,9 +131,15 @@ class _PassesMixin:
                 cols = self.fe_cols[d]
                 key = pl.col(cols[0]) if len(cols) == 1 else pl.struct(cols).hash(seed=7)
                 card.append(key.approx_n_unique().alias(f"__card_{d}"))
+        # whether the rows are already their own cells: the approximate
+        # number of distinct combinations of every fixed effect's columns
+        combo = []
+        if self.collapse_cells == "auto" and self._collapse_optional:
+            cols = list(dict.fromkeys(c for d in self.fe_user for c in self.fe_cols[d]))
+            combo = [pl.struct(cols).hash(seed=7).approx_n_unique().alias("__combos")]
         self._log("pass 0: scanning data (counts, means"
-                  + (", approximate cardinalities)" if need_card else ")"))
-        mom = (lf.select([pl.len().alias("n")] + wstats + tstats + card
+                  + (", approximate cardinalities)" if need_card or combo else ")"))
+        mom = (lf.select([pl.len().alias("n")] + wstats + tstats + card + combo
                          + [pl.col(vcol(j)).mean() for j in range(m)]
                          + [pl.col(vcol(j)).var().alias(f"var{j}") for j in range(m)])
                  .collect(engine="streaming"))
@@ -148,6 +162,12 @@ class _PassesMixin:
         if self.weights is not None and mom["wmin"].item() <= 0:
             raise ValueError("weights must be strictly positive")
         self.wsum = mom["wsum"].item() if self.weights is not None else float(self.n_obs)
+        if combo:
+            self.combos_ratio = min(1.0, mom["__combos"].item() / self.n_obs)
+            self.collapse = self.combos_ratio < _DISTINCT_ENOUGH
+        else:
+            self.combos_ratio = None
+            self.collapse = self.collapse_cells is not False
         self.N = self.wsum if self.weights_type == "fweights" else self.n_obs
         self.means = np.array([mom[vcol(j)].item() for j in range(m)])
         self.raw_ss = np.array([(mom[f"var{j}"].item() or 0.0) * max(self.n_obs - 1, 1)
@@ -243,13 +263,15 @@ class _PassesMixin:
             # Groups stay contiguous either way, since fe[0] leads the key, so
             # `gcode` does not depend on this.
             #
-            # A fit that re-reads the rows cell by cell (`cells_contiguous`:
-            # the GLM, whose weights change every iteration) sorts by the
-            # codes as well, so that each cell's rows are one run.
+            # Otherwise the rows are sorted by the other dimensions' codes too
+            # when they are to be collapsed into cells (`collapse`): each cell
+            # is then one run of rows, which pass 1 collapses as it reads them.
+            # That costs a wider key here, a few percent of the sort, and is
+            # skipped when nearly every row is a cell of its own anyway.
             sort_by = list(g_cols)
             if self.keep_intermediates:
                 sort_by += [*self.ccols, *[vcol(j) for j in range(self.m)]]
-            elif self.cells_contiguous:
+            elif self.collapse:
                 sort_by += self.ccols
             bucket = pl.scan_parquet(str(srcdir / "*.parquet"))
             if raw_extra is not None:
@@ -281,95 +303,34 @@ class _PassesMixin:
 
     # ------------------------------------------------------------------ pass 1
     def _pass1_cells(self):
-        """group_by(fe[0], other codes) -> cell table with counts and sums of
-        the (globally centered) variables, plus within-cell cross-products
-        when assembly == 'cells'."""
-        self._log(f"pass 1: group_by({self.g_fe}, {', '.join(self.o_fe)}) -> cells")
-        # without `cell_sums` only the cell structure and counts are built
-        m = self.m if self.cell_sums else 0
-        z = [(pl.col(vcol(j)) - mu).alias(f"z{j}") for j, mu in enumerate(self.means[:m])]
-        weighted = self.weights is not None
-        if weighted:
-            z.append(pl.col(WCOL))
-        wz = (lambda e: pl.col(WCOL) * e) if weighted else (lambda e: e)
-        # "n" is the cell's weight sum (its count when unweighted); "cnt" the count
-        aggs = [(pl.col(WCOL).sum() if weighted else pl.len().cast(pl.Float64)).alias("n"),
-                pl.len().cast(pl.UInt32).alias("cnt")]
-        aggs += [wz(pl.col(f"z{j}")).sum().alias(f"s{j}") for j in range(m)]
-        if self.assembly == "cells":
-            aggs += [wz(pl.col(f"z{i}") * pl.col(f"z{j}")).sum().alias(f"cp{i}_{j}")
-                     for i in range(m) for j in range(i, m)]
-        ps = len(self.slope_vars)
-        if ps:
-            # slope variables centered at their means (keeps the per-group
-            # p x p systems well conditioned); moments needed for the
-            # within-group regression on [1, slopes]
-            z += [(pl.col(tcol(j + 1)) - mu).alias(f"u{j + 1}") for j, mu in enumerate(self.tmeans)]
-            aggs += [wz(pl.col(f"u{a}")).sum().alias(f"sl{a}") for a in range(1, ps + 1)]
-            aggs += [wz(pl.col(f"u{a}") * pl.col(f"u{b}")).sum().alias(f"sll{a}_{b}")
-                     for a in range(1, ps + 1) for b in range(a, ps + 1)]
-            aggs += [wz(pl.col(f"u{a}") * pl.col(f"z{j}")).sum().alias(f"slz{a}_{j}")
-                     for a in range(1, ps + 1) for j in range(m)]
-        self.paths["cells"] = []
-        # A cell is a run of rows within one fe[0] group, and the rows are
-        # sorted by group, so each bucket is grouped a slice of whole groups
-        # at a time (about `batch_rows` rows) in Polars' in-memory engine, and
-        # the slices' cells are appended in order. Memory is then a slice's,
-        # not a bucket's. A streaming group_by over the bucket was the old
-        # way; under Polars 2.0 it gives each thread its own hash table, which
-        # with as many cells as rows peaked at about three times the memory.
-        cols = [GCODE, *self.ccols, *[vcol(j) for j in range(m)]]
-        if weighted:
-            cols.append(WCOL)
-        cols += [tcol(j + 1) for j in range(ps)]
-        for rows in self.paths["rows"]:
-            out = rows.replace("rows_b", "cells_b")
-            writer = None
-            for tbl in iter_group_tables(rows, cols, self.batch_rows):
-                cells = (pl.from_arrow(tbl).lazy()
-                           .select(GCODE, *self.ccols, *z)
-                           .group_by(GCODE, *self.ccols)
-                           .agg(aggs)
-                           .sort(GCODE, *self.ccols)
-                           .collect(engine="in-memory")
-                           .to_arrow())
-                if writer is None:
-                    writer = pq.ParquetWriter(out, cells.schema, compression="zstd")
-                writer.write_table(cells, row_group_size=self.rgs)
-                del tbl, cells
-            if writer is not None:
-                writer.close()
-                self.paths["cells"].append(out)
+        """Collapse the sorted rows into cells, one per run of rows with the
+        same group and the same levels of the other dimensions, with their
+        weight, count and the sums of the (globally centered) variables; keep
+        the cells of fe[0] groups with more than one cell (the only ones that
+        identify the other effects) as flat binary arrays for memory mapping.
 
-        exprs = [pl.len().alias("n_cells")]
-        if self.assembly == "cells":
-            exprs += [(pl.col(f"cp{i}_{j}") - pl.col(f"s{i}") * pl.col(f"s{j}") / pl.col("n"))
-                      .sum().alias(f"w{i}_{j}") for i in range(m) for j in range(i, m)]
-        w = pl.scan_parquet(self.paths["cells"]).select(exprs).collect(engine="streaming")
-        self.n_cells = w["n_cells"].item()
-        if self.assembly == "cells":
-            W = np.zeros((m, m))
-            for i in range(m):
-                for j in range(i, m):
-                    W[i, j] = W[j, i] = w[f"w{i}_{j}"].item()
-            self.W_within_cell = W
-
-    # ----------------------------------------------------------------- pass 1b
-    def _pass1b_identifying(self):
-        """Keep cells of fe[0] groups with more than one cell (the only ones
-        that identify the other effects) as flat binary arrays for memory
-        mapping, and build the Jacobi diagonal."""
-        self._log("pass 1b: extracting identifying cells")
+        The Jacobi diagonal, and with the estimator's own variables the
+        right-hand side of step 2, are built here too, chunk by chunk while
+        the cells are in memory, instead of by reading the arrays back: each
+        of those reads is a pass over data the size of the cell table."""
+        if self.collapse:
+            self._log("pass 1: collapsing rows into cells, extracting identifying cells")
+        else:
+            why = ("collapse_cells=False" if self.combos_ratio is None else
+                   f"~{self.combos_ratio:.1%} of the rows are distinct combinations of "
+                   "fixed-effect levels")
+            self._log(f"pass 1: rows as cells ({why}), extracting identifying cells")
         m = self.m if self.cell_sums else 0
         off, tot = self._offsets()
-        scols = [f"s{j}" for j in range(m)]
+        offs = np.array([off[f] for f in self.o_fe], np.int64)
         obs = np.zeros(tot)             # weight per level (all cells)
         cnt = np.zeros(tot)             # observations per level (all cells)
+        diag = np.zeros(tot)            # Jacobi diagonal (identifying cells)
+        # step 2's right-hand side D_o' M_0 V, when all the variables are
+        # solved in one block: it is then the size the solve allocates anyway
+        rhs = np.zeros((tot, m)) if 0 < m <= self.rhs_block else None
         sizes = []
         ps, p = len(self.slope_vars), self.p
-        slcols = ([f"sl{a}" for a in range(1, ps + 1)]
-                  + [f"sll{a}_{b}" for a in range(1, ps + 1) for b in range(a, ps + 1)]
-                  + [f"slz{a}_{j}" for a in range(1, ps + 1) for j in range(m)])
         kinds = ("codes", "n") + (("sums",) if m else ()) + (("st", "ainv", "cmat") if ps else ())
         files = {k: open(self.paths["ident"][k], "wb") for k in kinds}
         self.fe0_rank = 0               # fe[0] parameters: sum of per-group ranks
@@ -379,9 +340,10 @@ class _PassesMixin:
         nl = [self.n_levels[f] for f in self.o_fe]
         uf = {} if ps else {(i, j): np.arange(nl[i] + nl[j])
                             for i in range(len(nl)) for j in range(i + 1, len(nl))}
-        for ch in iter_group_chunks(self.paths["cells"],
-                                    [GCODE, *self.ccols, "n", "cnt", *scols, *slcols],
-                                    self.batch_rows):
+        self.n_cells = 0
+        self.W_within_cell = np.zeros((m, m)) if self.assembly == "cells" else None
+        for ch in self._cell_chunks(m, ps):
+            self.n_cells += len(ch[GCODE])
             for f, cc in zip(self.o_fe, self.ccols):
                 sl = slice(off[f], off[f] + self.n_levels[f])
                 obs[sl] += np.bincount(ch[cc], weights=ch["n"], minlength=self.n_levels[f])
@@ -391,61 +353,123 @@ class _PassesMixin:
             starts, local = _segments(ch[GCODE])
             ncells = np.diff(np.append(starts, len(local)))
             keep = ncells[local] > 1
+            S = ch["S"]
             if ps:
                 # per cell: st = sum w [1, u]; stt = sum w [1,u][1,u]'; stz = sum w [1,u] z'
                 Mc = len(local)
                 st = np.empty((Mc, p))
                 st[:, 0] = ch["n"]
-                for a in range(1, p):
-                    st[:, a] = ch[f"sl{a}"]
+                st[:, 1:] = ch["sl"]
                 stt = np.empty((Mc, p, p))
                 stt[:, 0, :] = st
                 stt[:, :, 0] = st
-                for a in range(1, p):
-                    for b in range(a, p):
-                        stt[:, a, b] = stt[:, b, a] = ch[f"sll{a}_{b}"]
+                stt[:, 1:, 1:] = ch["sll"]
                 stz = np.empty((Mc, p, m))
-                for j in range(m):
-                    stz[:, 0, j] = ch[f"s{j}"]
-                    for a in range(1, p):
-                        stz[:, a, j] = ch[f"slz{a}_{j}"]
+                stz[:, 0, :] = S
+                stz[:, 1:, :] = ch["slz"]
                 A = np.add.reduceat(stt, starts, axis=0)
                 self.fe0_rank += int(np.linalg.matrix_rank(A, hermitian=True).sum())
             else:
                 self.fe0_rank += len(starts)
             if not keep.any():
                 continue
-            sizes.append(ncells[ncells > 1])
-            np.column_stack([ch[cc][keep] for cc in self.ccols]).astype(np.uint32).tofile(files["codes"])
-            ch["n"][keep].astype(np.float64).tofile(files["n"])
+            kept = ncells[ncells > 1]
+            sizes.append(kept)
+            kstarts = np.concatenate(([0], np.cumsum(kept))).astype(np.int64)
+            kcodes = np.column_stack([ch[cc][keep] for cc in self.ccols]).astype(np.uint32)
+            kn = ch["n"][keep].astype(np.float64)
+            kcodes.tofile(files["codes"])
+            kn.tofile(files["n"])
             if m:
-                np.column_stack([ch[c][keep] for c in scols]).tofile(files["sums"])
+                ksums = np.ascontiguousarray(S[keep])
+                ksums.tofile(files["sums"])
             if ps:
                 gk = ncells > 1
-                st[keep].tofile(files["st"])
-                np.linalg.pinv(A[gk], rcond=1e-12, hermitian=True).tofile(files["ainv"])
-                np.add.reduceat(stz, starts, axis=0)[gk].tofile(files["cmat"])
+                kst = np.ascontiguousarray(st[keep])
+                kainv = np.linalg.pinv(A[gk], rcond=1e-12, hermitian=True)
+                kcmat = np.add.reduceat(stz, starts, axis=0)[gk]
+                kst.tofile(files["st"])
+                kainv.tofile(files["ainv"])
+                kcmat.tofile(files["cmat"])
+                _nb_diag_sl(kstarts, kcodes, kn, kst, kainv, offs, diag)
+                if rhs is not None:
+                    _nb_rhs_sl(kstarts, kcodes, ksums, kst, kainv, kcmat, offs, rhs)
+            else:
+                _nb_diag(kstarts, kcodes, kn, offs, diag)
+                if rhs is not None:
+                    _nb_rhs(kstarts, kcodes, kn, ksums, offs, rhs)
         for fh in files.values():
             fh.close()
         sizes = np.concatenate(sizes) if sizes else np.zeros(0, np.int64)
         np.save(self.paths["ident"]["starts"],
                 np.concatenate(([0], np.cumsum(sizes))).astype(np.int64))
         self.obs, self.cnt, self.n_identifying = obs, cnt, len(sizes)
+        self.diag, self._rhs_pass1 = diag, rhs
         self._other_pair_components = {
             (self.o_fe[i], self.o_fe[j]): int(np.count_nonzero(parent == np.arange(len(parent))))
             for (i, j), parent in uf.items()}
         self._track_disk()
-        if not self.keep_intermediates:         # cell tables are no longer needed
-            for f in self.paths["cells"]:
-                Path(f).unlink(missing_ok=True)
         self._load_ident()
-        self.diag = np.zeros(tot)
-        if ps:
-            _nb_diag_sl(self.starts, self.codes, self.n, self.st, self.ainv, self.offs, self.diag)
-        else:
-            _nb_diag(self.starts, self.codes, self.n, self.offs, self.diag)
         self.fe_params = {self.g_fe: self.fe0_rank,
                           **{d: self.n_levels[d] for d in self.o_fe}}
+
+    def _cell_chunks(self, m, ps):
+        """Chunks of whole fe[0] groups' cells, read from the sorted rows, as
+        dicts of arrays: the group code and the other dimensions' codes of each
+        cell, "n" (its weight sum), "cnt" (its rows) and "S" (cells x m, the
+        weighted sums of the centered variables); with varying slopes also
+        "sl", "sll" and "slz", the weighted sums of the centered slope
+        variables u, of u u' (the upper triangle filled both ways) and of u z'.
+
+        A cell is a run of consecutive rows with the same group and codes.
+        When the rows were sorted by the codes (`collapse`), that is every row
+        of the combination; otherwise only identical rows that happen to be
+        adjacent share one, and the rest are cells of their own, which changes
+        nothing but the number of cells. With assembly="cells" the within-cell
+        cross-products are accumulated into W_within_cell, exactly, from each
+        row's deviation from its cell's mean."""
+        weighted = self.weights is not None
+        cols = [GCODE, *self.ccols, *[vcol(j) for j in range(m)],
+                *[tcol(a + 1) for a in range(ps)]] + ([WCOL] if weighted else [])
+        means = np.asarray(self.means[:m], np.float64)
+        tmeans = np.asarray(self.tmeans[:ps], np.float64)
+        W = self.W_within_cell
+        nblk = _RUN_BLOCKS
+        for ch in iter_group_chunks(self.paths["rows"], cols, self.batch_rows):
+            g = ch[GCODE]
+            n_rows = len(g)
+            same = g[1:] == g[:-1]
+            for cc in self.ccols:
+                same &= ch[cc][1:] == ch[cc][:-1]
+            cs = np.flatnonzero(np.concatenate(([True], ~same)))     # cell starts
+            bounds = np.append(cs, n_rows).astype(np.int64)
+            run = np.diff(bounds)
+            w = ch[WCOL].astype(np.float64) if weighted else np.zeros(0)
+            out = {GCODE: g[cs], **{cc: ch[cc][cs] for cc in self.ccols}}
+            out["cnt"] = run.astype(np.float64)
+            out["n"] = np.add.reduceat(w, cs) if weighted else out["cnt"]
+            # the centered variables, one contiguous row each, and the cells'
+            # sums of them (with the within-cell scatter, for assembly="cells")
+            ZT = np.empty((m, n_rows))
+            for j in range(m):
+                np.subtract(ch.pop(vcol(j)), means[j], out=ZT[j])
+            ST = np.empty((m, len(cs)))
+            parts = np.empty((nblk, m, m) if W is not None else (nblk, 0, 0))
+            _nb_run_sums(bounds, ZT, w, ST, parts)
+            if W is not None:
+                W += parts.sum(axis=0)
+            if ps:
+                Z = ZT.T
+                U = np.column_stack([ch.pop(tcol(a + 1)).astype(np.float64) - tmeans[a]
+                                     for a in range(ps)])
+                wU = U * w[:, None] if weighted else U
+                out["sl"] = np.add.reduceat(wU, cs, axis=0)
+                out["sll"] = np.add.reduceat(wU[:, :, None] * U[:, None, :], cs, axis=0)
+                out["slz"] = np.add.reduceat(wU[:, :, None] * Z[:, None, :], cs, axis=0)
+                del U, wU, Z
+            del ZT
+            out["S"] = ST.T
+            yield out
 
     def _load_ident(self):
         """Memory-map the identifying cells (or load them, if cells_in_memory)."""
@@ -668,7 +692,7 @@ class _PassesMixin:
 
     # ------------------------------------------------------------- no FE
     def _no_cells(self):
-        """Stand-in for passes 1 and 1b when there are no fixed effects.
+        """Stand-in for pass 1 when there are no fixed effects.
 
         There are no cells and nothing for the solver to do: every count the
         later steps read is set to what it means for plain OLS.

@@ -330,6 +330,109 @@ def _nb_csr_matmat(indptr, indices, data, X, out):
 
 
 @nb.njit(parallel=True, cache=True)
+def _nb_run_sums(cs, ZT, w, ST, Wparts):
+    """Collapse runs of rows into cells (pass 1).
+
+    cs     (C+1,)    start of each cell's run of rows, and the end
+    ZT     (m, n)    the centered variables, one contiguous row per variable
+    w      (n,)      row weights, or empty for none
+    ST     (m, C)    out: each cell's weighted sums
+    Wparts (B, m, m) out, when it has columns: block sums of the within-cell
+                     scatter, sum_i w_i (z_i - zbar_c)(z_i - zbar_c)', for the
+                     caller to add up; B fixes the blocks the cells are split
+                     into, so the result does not depend on the thread count
+    """
+    m, C = ST.shape
+    nblk = Wparts.shape[0]
+    weighted = w.shape[0] > 0
+    within = Wparts.shape[1] > 0
+    for b in nb.prange(nblk):
+        mean = np.empty(m)
+        dev = np.empty(m)
+        if within:
+            Wparts[b, :, :] = 0.0
+        for c in range(b * C // nblk, (b + 1) * C // nblk):
+            s, e = cs[c], cs[c + 1]
+            for j in range(m):
+                acc = 0.0
+                if weighted:
+                    for i in range(s, e):
+                        acc += w[i] * ZT[j, i]
+                else:
+                    for i in range(s, e):
+                        acc += ZT[j, i]
+                ST[j, c] = acc
+            if within:
+                n = 0.0
+                if weighted:
+                    for i in range(s, e):
+                        n += w[i]
+                else:
+                    n = e - s
+                for j in range(m):
+                    mean[j] = ST[j, c] / n
+                for i in range(s, e):
+                    wi = w[i] if weighted else 1.0
+                    for j in range(m):
+                        dev[j] = ZT[j, i] - mean[j]
+                    for j1 in range(m):
+                        for j2 in range(m):
+                            Wparts[b, j1, j2] += wi * dev[j1] * dev[j2]
+
+
+# Conjugate-gradient vector updates, fused so that each iteration reads the
+# level-sized arrays once or twice instead of once per numpy operation, and
+# split across threads. Column sums are reduced in a fixed number of blocks
+# (`parts.shape[0]`), not one per thread, so the result does not depend on the
+# thread count.
+
+@nb.njit(parallel=True, cache=True)
+def _nb_cg_dot(A, B, parts):
+    """parts[k, j] = sum over block k's rows of A[i, j] * B[i, j]; the caller
+    sums over axis 0."""
+    nb_, L, m = parts.shape[0], A.shape[0], A.shape[1]
+    for k in nb.prange(nb_):
+        for j in range(m):
+            parts[k, j] = 0.0
+        for i in range(k * L // nb_, (k + 1) * L // nb_):
+            for j in range(m):
+                parts[k, j] += A[i, j] * B[i, j]
+
+
+@nb.njit(parallel=True, cache=True)
+def _nb_cg_step(X, R, P, AP, alpha, dinv, parts):
+    """X += P alpha and R -= AP alpha, column by column, and in the same pass
+    the block sums of R**2 (parts[k, 0]) and, with a Jacobi preconditioner
+    `dinv` (empty otherwise), of R**2 * dinv = R'Z (parts[k, 1])."""
+    nb_, L, m = parts.shape[0], X.shape[0], X.shape[1]
+    jacobi = dinv.shape[0] > 0
+    for k in nb.prange(nb_):
+        for j in range(m):
+            parts[k, 0, j] = 0.0
+            parts[k, 1, j] = 0.0
+        for i in range(k * L // nb_, (k + 1) * L // nb_):
+            for j in range(m):
+                X[i, j] += alpha[j] * P[i, j]
+                r = R[i, j] - alpha[j] * AP[i, j]
+                R[i, j] = r
+                parts[k, 0, j] += r * r
+                if jacobi:
+                    parts[k, 1, j] += r * r * dinv[i]
+
+
+@nb.njit(parallel=True, cache=True)
+def _nb_cg_direction(P, Z, dinv, beta):
+    """P = Z + P beta, with Z = dinv * R (Jacobi: pass R as Z and the
+    diagonal as dinv) or a preconditioned residual (pass an empty dinv)."""
+    L, m = P.shape[0], P.shape[1]
+    jacobi = dinv.shape[0] > 0
+    for i in nb.prange(L):
+        for j in range(m):
+            z = Z[i, j] * dinv[i] if jacobi else Z[i, j]
+            P[i, j] = z + beta[j] * P[i, j]
+
+
+@nb.njit(parallel=True, cache=True)
 def _nb_stream_matvec(P, starts, codes, n, offs, acc):
     """(D_o' M_0 D_o) P without forming the matrix. acc: (nt, L, k) per-thread
     accumulators, zeroed here; the caller sums over axis 0."""

@@ -42,7 +42,7 @@ which is still local to the worker.
 Fewer than two dimensions. With one, it is streamed and there is nothing
 left to solve for: step 2 is skipped and the fit is the within regression.
 With none, there is no dimension to group the rows by, so pass 0 writes them
-unpartitioned and unsorted, passes 1 and 1b and step 2 are skipped, and the
+unpartitioned and unsorted, pass 1 and step 2 are skipped, and the
 row passes read plain batches without demeaning; the model keeps an
 "Intercept" coefficient, as in pyfixest.
 
@@ -50,8 +50,8 @@ Memory: rows are only ever streamed. The arrays held in RAM are sized by the
 non-streamed dimensions' level counts (times a block of at most `rhs_block`
 variables at a time), plus, for the explicit solver, the sparse reduced
 matrix S, whose size depends on how levels co-occur and not on rows. Polars
-steps stream; the sort runs one fe[0] hash bucket at a time, and the cell
-group_by a slice of whole fe[0] groups (about batch_rows rows) at a time.
+steps stream; the sort runs one fe[0] hash bucket at a time, and pass 1
+collapses a slice of whole fe[0] groups (about batch_rows rows) at a time.
 
 Pipeline
 --------
@@ -61,12 +61,18 @@ Pass 0 (Polars, streaming)   evaluate the design as Polars expressions; drop
                              singletons); factorize
                              the non-streamed FE and cluster ids;
                              hash-partition rows into fe[0] buckets; sort each
-                             bucket and assign dense fe[0] codes.
-Pass 1 (Polars)              per slice of whole fe[0] groups: group_by(fe[0],
-                             other codes) -> cell table with n and sums (plus
-                             within-cell cross-products when assembly="cells").
-Pass 1b (streamed + numba)   keep cells of fe[0] groups with more than one
-                             cell as memory-mapped arrays; Jacobi diagonal.
+                             bucket (by fe[0], then by the other codes, so that
+                             each cell is one run of rows) and assign dense
+                             fe[0] codes. The sort by the other codes is
+                             skipped when nearly every row is its own cell
+                             anyway; see `collapse_cells`.
+Pass 1 (streamed + numba)    read the sorted rows in slices of whole fe[0]
+                             groups and collapse each run into a cell, with
+                             its weight and sums (and within-cell
+                             cross-products when assembly="cells"); keep cells
+                             of fe[0] groups with more than one cell as
+                             memory-mapped arrays; Jacobi diagonal and step
+                             2's right-hand side, chunk by chunk.
 Step 2 (solver, per block)   solve  S Gamma = D_o' M_0 V,  S = D_o' M_0 D_o,
                              for all variables V in blocks of `rhs_block`
                              columns: "explicit" (sparse S built once, block
@@ -87,7 +93,7 @@ api.py             `feols_stream`, `fepois_stream`, `feglm_stream`
 estimator.py       `StreamingHDFE`: options, layout, the driver
 glm.py             `StreamingGLM`: IRLS over the same passes
 families.py        GLM families: Poisson, logit, probit
-passes.py          pass 0/1/1b   (mixin)
+passes.py          pass 0/1      (mixin)
 solve.py           step 2        (mixin)
 inference.py       steps 3/4     (mixin)
 kernels_base.py    numba kernels

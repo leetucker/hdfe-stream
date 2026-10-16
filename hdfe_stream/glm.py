@@ -4,14 +4,15 @@ fixed effects, by iteratively reweighted least squares (IRLS).
 Each IRLS step is a weighted least-squares fit of a working response on the
 covariates and the fixed effects -- the regression `StreamingHDFE` solves --
 with weights that change from step to step. The rows, their sort and the cell
-structure do not change, so pass 0 runs once, and passes 1/1b once for the
+structure do not change, so pass 0 runs once, and pass 1 once for the
 structure only (which cells identify the other effects, their levels, the
 connected components). A step is then:
 
   row pass   the linear predictor of every row, from the current
              coefficients: eta = x'beta + a[group] + sum_d fe_d[level] +
              offset; from it the IRLS weight W and the working response z;
-             per cell, sum W and W [z, x]; and the within-cell
+             per cell, sum W and W [z, x], all in one multithreaded sweep
+             (`kernels_glm._nb_glm_rows`); and the within-cell
              cross-products, with BLAS
   solve      the reduced system for z and the covariates, from the cell sums,
              starting from the previous step's solution
@@ -26,9 +27,9 @@ memory, one float per group (two or three sets at once).
 
 Which cell a row belongs to is found by reading the rows in order: pass 0
 sorts each fe[0] group's rows by the other dimensions' codes, so a cell is one
-run of rows, and a group with more than one run is one of pass 1b's
+run of rows, and a group with more than one run is one of pass 1's
 identifying groups. Cells are numbered in the order they are read, which is
-the order pass 1b stored them in.
+the order pass 1 stored them in.
 
 The iteration follows pyfixest's (`fepois`, `feglm`): the same starting
 values, convergence when the relative change in deviance,
@@ -66,13 +67,16 @@ from .estimator import StreamingHDFE
 from .families import get_family
 from .inference import _stack
 from .kernels_base import _nb_assemble, _nb_diag
-from .kernels_glm import _nb_cell_moments, _nb_group_effects
+from .kernels_glm import FAMILY_CODES, _nb_glm_rows, _nb_group_effects
 from .passes import _drop_levels
 from .report import _warn
 from .utils import _norm_vars
 
 LO, HI = f"{PREFIX}lo", f"{PREFIX}hi"      # per-level outcome range, in the separation check
 _OFFSET = "__offset__"          # the offset's variable name in the row files
+# blocks of groups the fused row pass reduces its sums over: fixed, so that the
+# deviance does not depend on the number of threads
+_ROW_BLOCKS = 256
 _MAX_HALVINGS = 30
 
 
@@ -172,7 +176,7 @@ class StreamingGLM(StreamingHDFE):
         self.family = get_family(family)
         self.iwls_tol, self.iwls_maxiter = float(iwls_tol), int(iwls_maxiter)
         self.separation_check = bool(separation_check)
-        self.assembly = "rows"          # pass 1 builds no cross-products
+        self.assembly = "rows"          # the cross-products come from each step
         self.offset_name = None
         if offset is not None:
             expr = pl.col(offset) if isinstance(offset, str) else offset
@@ -256,7 +260,7 @@ class StreamingGLM(StreamingHDFE):
 
     def _layout(self):
         """Counts that fix where each cell's sums go: identifying cells as
-        pass 1b stored them, then one row per single-cell group."""
+        pass 1 stored them, then one row per single-cell group."""
         G = self.n_levels.get(self.g_fe, 0) if self.fe else 0
         self.G_id = len(self.starts) - 1
         self.G_s = G - self.G_id
@@ -488,10 +492,12 @@ class StreamingGLM(StreamingHDFE):
             cstarts = np.append(np.flatnonzero(brk), n).astype(np.int64)
         else:
             cstarts = starts                        # one dimension: a cell is a group
-        ncell = np.diff(np.searchsorted(cstarts, starts))
+        gcell = np.searchsorted(cstarts, starts).astype(np.int64)
+        ncell = np.diff(gcell)
         is_id = ncell > 1
         cell_id = np.repeat(is_id, ncell)
-        lay = SimpleNamespace(starts=starts, cstarts=cstarts, is_id=is_id, cell_id=cell_id,
+        lay = SimpleNamespace(starts=starts, cstarts=cstarts, gcell=gcell, is_id=is_id,
+                              cell_id=cell_id,
                               Ng=np.diff(starts), c0=cursor[0], g0=cursor[1], s0=cursor[2],
                               nc=int(cell_id.sum()), ng=int(is_id.sum()),
                               ns=int(len(is_id) - is_id.sum()))
@@ -525,6 +531,39 @@ class StreamingGLM(StreamingHDFE):
             eta += off
         return eta
 
+    def _group_effects(self, state, lay):
+        """Each of the chunk's groups' fe[0] effect under `state` (zeros at
+        the start, when there are none yet)."""
+        a = np.zeros(len(lay.is_id))
+        if not state.init:
+            a[lay.is_id] = state.a_id[lay.g0:lay.g0 + lay.ng]
+            a[~lay.is_id] = state.a_s[lay.s0:lay.s0 + lay.ns]
+        return a
+
+    def _row_pass_plain(self, out, state, y, X, f, off, c, first):
+        """The row pass for a chunk of a model without fixed effects: no
+        cells, so the moments are plain weighted sums."""
+        fam = self.family
+        eta = self._eta(state, y, X, off, None, None)
+        mu, W, u = fam.irls(y, eta)
+        dev, ll = fam.deviance(y, eta, mu), fam.loglik(y, eta, mu)
+        out.dev += float(dev.sum() if f is None else dev @ f)
+        out.ll += float(ll.sum() if f is None else ll @ f)
+        if first:
+            out.sy += float(y.sum() if f is None else y @ f)
+            out.sw += float(len(y) if f is None else f.sum())
+            if fam.name == "poisson":
+                lg = special.gammaln(y + 1.0)
+                out.slg += float(lg.sum() if f is None else lg @ f)
+        w = W if f is None else W * f
+        V = np.empty((len(y), c))
+        V[:, 0] = eta + u if off is None else eta + u - off
+        V[:, 1:] = X
+        out.sv += w @ V
+        out.wsum += w.sum()
+        V *= np.sqrt(w)[:, None]
+        out.W += V.T @ V
+
     def _row_pass(self, state, yj, xj, slot, first=False):
         """Read the rows once at coefficients `state`: the deviance and
         log-likelihood there, and the cell sums of the next weighted
@@ -543,39 +582,41 @@ class StreamingGLM(StreamingHDFE):
         if first and self.fe:
             self.codes_s = np.zeros((self.G_s, len(self.o_fe)), np.int64)
         cursor = [0, 0, 0]
+        code = FAMILY_CODES[fam.name]
+        empty = np.zeros(0)
         for ch, starts, codes in self._row_chunks(self._columns(yj, xj)):
             lay = self._chunk_layout(starts, codes, cursor)
             y, X, f, off = self._chunk_data(ch, yj, xj)
-            eta = self._eta(state, y, X, off, codes, lay)
-            mu, W, u = fam.irls(y, eta)
-            dev, ll = fam.deviance(y, eta, mu), fam.loglik(y, eta, mu)
-            out.dev += float(dev.sum() if f is None else dev @ f)
-            out.ll += float(ll.sum() if f is None else ll @ f)
-            if first:
-                out.sy += float(y.sum() if f is None else y @ f)
-                out.sw += float(len(y) if f is None else f.sum())
-                if fam.name == "poisson":
-                    lg = special.gammaln(y + 1.0)
-                    out.slg += float(lg.sum() if f is None else lg @ f)
-            w = W if f is None else W * f
-            V = np.empty((len(y), c))
-            V[:, 0] = eta + u if off is None else eta + u - off
-            V[:, 1:] = X
-            del X
             if lay is None:
-                out.sv += w @ V
-                out.wsum += w.sum()
-                V *= np.sqrt(w)[:, None]
-                out.W += V.T @ V
+                self._row_pass_plain(out, state, y, X, f, off, c, first)
                 continue
+            # one fused sweep: the linear predictor, the family's weight and
+            # working response, the deviance and log-likelihood, and the cell
+            # moments, with V left holding the within-cell deviations
+            a = self._group_effects(state, lay)
+            V = np.empty((len(y), c))
+            w = np.empty(len(y))
             nc = np.empty(len(lay.cstarts) - 1)
             sc = np.empty((len(nc), c))
-            _nb_cell_moments(lay.cstarts, w, V, nc, sc)
+            parts = np.empty((_ROW_BLOCKS, 5 + c))
+            _nb_glm_rows(code, bool(state.init), float(self.ybar), lay.starts, lay.gcell,
+                         lay.cstarts, y, X, empty if f is None else f,
+                         empty if off is None else off, codes, self.offs,
+                         empty if state.init else state.beta,
+                         empty if state.init else state.fe, a, V, w, nc, sc, parts)
+            del X, w
+            p = parts.sum(axis=0)
+            out.dev += float(p[0])
+            out.ll += float(p[1])
+            if first:
+                out.sy += float(p[2])
+                out.sw += float(p[3])
+                out.slg += float(p[4])
+            out.bss += p[5:]
             out.W += V.T @ V
+            del V
             out.sv += sc.sum(axis=0)
             out.wsum += nc.sum()
-            pos = nc > 0
-            out.bss += (sc[pos] ** 2 / nc[pos, None]).sum(axis=0)
             out.n_id[lay.c0:lay.c0 + lay.nc] = nc[lay.cell_id]
             out.sums_id[lay.c0:lay.c0 + lay.nc] = sc[lay.cell_id]
             out.n_s[lay.s0:lay.s0 + lay.ns] = nc[~lay.cell_id]
@@ -585,7 +626,7 @@ class StreamingGLM(StreamingHDFE):
         if self.fe and (cursor[0], cursor[1], cursor[2]) != (self.M_id, self.G_id, self.G_s):
             raise RuntimeError(
                 f"the row files hold {cursor[0]:,} identifying cells in {cursor[1]:,} groups "
-                f"and {cursor[2]:,} single-cell groups, where pass 1b found {self.M_id:,}, "
+                f"and {cursor[2]:,} single-cell groups, where pass 1 found {self.M_id:,}, "
                 f"{self.G_id:,} and {self.G_s:,}")
         # sum w v^2: within cells, plus between cells (none without fixed effects)
         ss = np.diag(out.W) + out.bss

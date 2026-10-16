@@ -10,6 +10,11 @@ and log-likelihood are per row; the caller applies the user's weights.
 The binary families compute 1 - mu from -eta rather than by subtraction, so
 rows far in either tail keep their precision; a row whose weight underflows
 to zero gets u = 0 (it carries no weight, and its z would be inf).
+
+The IRLS row pass itself runs these same formulas, row by row, in the fused
+kernel `kernels_glm._nb_glm_rows`; a change to a family here needs the same
+change there. The methods here serve the final pass and models without fixed
+effects.
 """
 
 from __future__ import annotations

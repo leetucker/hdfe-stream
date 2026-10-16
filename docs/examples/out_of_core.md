@@ -29,9 +29,9 @@ Every fit reports what it used:
 
 ```python
 fit = feols_stream(fml, data, workdir="scratch")
-fit.diagnostics["disk_peak_gb"]       # 0.017
+fit.diagnostics["disk_peak_gb"]       # 0.01
 fit.diagnostics["disk_results_gb"]    # 0.006
-fit.diagnostics["seconds_total"]      # 0.55
+fit.diagnostics["seconds_total"]      # 0.67
 fit.diagnostics["cells_per_obs"]      # 1.0
 fit.solver_info                       # solver, iterations, convergence, ...
 ```
@@ -43,8 +43,16 @@ the Parquet input (the sorted working copy of the rows is less compressible than
 typical input).
 
 `cells_per_obs` is worth understanding: rows are reduced to cells, one per
-combination of fixed-effect levels. At 1.0 every row is its own cell and the
-reduction buys nothing; well below 1.0 the later passes get much cheaper.
+combination of fixed-effect levels within a worker. Pass 0 sorts each worker's
+rows by the other dimensions' levels, so a cell is a run of rows, and pass 1
+collapses the runs as it reads them. Well below 1.0 the later passes get much
+cheaper. At 1.0 every row is its own cell and the reduction buys nothing, as
+with worker, firm and year effects on a worker-year panel, or worker and
+firm-by-year effects. The fit notices this while it first scans the data, from
+an approximate count of the distinct combinations, and then leaves the rows
+unsorted by cell, saving the wider sort. `collapse_cells=True` or `False`
+overrides that, and `diagnostics["cells_collapsed"]` says which happened; the
+estimates are the same either way.
 
 ## Choosing a solver
 
@@ -155,13 +163,13 @@ fit.summary(logger=log)           # the whole summary as one record
 ```
 
 ```text
-2026-10-15 09:09:02,289 akm INFO planning 'log_earn ~ age_squared + age_cubed | worker_id + firm_id + year' (formula expansion, level discovery)
-2026-10-15 09:09:02,322 akm INFO pass 0: streaming worker_id (highest cardinality (worker_id ~20,474, firm_id ~1,194, year ~10))
-2026-10-15 09:09:02,338 akm INFO pass 0: hash-partitioning rows into 1 worker_id buckets
-2026-10-15 09:09:02,377 akm INFO pass 1: group_by(worker_id, firm_id, year) -> cells
-2026-10-15 09:09:02,483 akm INFO step 2: solving for 3 variables (blocks of 8), solver=auto
-2026-10-15 09:09:02,536 akm INFO pass 2: log_earn ~ age_squared + age_cubed | worker_id + firm_id + year
-2026-10-15 09:09:02,604 akm INFO done in 0.3s; peak disk use 0.02 GB, result files 0.01 GB in ...
+2026-10-16 10:13:03,023 akm INFO planning 'log_earn ~ age_squared + age_cubed | worker_id + firm_id + year' (formula expansion, level discovery)
+2026-10-16 10:13:03,071 akm INFO pass 0: streaming worker_id (highest cardinality (worker_id ~20,474, firm_id ~1,194, year ~10))
+2026-10-16 10:13:03,089 akm INFO pass 0: hash-partitioning rows into 1 worker_id buckets
+2026-10-16 10:13:03,135 akm INFO pass 1: rows as cells (~100.0% of the rows are distinct combinations of fixed-effect levels), extracting identifying cells
+2026-10-16 10:13:03,164 akm INFO step 2: solving for 3 variables (blocks of 8), solver=auto
+2026-10-16 10:13:03,503 akm INFO pass 2: log_earn ~ age_squared + age_cubed | worker_id + firm_id + year
+2026-10-16 10:13:03,583 akm INFO done in 0.6s; peak disk use 0.01 GB, result files 0.01 GB in ...
 ```
 
 Per-iteration conjugate-gradient residuals go to the logger at DEBUG.

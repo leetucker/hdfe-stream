@@ -4,7 +4,7 @@
  "memory_gb": 26.4,
  "platform": "Linux-5.15.167.4-microsoft-standard-WSL2-x86_64-with-glibc2.39",
  "python": "3.14.8",
- "hdfe-stream": "0.2.2",
+ "hdfe-stream": "0.3.0",
  "pyfixest": "0.60.0",
  "xhdfe": "2.28.1.20260929",
  "polars": "2.0.0",
@@ -12,5 +12,5 @@
  "numba": "0.68.0",
  "scipy": "1.18.1",
  "pandas": "3.0.6",
- "measured": "2026-10-08"
+ "measured": "2026-10-16"
 }

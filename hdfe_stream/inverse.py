@@ -137,6 +137,7 @@ class _InverseMixin:
         """One pass over the rows, forming both halves of the reduced
         right-hand side: the level block and the covariate block."""
         n_cov = len(covariate_columns)
+        n_threads = self._acc_copies(total_levels, n_vectors)
         acc = np.zeros((n_threads, total_levels, n_vectors))
         acc_x = np.zeros((n_threads, n_cov, n_vectors))
         for ordinal, chunk, starts, codes, w in self._chunks(
@@ -191,6 +192,7 @@ class _InverseMixin:
     def _reduce_design(self, columns, total_levels, n_threads):
         """T_dx and T_xx: the reduction applied to the covariates themselves."""
         n_cov = len(columns)
+        n_threads = self._acc_copies(total_levels, n_cov)
         acc = np.zeros((n_threads, total_levels, n_cov))
         acc_x = np.zeros((n_threads, n_cov, n_cov))
         for _, chunk, starts, codes, w in self._chunks(tuple(columns)):
@@ -307,6 +309,7 @@ class _InverseMixin:
             levels, covariate_values, streamed)
 
         # pass 1: rho = P^-1 v_0 spread over rows, reduced onto [X, D_o]
+        n_threads = self._acc_copies(total_levels, n_vectors)
         acc = np.zeros((n_threads, total_levels, n_vectors))
         acc_x = np.zeros((n_threads, len(columns), n_vectors))
         for _, chunk, starts, codes, w in self._chunks(

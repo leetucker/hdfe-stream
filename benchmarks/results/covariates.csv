@@ -1,26 +1,26 @@
 n_covariates,bin_months,n_workers,configuration,order,status,wall_s,read_s,fit_s,peak_memory_mb,import_memory_mb,peak_disk_mb,n_coef
 8,60,1000000,pyfixest (MAP),0,ok,132.43,0.237,132.193,5735.2,17.8,0.0,8
-8,60,1000000,hdfe_stream,3,ok,6.604,0.0,6.604,3161.9,17.7,304.0,8
+8,60,1000000,hdfe_stream,0,ok,12.085,0.0,12.085,2582.0,17.7,300.3,8
 8,60,1000000,pyfixest (LSMR),1,ok,16.008,0.25,15.757,7341.0,17.8,0.0,8
-8,60,1000000,hdfe_stream (sized to the design),4,ok,7.265,0.0,7.265,3040.8,17.7,304.0,8
+8,60,1000000,hdfe_stream (sized to the design),1,ok,12.539,0.0,12.539,2621.1,17.7,300.3,8
 8,60,1000000,xhdfe,2,ok,15.312,0.164,15.149,9051.1,17.8,0.0,9
 41,12,1000000,pyfixest (MAP),0,ok,520.477,0.182,520.295,13769.0,17.8,0.0,41
-41,12,1000000,hdfe_stream,3,ok,22.03,0.0,22.03,6907.3,17.7,635.0,41
+41,12,1000000,hdfe_stream,0,ok,38.756,0.0,38.756,6916.9,17.7,602.7,41
 41,12,1000000,pyfixest (LSMR),1,ok,61.653,0.209,61.444,18166.5,17.8,0.0,41
-41,12,1000000,hdfe_stream (sized to the design),4,ok,20.318,0.0,20.318,3706.3,17.7,638.0,41
+41,12,1000000,hdfe_stream (sized to the design),1,ok,35.935,0.0,35.935,3606.1,17.7,604.4,41
 41,12,1000000,xhdfe,2,ok,59.871,0.247,59.624,18158.2,17.8,0.0,42
 83,6,1000000,pyfixest (MAP),0,ok,975.629,0.234,975.395,25176.0,17.8,0.0,83
-83,6,1000000,hdfe_stream,3,ok,57.764,0.0,57.764,12408.3,17.7,1080.0,83
+83,6,1000000,hdfe_stream,0,ok,114.476,0.0,114.476,12635.7,17.7,1030.8,83
 83,6,1000000,pyfixest (LSMR),1,ok,156.168,1.654,154.514,25793.1,17.8,0.0,83
-83,6,1000000,hdfe_stream (sized to the design),4,ok,43.688,0.0,43.688,4865.1,17.7,1086.0,83
+83,6,1000000,hdfe_stream (sized to the design),1,ok,117.72,0.0,117.72,4228.5,17.7,1035.5,83
 83,6,1000000,xhdfe,2,ok,125.332,0.525,124.807,25968.8,17.8,0.0,84
 167,3,1000000,pyfixest (MAP),0,killed (out of memory),,,,,,,
-167,3,1000000,hdfe_stream,3,ok,126.798,0.0,126.798,23049.0,17.7,1963.0,167
+167,3,1000000,hdfe_stream,0,ok,275.223,0.0,275.223,23015.8,17.7,1884.4,167
 167,3,1000000,pyfixest (LSMR),1,killed (out of memory),,,,,,,
-167,3,1000000,hdfe_stream (sized to the design),4,ok,80.556,0.0,80.556,5143.6,17.7,1979.0,167
+167,3,1000000,hdfe_stream (sized to the design),1,ok,187.623,0.0,187.623,5091.5,17.6,1895.4,167
 167,3,1000000,xhdfe,2,killed (out of memory),,,,,,,
 503,1,1000000,pyfixest (MAP),0,killed (out of memory),,,,,,,
-503,1,1000000,hdfe_stream,3,killed (out of memory),,,,,,,
+503,1,1000000,hdfe_stream,0,killed (out of memory),,,,,,,
 503,1,1000000,pyfixest (LSMR),1,killed (out of memory),,,,,,,
-503,1,1000000,hdfe_stream (sized to the design),4,ok,329.431,0.0,329.431,8594.1,17.5,5538.0,503
+503,1,1000000,hdfe_stream (sized to the design),1,ok,535.303,0.0,535.303,8616.8,17.6,5309.0,503
 503,1,1000000,xhdfe,2,killed (out of memory),,,,,,,

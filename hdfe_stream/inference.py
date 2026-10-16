@@ -637,6 +637,7 @@ class _InferenceMixin:
                 "bread_rel_diff": (float(np.abs(bread_asm - B).max() / np.abs(B).max()) if k
                                    else 0.0),
                 "cells_per_obs": round(self.n_cells / self.n_obs, 4),
+                "cells_collapsed": None if self.no_fe else bool(self.collapse),
                 "assembly": self.assembly, "nested_in_cluster": nested,
                 "design_evaluated": getattr(self, "design_evaluated", None),
                 "stream": self.stream_choice, "singletons": dict(self.singletons),

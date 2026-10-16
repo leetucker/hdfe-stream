@@ -8,7 +8,8 @@ import numba as nb
 import numpy as np
 import scipy.sparse as sp
 
-from .kernels_base import (_nb_csr_matmat, _nb_level_groups, _nb_rhs,
+from .kernels_base import (_nb_cg_direction, _nb_cg_dot, _nb_cg_step,
+                           _nb_csr_matmat, _nb_level_groups, _nb_rhs,
                            _nb_row_fill, _nb_row_nnz, _nb_row_work,
                            _nb_stream_matvec)
 from .kernels_slopes import _nb_rhs_sl, _nb_stream_matvec_sl
@@ -41,6 +42,11 @@ class _STooLarge(Exception):
 # well behaved.
 _RHS_ZERO_TOL = 1e-11
 
+# Row blocks the CG kernels reduce column sums over: enough to keep any
+# realistic number of threads busy, and fixed, so the sums do not depend on
+# the thread count.
+_CG_BLOCKS = 256
+
 
 # Shared-state contract with the other mixins
 # -------------------------------------------
@@ -59,6 +65,10 @@ class _SolveMixin:
     def _pcg(self, matvec, precond, b, zero=None, x0=None):
         """Block PCG: one independent CG per right-hand-side column, run in
         lockstep so every operator application covers all columns.
+
+        `precond` is the Jacobi preconditioner's inverse diagonal (an array,
+        which the fused kernels apply in passing) or a function of the
+        residual block (AMG).
 
         `zero` marks columns whose right-hand side is numerically zero (see
         `_RHS_ZERO_TOL`); they are returned as the zero solution, which is what
@@ -87,33 +97,52 @@ class _SolveMixin:
             active &= rel > self.tol
             if not active.any():
                 return X, 0, True, float(rel.max())
-        Z = precond(R)
-        P = Z.copy()
-        rz = np.einsum("ij,ij->j", R, Z)
+        X, R = np.ascontiguousarray(X), np.ascontiguousarray(R)
+        jacobi = isinstance(precond, np.ndarray)
+        dinv = precond if jacobi else np.zeros(0)
+        # blocks of rows for the column sums: a fixed number, so that the
+        # sums, and the solution, do not depend on how many threads run them
+        nblk = max(1, min(_CG_BLOCKS, X.shape[0]))
+        parts = np.empty((nblk, 2, b.shape[1]))
+        dots = np.empty((nblk, b.shape[1]))
+        if jacobi:
+            P = R * dinv[:, None]
+        else:
+            P = np.ascontiguousarray(precond(R))
+        _nb_cg_dot(R, P, dots)
+        rz = dots.sum(axis=0)
         it = 0
         for it in range(1, self.maxiter + 1):
             AP = matvec(P)
-            pAp = np.einsum("ij,ij->j", P, AP)
+            _nb_cg_dot(P, AP, dots)
+            pAp = dots.sum(axis=0)
             alpha = np.where(active & (pAp > 0), rz / np.where(pAp > 0, pAp, 1), 0.0)
-            X += P * alpha
-            R -= AP * alpha
-            rel = np.linalg.norm(R, axis=0) / bnorm
+            _nb_cg_step(X, R, P, AP, alpha, dinv, parts)
+            del AP
+            sums = parts.sum(axis=0)
+            rel = np.sqrt(sums[0]) / bnorm
             active = rel > self.tol
             if self.verbose and (it % 25 == 0 or not active.any()):
                 self._debug(f"  CG iter {it}: max rel. residual {rel.max():.2e}")
             if not active.any():
                 break
-            Z = precond(R)
-            rz_new = np.einsum("ij,ij->j", R, Z)
+            if jacobi:
+                rz_new = sums[1]
+                Z = R
+            else:
+                Z = np.ascontiguousarray(precond(R))
+                _nb_cg_dot(R, Z, dots)
+                rz_new = dots.sum(axis=0)
             beta = np.where(active, rz_new / np.where(rz != 0, rz, 1), 0.0)
-            P = Z + P * beta
+            _nb_cg_direction(P, Z, dinv, beta)
             rz = rz_new
         return X, it, bool(not active.any()), float(rel.max())
 
     def _jacobi(self):
+        """The Jacobi preconditioner, as the inverse of S's diagonal (zero
+        where the diagonal is)."""
         pos = self.diag > 1e-12
-        dinv = np.where(pos, 1.0 / np.where(pos, self.diag, 1.0), 0.0)
-        return lambda R: R * dinv[:, None]
+        return np.where(pos, 1.0 / np.where(pos, self.diag, 1.0), 0.0)
 
     def _build_explicit(self):
         """Form S = D_o' M_0 D_o as a CSR matrix, row by row in parallel.
@@ -205,11 +234,17 @@ class _SolveMixin:
             return (lambda b, zero=None, x0=None: self._pcg(matvec, precond, b, zero, x0)), info
 
         if solver == "stream_cg":
-            nt = nb.get_num_threads()
             L = self.diag.shape[0]
+            # one accumulator per thread, within the memory budget; allocated
+            # once per width and reused by every iteration
+            buffers = {}
 
             def matvec_s(P):
-                acc = np.empty((nt, L, P.shape[1]))
+                k = P.shape[1]
+                if k not in buffers:
+                    buffers.clear()
+                    buffers[k] = np.empty((self._acc_copies(L, k), L, k))
+                acc = buffers[k]
                 if self.slope_vars:
                     _nb_stream_matvec_sl(np.ascontiguousarray(P), self.starts, self.codes, self.n,
                                          self.st, self.ainv, self.offs, acc)
@@ -246,13 +281,14 @@ class _SolveMixin:
         is written to a memory-mapped .npy file.
 
         By default the variables are the estimator's own, from the cell sums
-        of passes 1/1b. The GLM passes its working regression's instead:
+        of pass 1. The GLM passes its working regression's instead:
         `sums` (cells x variables), their `names` and total sums of squares
         `raw_ss`, the previous step's solution `x0` as a starting guess, and
         `in_memory` to keep Gamma out of the run directory.
         """
         off, L = self._offsets()
-        if sums is None:
+        own = sums is None
+        if own:
             sums, names, raw_ss = self.sums, self.var_names, self.raw_ss
         m = sums.shape[1]
         t0 = time.time()
@@ -262,6 +298,9 @@ class _SolveMixin:
             return np.zeros((0, m)), {"solver": "none", "iterations": 0, "converged": True,
                                       "blocks": 0, "seconds": 0.0}
         solve, info = self._make_block_solver()
+        # the right-hand side of the estimator's own variables, when pass 1
+        # built it (all of them in one block); used once, then released
+        pre = self.__dict__.pop("_rhs_pass1", None) if own else None
         gamma = (np.empty((L, m)) if in_memory else
                  np.lib.format.open_memmap(self.paths["gamma"], mode="w+",
                                            dtype=np.float64, shape=(L, m)))
@@ -272,12 +311,16 @@ class _SolveMixin:
             if info["solver"] == "within":
                 X, it, c, r = solve(sums[:, j0:j1])
             else:
-                b = np.zeros((L, j1 - j0))
-                if self.slope_vars:
-                    _nb_rhs_sl(self.starts, self.codes, sums[:, j0:j1], self.st, self.ainv,
-                               self.cmat[:, :, j0:j1], self.offs, b)
+                if pre is not None:
+                    b = pre[:, j0:j1]
                 else:
-                    _nb_rhs(self.starts, self.codes, self.n, sums[:, j0:j1], self.offs, b)
+                    b = np.zeros((L, j1 - j0))
+                    if self.slope_vars:
+                        _nb_rhs_sl(self.starts, self.codes, sums[:, j0:j1], self.st,
+                                   self.ainv, self.cmat[:, :, j0:j1], self.offs, b)
+                    else:
+                        _nb_rhs(self.starts, self.codes, self.n, sums[:, j0:j1],
+                                self.offs, b)
                 # compare each right-hand side against the scale of its own
                 # variable; see _RHS_ZERO_TOL. raw_ss is the variable's total
                 # sum of squares, already computed in pass 0, so this costs

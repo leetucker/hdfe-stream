@@ -77,8 +77,8 @@ the fixed effects, with weights that depend on the current fit. That
 regression is the one `feols_stream` solves, so the GLM reuses its machinery:
 
 - **Once:** pass 0 reads, filters, partitions and sorts the rows, as for OLS,
-  and passes 1 and 1b find the cell structure (which worker–firm cells
-  identify the firm effects, the connected components).
+  and pass 1 finds the cell structure (which worker–firm cells identify the
+  firm effects, the connected components).
 - **Each step:** one read of the sorted rows computes every row's linear
   predictor from the current coefficients, then its IRLS weight and working
   response, and sums them per cell; the reduced system for the non-streamed

@@ -141,11 +141,11 @@ class _StandardErrorMixin:
         if getattr(self, "_lw_cache", None) is not None:
             return self._lw_cache
 
-        n_threads = nb.get_num_threads()
         _, total_levels = self._offsets()
         n_groups = self.n_levels[self.g_fe]
-        acc = np.zeros((n_threads, total_levels, 1))
-        acc_x = np.zeros((n_threads, 0, 1))
+        copies = self._acc_copies(total_levels, 1)
+        acc = np.zeros((copies, total_levels, 1))
+        acc_x = np.zeros((copies, 0, 1))
         groups = np.zeros((n_groups, 1))
         for _ordinal, chunk, starts, codes, w in self._chunks():
             ones = np.ones((len(w), 1))
@@ -252,7 +252,6 @@ class _StandardErrorMixin:
             raise ValueError("n_draws and block must be at least 1")
         covariates = self._model_covariates(covariates)
         L = self._se_layout(covariates, psi)
-        n_threads = nb.get_num_threads()
         n_cov = len(L["columns"])
         n_rows = self.row_count()
         root_total = np.sqrt(L["norm"])     # scale; the centering below uses T
@@ -272,8 +271,9 @@ class _StandardErrorMixin:
 
                 # pass 1: L'q for both dimensions. Feeding q / sqrt(w) to the
                 # kernels, which apply W, yields the W^(1/2) q these want.
-                acc = np.zeros((n_threads, L["total_levels"], size))
-                acc_x = np.zeros((n_threads, n_cov, size))
+                copies = self._acc_copies(L["total_levels"], size)
+                acc = np.zeros((copies, L["total_levels"], size))
+                acc_x = np.zeros((copies, n_cov, size))
                 gsum = np.zeros((L["n_groups"], size))
                 for ordinal, chunk, starts, codes, w in self._chunks(L["columns"]):
                     _root, inv = self._inverse_root(w)
@@ -362,9 +362,9 @@ class _StandardErrorMixin:
                              * (U_groups - alpha_mean)) / norm
             return
 
-        n_threads = nb.get_num_threads()
         size = U_groups.shape[1]
-        cross_psi = np.zeros((n_threads, L["total_levels"], size))
+        cross_psi = np.zeros((self._acc_copies(L["total_levels"], size),
+                              L["total_levels"], size))
         cross_groups = np.zeros((L["n_groups"], size))
         U_levels = np.ascontiguousarray(U_levels)
         U_groups = np.ascontiguousarray(U_groups)
@@ -391,10 +391,10 @@ class _StandardErrorMixin:
         (see `component_variances`).
         """
         L = self._se_layout(covariates, psi)
-        n_threads = nb.get_num_threads()
         n_cov = len(L["columns"])
-        acc = np.zeros((n_threads, L["total_levels"], 3))
-        acc_x = np.zeros((n_threads, n_cov, 3))
+        copies = self._acc_copies(L["total_levels"], 3)
+        acc = np.zeros((copies, L["total_levels"], 3))
+        acc_x = np.zeros((copies, n_cov, 3))
         gsum = np.zeros((L["n_groups"], 3))
         for ordinal, chunk, starts, codes, w in self._chunks(L["columns"]):
             _root, inv = self._inverse_root(w)
@@ -515,8 +515,9 @@ class _StandardErrorMixin:
         # for the rank-two term u_k'v and 1'v
         along = np.zeros((3, size))
         u_dot, one_dot = np.zeros((3, size)), np.zeros((3, size))
-        acc = np.zeros((n_threads, L["total_levels"], wide * size))
-        acc_x = np.zeros((n_threads, n_cov, wide * size))
+        copies = self._acc_copies(L["total_levels"], wide * size)
+        acc = np.zeros((copies, L["total_levels"], wide * size))
+        acc_x = np.zeros((copies, n_cov, wide * size))
         gsum = np.zeros((L["n_groups"], wide * size))
         for ordinal, chunk, starts, codes, w in self._chunks(wanted):
             _root, inv = self._inverse_root(w)

@@ -38,7 +38,7 @@ from .workspace import _ACTIVE_RUNS, _MARKER, _Run, _base_dir, _dir_bytes, _remo
 # Everything on `self` is set here -- in __init__, _init_run or _setup_dims --
 # except these, which the mixins set and this file reads back: n_levels,
 # n_obs, n_cells, n_ident_cells, n_identifying, n_components and fe_params
-# (pass 1/1b), and clusters (inference).
+# (pass 1), and clusters (inference).
 
 
 def _polars_panic_message(exc):
@@ -175,7 +175,12 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
     maxiter : int, default 5000
         The most conjugate-gradient iterations; a solve that reaches it warns.
     max_s_gb : float, optional
-        Size cap for S. Default: 25% of physical memory.
+        Memory budget, in GB, for the reduced system: the cap on the explicit
+        matrix S, above which ``solver="auto"`` uses ``"stream_cg"``, and on
+        the per-thread accumulators that ``"stream_cg"`` and the leave-out
+        passes use, which together take at most half of it (with fewer
+        threads on those passes when it binds). Default: 25% of physical
+        memory.
     rhs_block : int, default 8
         Variables solved at a time; bounds solver memory at about
         6 x (total non-streamed levels) x rhs_block doubles.
@@ -190,10 +195,24 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
     row_group_size : int, default 500_000
         Rows per row group of the working and result Parquet files.
     assembly : {"auto", "cells", "rows"}, default "auto"
-        ``"cells"``: within-cell cross-products computed in pass 1;
+        ``"cells"``: within-cell cross-products accumulated in pass 1;
         ``"rows"``: an extra row pass after the solve, with no m^2
         aggregation columns; ``"auto"``: cells when there are at most 8
         variables.
+    collapse_cells : {"auto", True, False}, default "auto"
+        Whether the rows are collapsed into cells, one per combination of
+        fixed-effect levels within each group of the streamed dimension.
+        Collapsing makes the later passes cheaper when combinations repeat (a
+        worker's years at one firm, with ``worker_id + firm_id``). It costs a
+        wider sort key in pass 0, and buys nothing when they do not repeat
+        (``worker_id + firm_id^year`` on a worker-year panel, or
+        ``worker_id + firm_id + year``), where every row is its own cell.
+        ``"auto"`` counts the distinct combinations approximately in pass 0's
+        scan, at little cost, and collapses unless they are at least 90% of
+        the rows; True always collapses, False never does (rows that happen to
+        be adjacent and identical still share a cell). The estimates are the
+        same either way. GLMs and fits with ``keep_intermediates`` always
+        collapse. ``diagnostics["cells_collapsed"]`` says which happened.
     collin_tol : float, default 1e-10
         Tolerance for dropping collinear covariates (pyfixest's algorithm
         applied to the residualized X'X).
@@ -263,7 +282,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
     """
 
     # Hooks for subclasses (see passes.py): sort each fe[0] group's rows by
-    # cell, and sum the variables per cell in passes 1/1b.
+    # cell, and sum the variables per cell in pass 1.
     cells_contiguous = False
     cell_sums = True
 
@@ -283,7 +302,8 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                  stream: str | None = None, models: list[dict[str, Any]] | None = None,
                  verbose: bool = True, logger: logging.Logger | None = None,
                  log_level: int = logging.INFO, outputs: str = "auto",
-                 save_resid: bool = True, keep_intermediates: bool = False) -> None:
+                 save_resid: bool = True, keep_intermediates: bool = False,
+                 collapse_cells: bool | str = "auto") -> None:
         ys, xs = _norm_vars(y), _norm_vars(x if x is not None else [])
         self.var_names = list(ys) + [k for k in xs if k not in ys]
         self.var_exprs = {**xs, **ys}
@@ -367,6 +387,19 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         self.assembly = (assembly if assembly != "auto" else
                          ("cells" if self.m <= 8 and not self.slopes and not self.no_fe
                           else "rows"))
+        if collapse_cells not in ("auto", True, False):
+            raise ValueError("collapse_cells must be 'auto', True or False")
+        # Whether to sort each group's rows by cell, so that pass 1 collapses
+        # every cell, is a choice only for linear models with two or more
+        # fixed effects whose intermediates are not kept: the GLM re-reads the
+        # rows cell by cell, and the leave-out operator wants the canonical
+        # order, so both always sort.
+        self._collapse_optional = (not self.cells_contiguous and not keep_intermediates
+                                   and not self.no_fe and len(self.fe_user) >= 2)
+        if collapse_cells is False and not self._collapse_optional:
+            raise ValueError("collapse_cells=False is available for linear models with two "
+                             "or more fixed effects, without keep_intermediates=True")
+        self.collapse_cells = collapse_cells
         fe_src = {c for d in self.fe_user for c in self.fe_cols[d]}
         if row_id.startswith(PREFIX):
             raise ValueError(f"row_id={row_id!r} starts with {PREFIX!r}, which is reserved "
@@ -406,7 +439,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         self.paths = {
             "maps": {},
             "partitioned": str(p / "rows_partitioned"),
-            "rows": [], "cells": [],
+            "rows": [],
             "ident": {"codes": str(p / "ident_codes.u32"), "n": str(p / "ident_n.f64"),
                       "sums": str(p / "ident_sums.f64"), "starts": str(p / "ident_starts.npy"),
                       "st": str(p / "ident_st.f64"), "ainv": str(p / "ident_ainv.f64"),
@@ -416,6 +449,19 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
 
     def _log(self, msg):
         _log(self.verbose, msg, self.logger, self.log_level)
+
+    def _acc_copies(self, levels, width):
+        """How many per-thread copies of a levels x width float64 accumulator
+        a parallel pass gets: one per thread, as long as all of them together
+        stay within half of `max_s_gb`, and at least one.
+
+        The kernels split their groups among the copies, so fewer copies
+        means fewer threads on that pass rather than more memory. Half the
+        budget, because the leave-out passes can hold two such sets at once
+        (their own, and the solver's)."""
+        per_copy = max(int(levels) * max(int(width), 1) * 8, 1)
+        fit = int(0.5 * self.max_s_gb * 1e9 // per_copy)
+        return max(1, min(nb.get_num_threads(), fit))
 
     def _debug(self, msg):
         """Fine-grained progress (e.g. per-iteration CG residuals): a DEBUG
@@ -482,7 +528,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
 
 
     def _run_passes(self, source, keys, extra):
-        """Passes 0, 1 and 1b and the connected components: everything a fit
+        """Passes 0 and 1 and the connected components: everything a fit
         does before the solve, shared with StreamingGLM."""
         self._pass0_code(source, keys, extra)
         self._after_pass0()
@@ -490,7 +536,6 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
             self._no_cells()
         else:
             self._pass1_cells()
-            self._pass1b_identifying()
             self._components()
         self._log("n={:,} cells={:,} identifying groups={:,} cells={:,} "
                   "components={:,} threads={} ".format(

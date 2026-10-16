@@ -491,9 +491,6 @@ class _WeakIdMixin:
 
         Returns (estimates, standard errors of the Monte Carlo part, draws used).
         """
-        import numba as nb
-
-        n_threads = nb.get_num_threads()
         n_cov = len(L["columns"])
         comps = [c for c in range(3) for _ in range(k)]
 
@@ -513,8 +510,9 @@ class _WeakIdMixin:
         while drawn < n_draws:
             m = min(size, n_draws - drawn)
             vectors = self.rademacher(seed=seed, first_draw=drawn)
-            acc = np.zeros((n_threads, L["total_levels"], m))
-            acc_x = np.zeros((n_threads, n_cov, m))
+            copies = self._acc_copies(L["total_levels"], m)
+            acc = np.zeros((copies, L["total_levels"], m))
+            acc_x = np.zeros((copies, n_cov, m))
             gsum = np.zeros((L["n_groups"], m))
             for ordinal, chunk, starts, codes, w in self._chunks(L["columns"]):
                 _root, inv = self._inverse_root(w)

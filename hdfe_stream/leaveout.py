@@ -413,8 +413,9 @@ class _TraceMixin:
         Z_cov = np.ascontiguousarray(Z[total_levels + n_groups:])
 
         # u = S^- Z, accumulating v = A' Omega A u in the same pass
-        acc = np.zeros((n_threads, total_levels, size))
-        acc_x = np.zeros((n_threads, len(columns), size))
+        copies = self._acc_copies(total_levels, size)
+        acc = np.zeros((copies, total_levels, size))
+        acc_x = np.zeros((copies, len(columns), size))
         v_groups = np.zeros((n_groups, size))
 
         def collect(ordinal, chunk, rows):

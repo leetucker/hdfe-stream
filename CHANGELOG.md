@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.3.1 (unreleased)
+
+Performance.
+
+- **Cells are collapsed from sorted rows, without a hash aggregation.** Pass 0
+  now sorts each worker's rows by the other fixed effects' levels too, so that
+  every cell (one combination of levels) is a run of consecutive rows, and pass
+  1 collapses the runs as it reads the sorted rows, in a multithreaded kernel.
+  This replaces Polars' group_by over each slice of rows, and the cell table it
+  wrote to disk and read back. Where nearly every row is a cell of its own
+  (e.g., worker, firm and year effects on a worker-year panel), pass 0 sorts by
+  the streamed dimension alone. The new `collapse_cells` option (`"auto"`, the
+  default; True; False) overrides that choice, and
+  `diagnostics["cells_collapsed"]` reports it. Together with the faster
+  iterations below, this reduced compute time by 5-31% on large AKM
+  configurations, and peak disk by up to 40%, with the same or lower memory.
+- **Faster conjugate-gradient iterations.** The vector work of each iteration
+  (dot products, norms, and the updates of the solution, residual and search
+  direction) runs as fused, multithreaded kernels instead of single-threaded
+  numpy operations.
+- **Faster IRLS steps for Poisson, logit and probit.** Each step's read of the
+  rows (every row's linear predictor, the family's mean, weight and working
+  response, the deviance and log-likelihood, and the sums per cell) runs as one
+  fused, multithreaded kernel, instead of a dozen single-threaded numpy
+  operations over each chunk. On large regression benchmarks, compute time
+  declined by 11-32%.
+- **Pass 1 builds the Jacobi diagonal and step 2's right-hand side** chunk by
+  chunk while it has the cells in memory, instead of reading the identifying
+  cells back for each, when the variables are solved in one block (up to
+  `rhs_block` of them). Each of those reads is a pass over data as large as
+  the cell table, which matters most where the scratch disk is slow.
+- **A memory budget for per-thread accumulators.** `stream_cg` and the
+  leave-out passes give each thread its own level-sized accumulator, which
+  with many threads and many levels could take more memory than the rest of
+  the fit (64 threads, 30 million firm-years and 8 columns: about 120 GB,
+  allocated afresh every iteration). They now get one copy per thread only
+  while all of them fit in half of `max_s_gb`, with fewer threads on those
+  passes when that binds, and `stream_cg` allocates its copies once per
+  solve. Lowering `max_s_gb` tightens it.
+
 ## 0.3.0
 
 New features.
