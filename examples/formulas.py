@@ -12,7 +12,7 @@ import warnings
 
 import polars as pl
 
-from hdfe_stream import feols_stream
+from hdfe_stream import feols_stream, holm, rwolf
 from simulated_data import panel_path, thin_panel_path, workdir
 
 data = panel_path()
@@ -108,6 +108,18 @@ used = {f: s.filter("in_sample").select(pl.len()).collect().item() for f, s in s
 print(f"\nmulti.sample(): one frame per formula ({len(samples)}), rows used: "
       + ", ".join(f"{n:,}" for n in sorted(set(used.values()))))
 
+# ---------------------------------------------------------------- predictions
+# predict() adds a prediction column to new rows, lazily: covariates times the
+# coefficients plus each row's fixed effects, looked up by their levels. A row
+# with a worker or firm the fit never saw (or dropped) gets null.
+panel = pl.scan_parquet(data)
+early = feols_stream("log_earn ~ age_squared + age_cubed | worker_id + firm_id",
+                     panel.filter(pl.col("year") < 2012), workdir=workdir("formulas"),
+                     verbose=False)
+later = early.predict(panel.filter(pl.col("year") >= 2012)).collect()
+print(f"\npredict(): {later.height:,} later rows, "
+      f"{later['prediction'].null_count():,} with a worker or firm the fit never saw")
+
 # ------------------------------------------------- fixed-effect degrees of freedom
 # The standard errors count the fixed-effect parameters, net of the redundant
 # ones. fe_dof="exact" (the default) finds those from the connected components:
@@ -180,3 +192,36 @@ try:
                  workdir=workdir("crv3"), vcov={"CRV3": "worker_id"}, verbose=False)
 except ValueError as err:
     print(f"worker and firm effects clustered by worker: {str(err).split('.')[0]}.")
+
+# ------------------------------------------------- tests and confidence intervals
+# From the stored coefficients and vcov (the current one: switch with
+# with_vcov). wald_test tests R beta = q; keep= selects coefficients to test
+# jointly against zero. confint(joint=True) covers all of them at once.
+print(f"\n{'=' * 72}\ntests and confidence intervals (clustered by worker)\n{'=' * 72}")
+wald = clustered.wald_test(keep="age")
+print(f"age_squared = age_cubed = 0: F = {wald['statistic']:.1f} "
+      f"on ({wald['df1']}, {wald['df2']:,}) df, p = {wald['pvalue']:.2g}")
+print(clustered.confint(joint=True, seed=0))
+
+# Bonferroni and Holm corrections for one coefficient tested in several models
+models = feols_stream("log_earn ~ x2 + csw0(age_squared, age_cubed) | worker_id + firm_id",
+                      data, workdir=workdir("multcomp"), vcov={"CRV1": "worker_id"},
+                      verbose=False)
+print(holm(models, "x2").select("fml", "Pr(>|t|)", "Holm Pr(>|t|)"))
+
+# ------------------------------------------------------ wild cluster bootstrap
+# With 12 states, CRV1 by state is unreliable; the wild cluster bootstrap is
+# the usual remedy. bootcluster= keeps the per-cluster sums it needs during the
+# fit. Every fixed effect must be nested within the clusters: firms are (each
+# is in one state), years are not, so they go in as covariates, which leaves
+# the other coefficients as they would be with year effects.
+by_state = feols_stream("log_earn + y2 ~ x2 + age_squared + i(year) | firm_id", data,
+                        workdir=workdir("wildboot"), vcov={"CRV1": "state"},
+                        bootcluster="state", verbose=False)
+earnings = by_state.fetch_model(0)
+boot = earnings.wildboottest("age_squared", reps=9999, seed=0)
+print(f"\n{'=' * 72}\nwild cluster bootstrap, 12 states\n{'=' * 72}")
+print(f"age_squared: t = {boot['t value']:.2f}, CRV1 p = {earnings.tidy()['Pr(>|t|)'][1]:.4f}, "
+      f"bootstrap p = {boot['Pr(>|t|)']:.4f}")
+# Romano-Wolf: x2 in both models, on the same draws
+print(rwolf(by_state, "x2", reps=9999, seed=0).select("fml", "Pr(>|t|)", "RW Pr(>|t|)"))

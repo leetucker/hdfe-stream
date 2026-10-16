@@ -8,6 +8,18 @@
 .. autofunction:: etable
 ```
 
+## Multiple testing
+
+```{eval-rst}
+.. autofunction:: bonferroni
+
+.. autofunction:: holm
+
+.. autofunction:: rwolf
+
+.. autofunction:: wyoung
+```
+
 ## Run directories
 
 ```{eval-rst}

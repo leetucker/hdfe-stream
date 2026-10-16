@@ -11,11 +11,15 @@
    .. automethod:: summary_dict
    .. automethod:: summary_json
    .. automethod:: tidy
+   .. automethod:: confint
+   .. automethod:: wald_test
+   .. automethod:: wildboottest
    .. automethod:: coef
    .. automethod:: with_vcov
    .. automethod:: fixef
    .. automethod:: resid
    .. automethod:: sample
+   .. automethod:: predict
    .. automethod:: to_pyfixest
    .. automethod:: leave_out_kss
    .. automethod:: cleanup

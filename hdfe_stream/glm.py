@@ -250,6 +250,9 @@ class StreamingGLM(StreamingHDFE):
     def _fit_passes(self, source, keys, extra, default, fe_dof, t0):
         if any(k.startswith("CRV3:") for k in keys):
             raise ValueError("CRV3 standard errors are not available for GLMs; use CRV1")
+        if getattr(self, "boot_req", None):
+            raise ValueError("the wild cluster bootstrap (bootcluster=) is for linear "
+                             "models; it is not available for GLMs, as in pyfixest")
         self._run_passes(source, keys, extra)
         nested = {t: self._nested_dims(t) for t in self.clusters}
         ctx = {"k_fe": self._k_fe(fe_dof), "fe_dof": fe_dof, "nested": nested, "default": default, "t0": t0}

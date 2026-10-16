@@ -105,6 +105,8 @@ feterms.py         'worker_id[t]' / 'firm_id^year' parsing
 connected.py       `connected_components`: components of a pair of FE
                    dimensions, the largest connected set (also `connected=`)
 results.py         `HDFEResult`, `HDFEMulti`
+multcomp.py        `bonferroni`, `holm`, `rwolf`, `wyoung`: multiple-testing corrections
+wildboot.py        the wild cluster bootstrap, from per-cluster sums (`bootcluster=`)
 workspace.py       run directories, `cleanup()`
 report.py          logging / printing
 utils.py           small shared helpers
@@ -117,6 +119,7 @@ from .glm import StreamingGLM
 from .leaveout_se import ComponentSE
 from .leaveout_weakid import WeakIdDiagnostics
 from .leaveout import leave_out_kss
+from .multcomp import bonferroni, holm, rwolf, wyoung
 from .reporting import etable
 from .results import HDFEMulti, HDFEResult
 from .workspace import cleanup
@@ -130,6 +133,10 @@ __all__ = [
     "HDFEResult",
     "HDFEMulti",
     "etable",
+    "bonferroni",
+    "holm",
+    "rwolf",
+    "wyoung",
     "leave_out_kss",
     "ComponentSE",
     "WeakIdDiagnostics",
@@ -143,7 +150,7 @@ def _detect_version():
         from importlib.metadata import version
         return version("hdfe-stream")
     except Exception:                 # source tree without an installed dist
-        return "0.3.0"
+        return "0.4.0"
 
 
 __version__ = _detect_version()

@@ -182,6 +182,11 @@ class HDFEResult:
     _run: object = field(default=None, repr=False, compare=False)
     _estimator: object = field(default=None, repr=False, compare=False)
     _sample: dict | None = field(default=None, repr=False, compare=False)
+    # bootcluster=: the per-cluster sums for the wild cluster bootstrap
+    # (`wildboottest`): "AG" (G x k x k, sum w h h'), "sG" (G x k, sum w e h),
+    # "levels" (the clusters' values, one row each), "cluster", "cols", "adj"
+    # (the CRV1 small-sample factor) and "df" (G - 1)
+    _boot: dict | None = field(default=None, repr=False, compare=False)
 
     @property
     def se(self) -> np.ndarray:
@@ -206,6 +211,195 @@ class HDFEResult:
             "Pr(>|t|)": p,
         }, schema_overrides={"Coefficient": pl.Utf8})
 
+    def confint(self, alpha: float = 0.05, keep: str | list | None = None,
+                drop: str | list | None = None, exact_match: bool = False,
+                joint: bool = False, reps: int = 10_000,
+                seed: int | None = None) -> pl.DataFrame:
+        """Confidence intervals, one coefficient at a time or simultaneous.
+
+        Pointwise intervals use the t distribution with `df_t` degrees of
+        freedom, or the normal for GLMs, as `tidy` does. With ``joint=True``,
+        the intervals cover all the selected coefficients at once with
+        probability 1 - alpha: the critical value is the 1 - alpha quantile of
+        the largest absolute t statistic, simulated from the normal with the
+        coefficients' correlation (the multiplier bootstrap of pyfixest's
+        ``confint(joint=True)``; Chernozhukov et al., *Applied Causal
+        Inference Powered by ML and AI*, remark 4.4.1).
+
+        Parameters
+        ----------
+        alpha : float, default 0.05
+            One minus the coverage.
+        keep, drop : str or list of str, optional
+            Regular expressions selecting coefficients by name, as in
+            pyfixest: those matching a `keep` pattern, in the order of the
+            patterns (all, by default), less those matching a `drop`
+            pattern. A joint interval covers exactly these.
+        exact_match : bool, default False
+            Match names exactly instead of as regular expressions.
+        joint : bool, default False
+            Simultaneous intervals.
+        reps : int, default 10000
+            Draws for the joint critical value.
+        seed : int, optional
+            Seed for those draws.
+
+        Returns
+        -------
+        polars.DataFrame
+            ``Coefficient`` and the lower and upper bounds, in columns named
+            by their percentiles (``"2.5%"``, ``"97.5%"``).
+        """
+        idx = _select_coefs(self.coefnames, keep, drop, exact_match)
+        se = self.se[idx]
+        if not joint:
+            crit = (special.ndtri(1 - alpha / 2) if self.family
+                    else special.stdtrit(self.df_t, 1 - alpha / 2))
+        else:
+            corr = self.vcov[np.ix_(idx, idx)] / np.outer(se, se)
+            vals, vecs = np.linalg.eigh(corr)
+            root = (vecs * np.sqrt(np.clip(vals, 0, None))) @ vecs.T
+            draws = root @ np.random.default_rng(seed).normal(size=(len(idx), reps))
+            crit = float(np.quantile(np.abs(draws).max(axis=0), 1 - alpha))
+        beta = self.beta[idx]
+        return pl.DataFrame({
+            "Coefficient": [self.coefnames[i] for i in idx],
+            f"{alpha / 2 * 100:.1f}%": beta - crit * se,
+            f"{(1 - alpha / 2) * 100:.1f}%": beta + crit * se,
+        }, schema_overrides={"Coefficient": pl.Utf8})
+
+    def wald_test(self, R: Any = None, q: Any = None, distribution: str | None = None,
+                  keep: str | list | None = None, drop: str | list | None = None,
+                  exact_match: bool = False) -> dict:
+        """Wald test of the linear hypothesis R beta = q, under the current
+        vcov (see `with_vcov`).
+
+        By default the hypothesis is that every coefficient is zero; `keep`
+        and `drop` narrow it to some of them (the coefficients of an event
+        study's leads, say), and `R` and `q` state any other.
+
+        The statistic is W = (R b - q)' (R V R')^+ (R b - q), and F = W / m for
+        m restrictions. F is referred to the F distribution with m and `df_t`
+        degrees of freedom, so that for one coefficient the p-value is the
+        one `tidy` reports; W, to the chi-squared with m. Two differences from
+        pyfixest's `wald_test`: it reports chi-squared whenever R is not the
+        identity or q is not zero, where this test reports what is asked for;
+        and its F's denominator degrees of freedom, without clustering,
+        subtract every fixed-effect level, including the redundant ones that
+        `df_t` does not.
+
+        Parameters
+        ----------
+        R : array-like, optional
+            m x k, one row per restriction, one column per coefficient in the
+            order of `coefnames`; a 1-d array is one restriction.
+        q : float or array-like, optional
+            The m right-hand sides; zero by default.
+        distribution : {"F", "chi2"}, optional
+            Default "F" for OLS and "chi2" for GLMs, whose `tidy` p-values are
+            normal.
+        keep, drop, exact_match
+            Without `R`: test that the coefficients they select are zero (or
+            `q`), as in `confint`.
+
+        Returns
+        -------
+        dict
+            ``statistic`` (F or W), ``pvalue``, ``df1`` (m), ``df2`` (`df_t`
+            for F, None for chi-squared) and ``distribution``.
+        """
+        k = len(self.beta)
+        if R is None:
+            idx = _select_coefs(self.coefnames, keep, drop, exact_match)
+            R = np.eye(k)[idx]
+        else:
+            if keep is not None or drop is not None:
+                raise ValueError("pass either R or keep/drop, not both")
+            R = np.atleast_2d(np.asarray(R, dtype=float))
+            if R.ndim != 2 or R.shape[1] != k:
+                raise ValueError(f"R must have {k} columns, one per coefficient "
+                                 f"({self.coefnames}); got shape {np.shape(R)}")
+        m = R.shape[0]
+        q = np.zeros(m) if q is None else np.asarray(q, dtype=float)
+        if q.ndim == 0:
+            q = np.full(m, float(q))
+        if q.shape != (m,):
+            raise ValueError(f"q must be a scalar or have {m} elements, one per row of R")
+        distribution = distribution or ("chi2" if self.family else "F")
+        d = R @ self.beta - q
+        W = float(d @ np.linalg.pinv(R @ self.vcov @ R.T) @ d)
+        if distribution == "F":
+            F = W / m
+            return {"statistic": F, "pvalue": float(special.fdtrc(m, self.df_t, F)),
+                    "df1": m, "df2": self.df_t, "distribution": "F"}
+        if distribution == "chi2":
+            return {"statistic": W, "pvalue": float(special.chdtrc(m, W)),
+                    "df1": m, "df2": None, "distribution": "chi2"}
+        raise ValueError(f"distribution must be 'F' or 'chi2', got {distribution!r}")
+
+    def wildboottest(self, param: str, reps: int = 9999,
+                     weights_type: str = "rademacher", impose_null: bool = True,
+                     seed: int | None = None) -> dict:
+        """Wild cluster bootstrap test of ``param = 0``.
+
+        Needs the fit made with ``bootcluster=`` (see `StreamingHDFE.fit`);
+        the bootstrap clusters by that variable, works from the per-cluster
+        sums the fit kept, and reads no data. A test costs about reps x G x k
+        operations, for G clusters and k coefficients: well under a second
+        with 50 clusters.
+
+        The bootstrap is the restricted wild cluster bootstrap (WCR, the
+        "11" variant of pyfixest and fwildclusterboot), or the unrestricted
+        one with ``impose_null=False``. Its draws are those of pyfixest's
+        `wildboottest` with the same seed and weights, so the p-values agree
+        with pyfixest's up to rounding, where pyfixest can fit the model
+        (it puts the fixed effects in as dummy variables). With Rademacher
+        weights and 2^G < reps, every sign pattern is used once instead, as
+        in pyfixest.
+
+        A draw that gives every cluster the same weight reproduces the sample
+        (up to scale), and so the t statistic exactly. With few clusters and
+        two-point weights such draws are common (with 12 clusters, about 2%
+        of Mammen draws), and they count as at least as extreme as the t
+        statistic: the conservative choice, and a deterministic one.
+        pyfixest's comparison counts or skips them depending on rounding.
+
+        Parameters
+        ----------
+        param : str
+            The coefficient tested.
+        reps : int, default 9999
+            Bootstrap draws.
+        weights_type : {"rademacher", "mammen", "webb", "norm"}, default "rademacher"
+            The distribution of the cluster weights.
+        impose_null : bool, default True
+            Impose the null hypothesis on the bootstrap data-generating
+            process (WCR), or not (WCU).
+        seed : int, optional
+            Seed for the draws.
+
+        Returns
+        -------
+        dict
+            ``param``; ``t value``, the t statistic under CRV1 by the bootstrap
+            clustering (the one `tidy` reports under that vcov);
+            ``Pr(>|t|)``, the bootstrap p-value, the share of draws whose
+            absolute t statistic is at least as large; ``reps``, the draws
+            used;
+            ``weights_type``, ``impose_null`` and ``cluster``.
+        """
+        from .wildboot import _bootstrap, _coef_index
+
+        if self._boot is None:
+            raise ValueError("wildboottest needs the per-cluster sums, which the fit keeps "
+                             "only when asked: refit with bootcluster='<cluster variable>'")
+        t, tstar, _ = _bootstrap([(self, _coef_index(self, param))], reps, weights_type,
+                                 impose_null, seed)
+        return {"param": param, "t value": float(t[0]),
+                "Pr(>|t|)": float(np.mean(_at_least(tstar[:, 0], t[0]))),
+                "reps": tstar.shape[0], "weights_type": weights_type,
+                "impose_null": impose_null, "cluster": self._boot["cluster"]}
+
     def with_vcov(self, vcov: Vcov) -> "HDFEResult":
         """A copy of this result with another of the vcovs computed at fit
         time: ``"iid"``, ``"hetero"``, or a clustering given as
@@ -226,7 +420,8 @@ class HDFEResult:
         """A pyfixest ``Feols`` (``Feiv`` for IV) view of this result, for
         ``pf.etable``, ``pf.summary``, ``pf.coefplot`` and ``pf.iplot``. Only
         the stored results are available; methods that need the data
-        (``predict``, recomputing the vcov, the wild bootstrap) are not."""
+        (recomputing the vcov, the wild bootstrap) are not, and ``predict``
+        is this result's own `predict`."""
         from .reporting import _to_pyfixest   # reporting imports this module
         return _to_pyfixest(self)
 
@@ -460,6 +655,110 @@ class HDFEResult:
                      .select(row_id, *source.collect_schema().names(), "in_sample",
                              "dropped_because"))
 
+    def predict(self, newdata: Any = None, type: str = "link",
+                name: str = "prediction") -> pl.LazyFrame:
+        """Predictions on new data, or on the source, as a lazy frame.
+
+        Returns `newdata`, lazily and in its own order, with one column added:
+        the linear predictor (each row's covariates times the coefficients,
+        plus its fixed effects and, for a GLM, its offset), or with
+        ``type="response"``, the mean. Nothing is computed until the frame is
+        collected or sunk, so `newdata` can be larger than memory. The fixed
+        effects come from the fit's files, which live as long as this result
+        (see `fixef`): collect or sink the predictions before dropping it.
+
+        A row gets a null prediction if any of its fixed-effect levels has no
+        estimated effect (a level the estimation sample does not contain:
+        new, or dropped, e.g. as a singleton), as pyfixest gives NaN, or if a
+        covariate is null.
+
+        The fixed effects are identified only within a connected set of the
+        first two dimensions (workers and firms, say), so a prediction that
+        combines levels from different components, such as a worker from one
+        and a firm from another, depends on the normalization and means
+        little. ``fixef(...)`` reports each level's ``component`` for the
+        first non-streamed dimension.
+
+        Parameters
+        ----------
+        newdata : DataFrame, LazyFrame, or Parquet path or glob, optional
+            The rows to predict for, with every column the model uses. A
+            categorical covariate's indicators are those of the fit, so a
+            level the fit did not see counts as the base level. Default: the
+            fit's own source, every row of it (the estimation sample's rows
+            then reproduce the fitted values in `resid`).
+        type : {"link", "response"}, default "link"
+            For a GLM, the linear predictor, or the mean (exp for Poisson, the
+            logistic or normal CDF for logit and probit). The same for OLS.
+        name : str, default "prediction"
+            The name of the added column.
+
+        Returns
+        -------
+        polars.LazyFrame
+        """
+        from .utils import _as_lazy
+
+        if type not in ("link", "response"):
+            raise ValueError(f"type must be 'link' or 'response', got {type!r}")
+        est = self._estimator
+        if est is None:
+            raise ValueError("this result has no estimator attached (it was converted), "
+                             "so it cannot predict")
+        if newdata is None:
+            if self._sample is None:
+                raise ValueError("this result holds no reference to its source; pass "
+                                 "newdata")
+            frame = self._sample["source"]
+        else:
+            frame = _as_lazy(newdata)
+        schema = frame.collect_schema()
+        check_source(schema.names())
+        if name in schema:
+            raise ValueError(f"newdata already has a column named {name!r}; pass "
+                             "another name=")
+
+        terms = [b * est.var_exprs[c] for c, b in zip(self.coefnames, self.beta)]
+        offset = getattr(est, "offset_name", None)
+        if offset is not None:
+            terms.append(est.var_exprs["__offset__"])
+        tmp, keys_tmp = [], []
+        for i, d in enumerate(self.fe_names):
+            keys = est.fe_cols[d]
+            table = self.fixef(d)
+            tschema = table.collect_schema()
+            tkeys = [f"{PREFIX}key{i}_{j}" for j in range(len(keys))]
+            eff = f"{PREFIX}fe{i}"
+            slopes = [(f"{PREFIX}fe{i}_{j}", v) for j, v in enumerate(
+                est.slope_vars if d in est.slopes else [])]
+            table = table.select(*[pl.col(k).alias(t) for k, t in zip(keys, tkeys)],
+                                 pl.col(f"fe_{d}").alias(eff),
+                                 *[pl.col(f"fe_{d}[{v}]").alias(s) for s, v in slopes])
+            frame = frame.with_columns(pl.col(k).cast(tschema[k], strict=False).alias(t)
+                                       for k, t in zip(keys, tkeys))
+            frame = frame.join(table, on=tkeys, how="left", maintain_order="left")
+            terms.append(pl.col(eff))
+            terms += [pl.col(s) * pl.col(v).cast(pl.Float64) for s, v in slopes]
+            tmp += [eff, *(s for s, _ in slopes)]
+            keys_tmp += tkeys
+
+        needed = {r for t in terms for r in t.meta.root_names() if not r.startswith(PREFIX)}
+        missing = sorted(needed - set(schema.names()))
+        if missing:
+            raise ValueError(f"newdata lacks columns the model uses: {missing}")
+        pred = pl.sum_horizontal(terms) if terms else pl.lit(0.0)
+        # sum_horizontal skips nulls; a null term (a level without an effect,
+        # a null covariate) must make the prediction null
+        if terms:
+            pred = pl.when(pl.any_horizontal(t.is_null() for t in terms)).then(None) \
+                     .otherwise(pred)
+        if type == "response" and self.family:
+            mu = est.family.mu          # the fit's own inverse link, on numpy
+            pred = pl.when(pred.is_null()).then(None).otherwise(pred.map_batches(
+                lambda s: pl.Series(mu(s.to_numpy())), return_dtype=pl.Float64,
+                is_elementwise=True))
+        return frame.with_columns(pred.cast(pl.Float64).alias(name)).drop(tmp + keys_tmp)
+
     @property
     def files_dir(self) -> Path | None:
         """Directory holding this model's result files."""
@@ -672,6 +971,34 @@ class HDFEMulti:
 
     def __iter__(self):
         return iter(self.all_fitted_models.values())
+
+
+def _at_least(tstar, t):
+    """Bootstrap draws at least as extreme as t: |t*| >= |t|, with a draw that
+    reproduces t (to rounding) counted as a tie, and so as at least as
+    extreme, rather than left to the last bit of floating point."""
+    return np.abs(tstar) >= np.abs(t) * (1 - 1e-9)
+
+
+def _select_coefs(names, keep, drop, exact_match):
+    """Indices of the coefficients `keep` and `drop` select, in pyfixest's
+    way: those matching a keep pattern, in the order of the patterns (all,
+    without any), less those matching a drop pattern."""
+    import re
+
+    def matches(pattern, name):
+        return name == pattern if exact_match else re.search(pattern, name) is not None
+
+    keep = [keep] if isinstance(keep, str) else list(keep or [])
+    drop = [drop] if isinstance(drop, str) else list(drop or [])
+    order = ([i for p in keep for i, nm in enumerate(names) if matches(p, nm)]
+             if keep else list(range(len(names))))
+    idx = [i for i in dict.fromkeys(order)
+           if not any(matches(p, names[i]) for p in drop)]
+    if not idx:
+        raise ValueError(f"no coefficient matches keep={keep} and drop={drop}; the "
+                         f"coefficients are {names}")
+    return idx
 
 
 def _canon_cluster(var):

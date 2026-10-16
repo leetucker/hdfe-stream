@@ -226,5 +226,8 @@ prototypes/.xhdfe-venv/
 # hdfe_stream: package-run logs
 logs/
 
+# hdfe_stream: EC2 benchmark tooling, kept out of the public repository
+benchmarks/ec2/
+
 # technical report, drafted outside the public repository
 report/

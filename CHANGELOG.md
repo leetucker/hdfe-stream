@@ -1,6 +1,41 @@
 # Changelog
 
-## 0.3.1 (unreleased)
+## 0.4.0
+
+New features.
+
+- **`HDFEResult.predict()`** predicts on new data (a DataFrame, a LazyFrame, or
+  a Parquet path or glob) or on the fit's source, lazily, so the data can be
+  larger than memory. It returns the data with a prediction column: the linear
+  predictor, or with `type="response"` a GLM's mean. Rows with a fixed-effect
+  level the fit did not estimate get null. It supports `i()` covariates,
+  interacted fixed effects, varying slopes, and IV models.
+- **`HDFEResult.confint()`**: confidence intervals, pointwise or, with
+  `joint=True`, simultaneous over the selected coefficients, as pyfixest's.
+- **`HDFEResult.wald_test()`**: Wald tests of R beta = q, or that the
+  coefficients selected by `keep`/`drop` are zero, under the current vcov, with
+  F or chi-squared p-values. F is reported by default for any OLS hypothesis
+  (chi-squared for GLMs), with `df_t` denominator degrees of freedom, so a
+  one-coefficient test has `tidy()`'s p-value.
+- **`bonferroni()` and `holm()`**: multiple-testing corrections of one or
+  more coefficients' p-values across models (results, `HDFEMulti`, or lists
+  of them). Holm's step-down adjustment controls the familywise error rate as
+  Bonferroni's does, and never rejects less often.
+- **The wild cluster bootstrap: `bootcluster=`, `HDFEResult.wildboottest()`,
+  `rwolf()` and `wyoung()`.** With `bootcluster=`, the fit keeps, for each
+  cluster, the sums the bootstrap needs (about G x k^2 numbers, collected in the
+  residual pass it makes anyway; nothing without the option). After the fit,
+  `wildboottest()` runs the restricted or unrestricted wild cluster bootstrap of
+  any coefficient from those sums, without reading the data, and `rwolf()` and
+  `wyoung()` give Romano-Wolf and Westfall-Young adjusted p-values across models
+  on the same draws. One-way, OLS only, and every fixed effect must be nested
+  within the clusters (a fixed effect with few levels, such as year, can go in
+  as covariates instead).
+
+Fixes.
+
+- `cluster="firm_id"`, a single string, was read as a list of characters; it
+  now means one clustering, as documented.
 
 Performance.
 

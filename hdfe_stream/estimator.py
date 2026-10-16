@@ -553,6 +553,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         # so that a CRV3 request that cannot be met fails early
         nested = {t: self._nested_dims(t) for t in self.clusters}
         self._check_crv3(nested)
+        self._check_boot(nested)
 
         self._log(f"step 2: solving for {self.m} variables "
                            f"(blocks of {self.rhs_block}), solver={self.solver}")
@@ -592,7 +593,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
 
     # --------------------------------------------------------------- driver
     def fit(self, source: Source, vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
-            fe_dof: str = "exact") -> HDFEResult | HDFEMulti:
+            fe_dof: str = "exact", bootcluster: str | None = None) -> HDFEResult | HDFEMulti:
         """Fit the model(s) to the data.
 
         Parameters
@@ -619,6 +620,17 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
             are) that does not depend on their order. For CRV1, a pair of
             fixed effects both nested in the clusters is not used.
             ``"pyfixest"`` counts one per dimension beyond the first.
+        bootcluster : str, optional
+            A clustering (one column, or ``"a^b"``) to keep the per-cluster
+            sums for that `HDFEResult.wildboottest`, `hdfe_stream.rwolf` and
+            `hdfe_stream.wyoung` need: about G x k^2 numbers per model, for G
+            clusters and k coefficients, collected in the residual pass that
+            the fit makes anyway. CRV1 by it is computed too. OLS only (not
+            IV), and every fixed effect must be nested within the clusters,
+            as for CRV3: firm effects clustered by state are, if no firm is
+            in two states; year effects never are, so put them in as
+            covariates instead (``"y ~ treat + i(year) | county"`` estimates
+            the same ``treat`` as ``"y ~ treat | county + year"``).
 
         Returns
         -------
@@ -628,7 +640,14 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         t0 = time.time()
         default = _vcov_key(vcov)
         keys = list(dict.fromkeys(["iid", "hetero", default]))
-        extra = [_canon_cluster(c) for c in cluster]
+        extra = [_canon_cluster(c) for c in ([cluster] if isinstance(cluster, str) else cluster)]
+        self.boot_req = None
+        if bootcluster is not None:
+            self.boot_req = _canon_cluster(bootcluster)
+            if "+" in self.boot_req:
+                raise ValueError(f"bootcluster={bootcluster!r}: the wild cluster bootstrap "
+                                 "is one-way; give one column or an 'a^b' combination")
+            extra = list(dict.fromkeys(extra + [self.boot_req]))
         self.cluster_cols = list(dict.fromkeys(
             c for req in [k.split(":", 1)[1] for k in keys if k.startswith(("CRV1:", "CRV3:"))]
             + extra

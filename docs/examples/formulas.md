@@ -141,6 +141,36 @@ does (not after a `group_by`, an unordered join or a random sample). For a model
 list, `multi.sample()` returns `{formula: frame}`; models fitted on the same
 fixed effects share one sample.
 
+## Predictions
+
+`fit.predict(newdata)` predicts for new rows: a DataFrame, a LazyFrame, or a
+Parquet path or glob, which can be larger than memory. It returns `newdata`,
+lazily and in its own order, with a `prediction` column added: the covariates
+times the coefficients plus the row's fixed effects, looked up by their levels.
+Without `newdata`, it predicts for every row of the fit's own source, and on the
+estimation sample that reproduces the fitted values.
+
+```python
+panel = pl.scan_parquet(data)
+fit = feols_stream("log_earn ~ age_squared + age_cubed | worker_id + firm_id",
+                   panel.filter(pl.col("year") < 2012), workdir="scratch")
+later = fit.predict(panel.filter(pl.col("year") >= 2012)).collect()
+later["prediction"].null_count()     # null for a worker or firm the fit never saw (0 here)
+```
+
+A row with a fixed-effect level that has no estimated effect, because the fit
+never saw it or dropped it (as a singleton, say), gets a null prediction, where
+pyfixest gives NaN. For Poisson, logit and probit, the prediction includes the
+offset, and `type="response"` gives the mean instead of the linear predictor.
+Unlike pyfixest's `predict`, this one works with `i()` covariates, interacted
+fixed effects (`firm_id^year`) and varying slopes. pyfixest's `se_fit` and
+prediction intervals are not available; pyfixest computes them only for models
+without fixed effects.
+
+The fixed effects are identified only within a connected set of workers and
+firms, so a prediction that pairs a worker from one connected set with a firm
+from another depends on how each set's effects were normalized.
+
 ## Degrees of freedom
 
 The standard errors count the fixed-effect parameters, net of the redundant
@@ -223,6 +253,83 @@ cluster, and the fit refuses; use CRV1, or pyfixest, which refits.
 nested = feols_stream("log_earn ~ age_squared + age_cubed | firm_id^year", data,
                       workdir="scratch", vcov={"CRV3": "firm_id"}, cluster=["firm_id"])
 ```
+
+## Tests and confidence intervals
+
+These work from the stored coefficients and the current vcov, so they cost
+nothing and follow `with_vcov()`.
+
+- **`confint(alpha=0.05)`** gives intervals from the t distribution with
+  `df_t` degrees of freedom (the normal for Poisson, logit and probit), as
+  `tidy()`'s p-values. With `joint=True`, they cover all the selected
+  coefficients at once, with a critical value simulated from the
+  coefficients' correlation, as pyfixest's `confint(joint=True)`.
+- **`wald_test(R, q)`** tests R β = q, and `wald_test(keep="age")` tests that
+  the coefficients whose names match are all zero. It reports F with `df_t`
+  denominator degrees of freedom (chi-squared for GLMs, or with
+  `distribution="chi2"`), so a test of one coefficient has `tidy()`'s
+  p-value.
+- **`bonferroni(models, param)`** and **`holm(models, param)`** adjust the
+  p-values of one coefficient (or several) across models, for the familywise
+  error rate. Holm's step-down adjustment is never larger than Bonferroni's.
+
+```python
+fit.wald_test(keep="age")                   # age_squared = age_cubed = 0
+fit.wald_test(R=[[1, -1]], q=0)             # age_squared = age_cubed
+fit.confint(joint=True, seed=0)
+models = feols_stream("log_earn ~ x2 + csw0(age_squared, age_cubed) | worker_id + firm_id",
+                      data, workdir="scratch", vcov={"CRV1": "worker_id"})
+holm(models, "x2")
+```
+
+Two differences from pyfixest's `wald_test`, both on purpose. pyfixest
+switches to chi-squared whenever R is not the identity or q is not zero, where
+this one reports the F asked for. And without clustering, pyfixest's F
+subtracts every fixed-effect level from its denominator degrees of freedom,
+including the redundant ones that its own t tests do not count; this one uses
+`df_t`, as the t tests do.
+
+### The wild cluster bootstrap
+
+With few clusters (a dozen states, say), CRV1 standard errors are unreliable,
+and the wild cluster bootstrap is the usual remedy. `bootcluster=` keeps what
+it needs during the fit: for each cluster, sums over its rows of the
+covariates' cross-products and their products with the residuals, net of the
+fixed effects. That is about G × k² numbers for G clusters and k
+coefficients, a few kilobytes for a dozen states, collected in the residual
+pass the fit makes anyway. A fit without `bootcluster=` does no extra work.
+After the fit, `wildboottest()` bootstraps any coefficient from those sums,
+without reading the data again, and `rwolf()` and `wyoung()` correct for
+testing it in several models, on the same draws:
+
+```python
+by_state = feols_stream("log_earn + y2 ~ x2 + age_squared + i(year) | firm_id", data,
+                        workdir="scratch", vcov={"CRV1": "state"}, bootcluster="state")
+by_state.fetch_model(0).wildboottest("age_squared", reps=9999, seed=0)
+rwolf(by_state, "x2", reps=9999, seed=0)       # Romano-Wolf
+wyoung(by_state, "x2", reps=9999, seed=0)      # Westfall-Young
+```
+
+The bootstrap is exact only when every fixed effect is nested within the
+clusters: a draw multiplies each cluster's residuals by one weight, and a
+fixed effect whose levels span clusters would then have to be re-estimated for
+every draw. Firms are nested within states if no firm is in two of them; years
+never are. A fixed effect with few levels, such as year, can go in as
+covariates instead, as above: `i(year)` in the formula, rather than `+ year`
+after the bar, gives the same estimates of the other coefficients. A fit whose
+fixed effects are not nested in `bootcluster` stops with an error that says
+so. The bootstrap is also one-way, and for OLS only, not IV or GLMs.
+
+It is the restricted wild cluster bootstrap (WCR, or with `impose_null=False`
+the unrestricted one) with Rademacher, Mammen, Webb or normal weights, as in
+pyfixest. With the same seed it uses the same draws as pyfixest's
+`wildboottest`, `rwolf` and `wyoung`, so it gives the same p-values where
+pyfixest can fit the model, which puts the fixed effects in as dummy
+variables. A draw that gives every cluster the same weight reproduces the
+sample, and so the t statistic exactly. Such draws count as at least as
+extreme, where pyfixest's comparison leaves them to rounding; with few
+clusters and two-point weights they are common (about 2% of Mammen draws with
+12 clusters).
 
 :::{dropdown} The full script: `examples/formulas.py`
 ```{literalinclude} ../../examples/formulas.py

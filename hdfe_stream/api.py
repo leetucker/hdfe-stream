@@ -19,7 +19,8 @@ from .utils import _as_lazy
 
 def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,
                  vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
-                 fe_dof: str = "exact", **options: Any) -> HDFEResult | HDFEMulti:
+                 fe_dof: str = "exact", bootcluster: str | None = None,
+                 **options: Any) -> HDFEResult | HDFEMulti:
     """Out-of-core OLS with high-dimensional fixed effects, from a
     pyfixest-style formula.
 
@@ -54,6 +55,12 @@ def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,
     fe_dof : {"exact", "pyfixest"}, default "exact"
         How the fixed-effect parameters are counted for the degrees of
         freedom; see `StreamingHDFE.fit`.
+    bootcluster : str, optional
+        A clustering to keep the per-cluster sums for, so that
+        `HDFEResult.wildboottest`, `hdfe_stream.rwolf` and
+        `hdfe_stream.wyoung` can bootstrap it after the fit. One-way, OLS,
+        and every fixed effect nested within the clusters; see
+        `StreamingHDFE.fit`.
     **options
         Passed to `StreamingHDFE`: ``fixef_rm``, ``connected``,
         ``min_degree``, ``connected_fe``, ``stream``, ``weights``,
@@ -94,10 +101,11 @@ def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,
     def estimators(fe, g):
         yield StreamingHDFE(y=list(g["y"].items()), x=list(g["x"].items()), fe=list(fe),
                             workdir=workdir, models=g["models"], **options)
-    return _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options)
+    return _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options,
+                        bootcluster)
 
 
-def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options):
+def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options, bootcluster=None):
     """Plan the formula, fit each estimator that `estimators(fe, group)`
     makes for each set of fixed effects, and return the results in the
     formula's order."""
@@ -109,7 +117,8 @@ def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options):
     try:
         for fe, g in groups.items():
             for est in estimators(fe, g):
-                res = est.fit(lf, vcov=vcov, cluster=cluster, fe_dof=fe_dof)
+                res = est.fit(lf, vcov=vcov, cluster=cluster, fe_dof=fe_dof,
+                              bootcluster=bootcluster)
                 results += list(res) if isinstance(res, HDFEMulti) else [res]
     except BaseException:
         # a later fit failed: don't leave the earlier fits' files behind

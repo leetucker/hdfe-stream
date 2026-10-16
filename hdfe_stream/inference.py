@@ -241,6 +241,53 @@ class _InferenceMixin:
                     "per cluster. pyfixest supports CRV3 in this case, by refitting "
                     "the model for each cluster, if the data fit in memory.")
 
+    def _cluster_levels(self, term, paths):
+        """The level values of a cluster term, one row per cluster code, in
+        code order."""
+        spec = self.clusters[term]
+        if spec["kind"] == "seg":
+            # the fe[0] file has one row per group, in group-code order
+            return pl.read_parquet(paths["fe"][self.g_fe], columns=self.fe_cols[self.g_fe])
+        if spec["kind"] == "fe":
+            path, code = self.paths["maps"][spec["dim"]], spec["code"]
+        else:
+            path, code = self.cmaps[spec["map"]]["map"], self.cmaps[spec["map"]]["code"]
+        return pl.read_parquet(path).sort(code).select(spec["cols"])
+
+    def _check_boot(self, nested):
+        """Refuse a bootstrap clustering (`bootcluster=`) the wild cluster
+        bootstrap cannot be exact for: IV, clusters within the streamed
+        dimension's groups, and fixed effects not nested within the clusters.
+
+        The bootstrap works on the data with the fixed effects removed. A
+        draw multiplies each cluster's residuals by one weight, which leaves
+        them orthogonal to a fixed effect whose levels each lie within one
+        cluster, but not to one that spans clusters: the exact bootstrap
+        would then re-estimate the fixed effects for every draw.
+        """
+        req = getattr(self, "boot_req", None)
+        if req is None:
+            return
+        if any(model.get("iv") for model in self.models):
+            raise ValueError("the wild cluster bootstrap (bootcluster=) is not available "
+                             "for IV (2SLS) models, as in pyfixest")
+        (term, _, _), = self.cluster_reqs[req]
+        if self.clusters[term]["kind"] == "segsub":
+            raise ValueError(f"bootcluster={req!r}: clusters finer than the "
+                             f"{self.g_fe!r} groups cannot have the fixed effects nested "
+                             "within them")
+        loose = [d for d in self.fe if d not in nested[term]]
+        if loose:
+            raise ValueError(
+                f"the wild cluster bootstrap needs every fixed effect to be nested "
+                f"within the clusters, and {', '.join(map(repr, loose))} "
+                f"{'is' if len(loose) == 1 else 'are'} not nested within {req!r}: "
+                "its levels span clusters, so each draw would have to re-estimate "
+                "the fixed effects. A fixed effect with few levels, such as year, can "
+                "go in as covariates instead, with the same estimates of the other "
+                "coefficients: 'y ~ treat + i(year) | county' rather than "
+                "'y ~ treat | county + year'.")
+
     def _redundant_slopes(self):
         """Slope variables that are a function of another FE dimension (e.g.
         worker trends in `year` alongside year effects). The worker slopes on
@@ -379,6 +426,24 @@ class _InferenceMixin:
                         "or fewer covariates")
                 crv3[t] = {"AG": np.zeros((spec["G"], k, k)), "sG": np.zeros((spec["G"], k))}
         bread_c = np.ascontiguousarray(bread, dtype=np.float64)
+        # bootcluster=: per-cluster sum w h h' and w e h, and the rows per
+        # cluster, for the wild cluster bootstrap (checked already: OLS, all
+        # fixed effects nested); shared with CRV3 when it sums the same term
+        boot = None
+        if getattr(self, "boot_req", None) and k:
+            (t, _, _), = self.cluster_reqs[self.boot_req]
+            spec = self.clusters[t]
+            if t in crv3 and "AG" in crv3[t]:
+                boot = {"term": t, "AG": crv3[t]["AG"], "sG": crv3[t]["sG"], "shared": True}
+            else:
+                need = spec["G"] * k * (k + 1) * 8 / 1e9
+                if need > 0.25 * _phys_mem_gb():
+                    raise MemoryError(
+                        f"bootcluster={self.boot_req!r} needs {need:.1f} GB for per-cluster "
+                        f"sums ({spec['G']:,} clusters x {k} covariates squared)")
+                boot = {"term": t, "AG": np.zeros((spec["G"], k, k)),
+                        "sG": np.zeros((spec["G"], k)), "shared": False}
+            boot["n"] = np.zeros(spec["G"], np.int64)
         # OLS: the instruments are the regressors (Pi = I), so they share one
         # array and the scores are the residualized regressors themselves
         ols = list(zk) == list(xk)
@@ -451,6 +516,11 @@ class _InferenceMixin:
                 else:
                     _nb_crv3_scatter(ch[self.clusters[t]["code"]].astype(np.int64), w, e, h,
                                      c3["AG"], c3["sG"])
+            if boot is not None:
+                bc = ch[self.clusters[boot["term"]]["code"]].astype(np.int64)
+                if not boot["shared"]:
+                    _nb_crv3_scatter(bc, w, e, h, boot["AG"], boot["sG"])
+                boot["n"] += np.bincount(bc, minlength=len(boot["n"]))
             if scores or subs:
                 he = np.multiply(h, (w * e)[:, None], out=buf)    # scores w e h
             del h
@@ -528,7 +598,7 @@ class _InferenceMixin:
                 c3["acc"] = np.zeros((nt, k, k))
                 _nb_crv3_finish(bread_c, c3["AG"], c3["sG"], c3["acc"])
             jack[t] = c3["acc"].sum(axis=0)
-        return rss, tss_w, ssy, acc_B, acc_hc, meat, jack, paths
+        return rss, tss_w, ssy, acc_B, acc_hc, meat, jack, paths, boot
 
     # ------------------------------------------------------------ estimation
     def _estimate(self, tag, model, A, gamma, ctx):
@@ -576,7 +646,7 @@ class _InferenceMixin:
         rss_asm = A[yj, yj] - 2 * beta @ Axy + beta @ A[np.ix_(xk, xk)] @ beta if k else A[yj, yj]
 
         self._log(f"pass 2: {fml}")
-        rss, tss_w, ssy, B, meat_hc, meat, jack, paths = self._pass2(
+        rss, tss_w, ssy, B, meat_hc, meat, jack, paths, boot = self._pass2(
             tag, yname, gamma, yj, xk, beta, zk, Pi, bread_asm)
         N, k_fe, nested = self.N, ctx["k_fe"], ctx["nested"]
         # Small-sample factors follow pyfixest's ssc defaults: iid
@@ -592,7 +662,7 @@ class _InferenceMixin:
         # not an error (a fit made only for its effects can be saturated)
         vc = {"iid": (self._iid_factor(rss, N, K) * Binv, N - K),
               "hetero": (_ratio(N, N - K) * Binv @ meat_hc @ Binv, N - K)}
-        n_clusters = {}
+        n_clusters, adjs = {}, {}
         for req, terms in self.cluster_reqs.items():
             Gs = [self.clusters[t]["G"] for t, _, single in terms if single]
             Gm = min(Gs)
@@ -607,7 +677,22 @@ class _InferenceMixin:
                 (t, _, _), = terms
                 vc[f"CRV3:{req}"] = (adj * jack[t] if k else np.zeros((0, 0)), Gm - 1)
             n_clusters[req] = Gs
+            adjs[req] = adj
         V, dft = vc[ctx["default"]]
+        boot_data = None
+        if boot is not None:
+            # the clusters with rows, with their level values, so that draws
+            # can be keyed to the clusters themselves (see HDFEResult._boot)
+            spec = self.clusters[boot["term"]]
+            levels = self._cluster_levels(boot["term"], paths)
+            if levels.height != len(boot["n"]):
+                raise RuntimeError(f"{levels.height} cluster levels for {len(boot['n'])} "
+                                   "clusters")
+            present = boot["n"] > 0
+            boot_data = {"cluster": self.boot_req, "cols": list(spec["cols"]),
+                         "levels": levels.filter(pl.Series(present)),
+                         "AG": boot["AG"][present].copy(), "sG": boot["sG"][present].copy(),
+                         "adj": adjs[self.boot_req], "df": min(n_clusters[self.boot_req]) - 1}
         if np.any(np.diag(V) < 0):
             _warn(f"{fml}: the {ctx['default']} vcov has negative variances "
                   "(possible with multi-way clustering)", self.logger)
@@ -656,4 +741,4 @@ class _InferenceMixin:
             f_stat_1st_stage=f_stats,
             n_clusters=n_clusters,
             weights=self.weights_name, weights_type=self.weights_type, _run=self._run,
-            _estimator=self, _sample=self._sample_spec)
+            _estimator=self, _sample=self._sample_spec, _boot=boot_data)
