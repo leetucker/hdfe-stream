@@ -197,34 +197,86 @@ def pf_ok():
     pytest.importorskip("wildboottest")
 
 
+# pyfixest compares |t| < |t*| as computed, so a draw that reproduces t
+# exactly (every cluster with the same weight) counts or not depending on how
+# the last bit rounds, which differs between platforms (e.g. Windows builds
+# of numpy). The checks below therefore take pyfixest's bootstrap t statistics
+# and apply this package's tie rule to them, rather than comparing with its
+# p-values directly.
+
+def _pf_boot(ref, reps, seed, **kwargs):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        out, tboot = ref.wildboottest(param="x", reps=reps, seed=seed,
+                                      return_bootstrapped_t_stats=True, **kwargs)
+    return float(out["t value"]), np.asarray(tboot, dtype=float).ravel()
+
+
 @pytest.mark.parametrize("reps, weights_type, impose_null", [
     (999, "rademacher", True), (999, "webb", True), (999, "mammen", True),
     (999, "rademacher", False), (5000, "rademacher", True)])
 def test_wildboottest_matches_pyfixest(frame, pf_ok, reps, weights_type, impose_null):
+    """Same seed, same draws: pyfixest's bootstrap t statistics are ours,
+    times the ratio of the two small-sample factors (pyfixest counts every
+    fixed-effect dummy in k), and with this package's tie rule its p-value
+    is ours."""
     import pyfixest as pf
+    from hdfe_stream.wildboot import _bootstrap
+
     fml = "y ~ x + x2 + C(year) | firm"
     with fit(fml, frame, vcov={"CRV1": "state"}, bootcluster="state") as res:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             ours = res.wildboottest("x", reps=reps, seed=3, weights_type=weights_type,
                                     impose_null=impose_null)
+            _, tstar, _ = _bootstrap([(res, 0)], reps, weights_type, impose_null, 3)
             ref = pf.feols(fml, frame.to_pandas(), vcov={"CRV1": "state"}, fixef_tol=1e-12)
-            theirs = ref.wildboottest(param="x", reps=reps, seed=3,
-                                      weights_type=weights_type, impose_null=impose_null)
-    assert ours["Pr(>|t|)"] == pytest.approx(float(theirs["Pr(>|t|)"]), abs=1e-12)
+        t_ref, tboot = _pf_boot(ref, reps, 3, weights_type=weights_type,
+                                impose_null=impose_null)
+    scale = t_ref / ours["t value"]
+    assert np.allclose(tboot, scale * tstar[:, 0], rtol=1e-7, atol=1e-10)
+    tied = np.abs(tboot) >= abs(t_ref) * (1 - 1e-9)
+    assert ours["Pr(>|t|)"] == pytest.approx(tied.mean(), abs=1e-12)
+
+
+def test_stepdown_rules_match_pyfixest(pf_ok):
+    """The Romano-Wolf and Westfall-Young step-downs are pyfixest's, on
+    statistics without ties."""
+    from pyfixest.estimation.post_estimation.multcomp import (_get_rwolf_pval,
+                                                              _get_wyoung_pval)
+    from hdfe_stream.multcomp import _rwolf_p, _wyoung_p
+
+    rng = np.random.default_rng(5)
+    for _ in range(10):
+        t = rng.normal(0, 2, 6)
+        tstar = rng.standard_t(8, size=(500, 6))
+        assert np.allclose(_rwolf_p(t, tstar), _get_rwolf_pval(t, tstar))
+        p, pstar = rng.uniform(size=6), rng.uniform(size=(500, 6))
+        assert np.allclose(_wyoung_p(p, pstar), _get_wyoung_pval(p, pstar))
 
 
 def test_rwolf_wyoung_match_pyfixest(frame, pf_ok):
+    """rwolf and wyoung run every model on the same draws, which are
+    pyfixest's: its bootstrap t statistics, model by model with the same
+    seed, give our adjusted p-values. (The models share a right-hand side, so
+    the small-sample factors scale every model alike.)"""
     import pyfixest as pf
+    from scipy import special
+
+    from hdfe_stream.multcomp import _rwolf_p, _wyoung_p
+
     fml = "y + y2 + y3 ~ x + x2 | firm"
     multi = fit(fml, frame, vcov={"CRV1": "state"}, bootcluster="state")
     with multi:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
+            rw = rwolf(multi, "x", reps=999, seed=11)["RW Pr(>|t|)"].to_numpy()
+            wy = wyoung(multi, "x", reps=999, seed=11)["WY Pr(>|t|)"].to_numpy()
             ref = pf.feols(fml, frame.to_pandas(), vcov={"CRV1": "state"}, fixef_tol=1e-12)
-            rw, rw_ref = rwolf(multi, "x", reps=999, seed=11), pf.rwolf(ref.to_list(), "x",
-                                                                       reps=999, seed=11)
-            wy, wy_ref = wyoung(multi, "x", reps=999, seed=11), pf.wyoung(ref.to_list(), "x",
-                                                                          reps=999, seed=11)
-    assert np.allclose(rw["RW Pr(>|t|)"], rw_ref.loc["RW Pr(>|t|)"].to_numpy(dtype=float))
-    assert np.allclose(wy["WY Pr(>|t|)"], wy_ref.loc["WY Pr(>|t|)"].to_numpy(dtype=float))
+        stats = [_pf_boot(m, 999, 11) for m in ref.to_list()]
+        df = multi.fetch_model(0)._boot["df"]
+    t = np.array([s[0] for s in stats])
+    tstar = np.column_stack([s[1] for s in stats])
+    assert np.allclose(rw, _rwolf_p(t, tstar))
+    assert np.allclose(wy, _wyoung_p(2 * special.stdtr(df, -np.abs(t)),
+                                     2 * special.stdtr(df, -np.abs(tstar))))
