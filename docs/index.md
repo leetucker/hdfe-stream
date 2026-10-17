@@ -84,8 +84,8 @@ is larger than the memory you are allowed. Concretely, reach for it when:
 You are trading memory for disk, and you need scratch space: about five times
 the size of your Parquet input while the fit runs, and only the result files
 once it finishes. See [benchmarks](benchmarks/index.md) for what that buys:
-on a 42.5-million-row panel, the AKM regression took 52 seconds and 4.1 GB,
-where pyfixest and xhdfe needed 19–25 GB. Point `workdir=` at the scratch space,
+on a 42.5-million-row panel, the AKM regression took 22 seconds and 3.9 GB,
+where pyfixest and xhdfe needed 19–27 GB. Point `workdir=` at the scratch space,
 or set the `HDFE_STREAM_WORKDIR` environment variable once (for example to a
 cluster's scratch filesystem) and leave `workdir` out; a `workdir` passed to a
 call takes precedence, and with neither, the system temporary directory is

@@ -143,16 +143,16 @@ The standard three-way AKM regression,
 worker, on a simulated panel of 5 million workers and 42.5 million rows,
 against [pyfixest](https://github.com/py-econometrics/pyfixest) and
 [xhdfe](https://github.com/reisportela/xhdfe-xfe). Every configuration agrees on
-the coefficients to within 3e-10.
+the coefficients to within 1e-10.
 
 | configuration | wall time | peak memory | peak disk |
 |---|---:|---:|---:|
-| pyfixest (MAP, its default) | 1,960 s | 20.7 GB | — |
-| pyfixest (LSMR) | 138 s | 25.3 GB | — |
-| xhdfe | 238 s | 19.0 GB | — |
-| hdfe_stream (`explicit`, its default) | 52 s | 4.1 GB | 4.1 GB |
-| hdfe_stream (`stream_cg`) | 54 s | 4.0 GB | 4.1 GB |
-| **hdfe_stream (`stream_cg`, low memory)** | **60 s** | **3.2 GB** | 4.3 GB |
+| pyfixest (MAP, its default) | 919 s | 20.8 GB | — |
+| pyfixest (LSMR) | 74 s | 27.0 GB | — |
+| xhdfe | 79 s | 19.3 GB | — |
+| hdfe_stream (`explicit`, its default) | 22 s | 3.9 GB | 2.6 GB |
+| hdfe_stream (`stream_cg`) | 22 s | 3.9 GB | 2.6 GB |
+| **hdfe_stream (`stream_cg`, low memory)** | **25 s** | **3.6 GB** | 2.7 GB |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/akm_memory.dark.svg">
@@ -160,7 +160,7 @@ the coefficients to within 3e-10.
 </picture>
 
 On small data the in-memory libraries use less memory: an hdfe_stream process
-costs about 0.9 GB before it has done anything. The
+costs about 0.8 GB before it has done anything. The
 [benchmarks](https://leetucker.github.io/hdfe-stream/benchmarks/index.html) cover every size from 212,000 rows up,
 designs with up to 503 covariates, Poisson and logit, and the KSS
 decomposition, with how each was measured.

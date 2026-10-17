@@ -51,40 +51,42 @@ At 5 million workers (42.5 million rows):
 
 | configuration | wall time | peak memory | peak disk |
 |---|---:|---:|---:|
-| xhdfe | 782 s | 20.0 GB | — |
+| xhdfe | 518 s | 20.4 GB | — |
 | xhdfe, standard errors | did not finish within 3 hours | | |
-| hdfe_stream | 472 s | 4.8 GB | 2.8 GB |
-| hdfe_stream, standard errors | 2,917 s | 10.8 GB | 3.4 GB |
+| hdfe_stream | 184 s | 4.7 GB | 2.6 GB |
+| hdfe_stream, standard errors | 1,182 s | 11.8 GB | 3.2 GB |
 
 **At scale, memory is the difference.** At 5 million workers xhdfe's point
-estimate peaks at 20 GB, and hdfe_stream's at 4.8 GB, while writing 2.8 GB to
-disk. With standard errors hdfe_stream peaks at 10.8 GB, still about half of
-xhdfe's point estimate alone. Both prune to exactly the same sample at every
+estimate peaks at 20.4 GB, and hdfe_stream's at 4.7 GB, while writing 2.6 GB to
+disk. With standard errors hdfe_stream peaks at 11.8 GB, still a little over
+half of xhdfe's point estimate alone. Both prune to exactly the same sample at every
 size, and at 5 million workers their estimates agree to within 0.01%.
 
 **Standard errors are where the time goes.** From 100,000 workers up,
-hdfe_stream's are 1.7 to 4.5 times faster than xhdfe's: 475 s against 2,127 s at
+hdfe_stream's are 3.7 to 11 times faster than xhdfe's: 225 s against 1,794 s at
 a million workers. At 5 million, xhdfe's did not finish in the three hours
-allowed and hdfe_stream's took 49 minutes. The two estimate the trace term
+allowed and hdfe_stream's took 20 minutes. The two estimate the trace term
 differently ([methodological differences](../kss/differences.md) §5.2); xhdfe's default is 1,000
 simulated draws of the full quadratic form.
 
-**Small panels favor xhdfe.** At 25,000 workers its point estimate takes 0.8 s
-and 0.27 GB, against hdfe_stream's 9.4 s and 0.9 GB. hdfe_stream pays fixed
+**Small panels favor xhdfe.** At 25,000 workers its point estimate takes 0.9 s
+and 0.30 GB, against hdfe_stream's 7.1 s and 0.8 GB, and at 100,000 the two
+are level (9.8 s against 10.8 s). hdfe_stream pays fixed
 costs a small panel cannot amortize: importing its dependencies, and two fits
 (the regression and the collapsed match-level one), each with its own passes
 over the data.
 
 **xhdfe's 400,000-worker point is its solver routing, not noise.** By default it
 factors the firm system directly up to 50,000 firms and iterates above that. At
-400,000 workers (26,661 firms) the factorization alone took about 250 s, since
-a run with 10 draws instead of 200 took nearly as long. At a million workers
-(66,665 firms) it iterates, and its point estimate takes 119 s, against
-hdfe_stream's 74 s.
+400,000 workers (26,661 firms) its point estimate takes 462 s, against 56 s at
+a million workers. The factorization accounts for most of it: in an earlier
+check on a smaller machine, a run with 10 draws instead of 200 took nearly as
+long. At a million workers (66,665 firms) it iterates, and its point estimate takes 56 s,
+against hdfe_stream's 38 s.
 
 **The low-memory setting helps less here than for the regression.**
-`rows_per_bucket` and `batch_rows` shrink the fits: 2.0 GB against 2.2 GB at
-a million workers, and 4.5 GB against 4.8 GB at 5 million, so most of the peak
+`rows_per_bucket` and `batch_rows` shrink the fits: 1.8 GB against 2.2 GB at
+a million workers, and 4.4 GB against 4.7 GB at 5 million, so most of the peak
 is set by something those settings do not control.
 
 ## `scratch_mb`

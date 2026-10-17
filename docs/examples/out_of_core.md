@@ -104,7 +104,7 @@ you can afford and leave the rest alone; with many covariates, scale
 `batch_rows` and `row_group_size` down too (see [wide designs](wide_designs.md)).
 The saving comes from the first steps down. On a million workers, going from the
 default to `rows_per_bucket=250_000` and `batch_rows=200_000` cut the peak from
-2.3 GB to 1.4 GB at the same speed, and smaller still raised it again
+2.3 GB to 1.3 GB for 8% more time, and smaller still raised it again
 ([trading memory for time](../benchmarks/akm.md#trading-memory-for-time)).
 
 Leave-out estimation has a memory knob of its own, `scratch_mb`; see

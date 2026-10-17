@@ -12,8 +12,7 @@ these panels). hdfe_stream runs at its defaults, and "sized to the design", with
 bucket, batch and row-group sizes scaled down as the design widens (the rule is
 in [wide designs](../examples/wide_designs.md#2-scale-the-batches-down-with-the-width)).
 Wherever both libraries finished, the coefficients agree to within 1e-7, the
-tolerance the iterations reach, except for Poisson at 41 covariates, where they
-agree to within 3e-6. The numbers are in
+tolerance the iterations reach. The numbers are in
 [benchmarks/results/glm_covariates.csv](https://github.com/leetucker/hdfe-stream/blob/main/benchmarks/results/glm_covariates.csv).
 
 ```bash
@@ -52,20 +51,20 @@ Wall time and peak memory, hdfe_stream sized to the design:
 
 | covariates | Poisson: `fepois_stream` | Poisson: pyfixest | logit: `feglm_stream` | logit: pyfixest |
 |---:|---:|---:|---:|---:|
-| 8 | 36 s, 2.8 GB | 321 s, 9.9 GB | 40 s, 2.9 GB | 266 s, 10.3 GB |
-| 41 | 113 s, 4.1 GB | 1,256 s, 25.4 GB | 127 s, 4.1 GB | 905 s, 25.6 GB |
-| 83 | 251 s, 4.5 GB | out of memory | 268 s, 4.4 GB | out of memory |
-| 167 | 484 s, 5.8 GB | out of memory | 515 s, 5.8 GB | out of memory |
-| 503 | 1,957 s, 10.6 GB | out of memory | 2,052 s, 10.6 GB | out of memory |
+| 8 | 20 s, 2.8 GB | 161 s, 11.2 GB | 18 s, 2.8 GB | 142 s, 11.8 GB |
+| 41 | 73 s, 4.4 GB | out of memory | 75 s, 4.6 GB | out of memory |
+| 83 | 142 s, 4.6 GB | out of memory | 147 s, 4.6 GB | out of memory |
+| 167 | 301 s, 6.0 GB | out of memory | 311 s, 6.0 GB | out of memory |
+| 503 | 972 s, 10.8 GB | out of memory | 999 s, 10.7 GB | out of memory |
 
-- **pyfixest** needs about 25.5 GB at 41 covariates, nearly all of this
-  machine's 26 GB, and runs out of memory from 83 up.
+- **pyfixest** needs 11–12 GB at 8 covariates and was killed at this machine's
+  limit of 29.6 GB (of 30.8 GB) from 41 up.
 - **hdfe_stream at its defaults** needs more memory as the design widens than
-  when sized to it: 12.8 GB at 83 covariates, 24.0 GB at 167, and more than
-  the machine has at 503. Its batches and buckets hold a fixed number of rows
-  however wide the rows are. For a wide design, size them as the benchmark
-  does, as for OLS.
+  when sized to it: 7.8 GB at 41 covariates, 12.9 GB at 83, 24.0 GB at 167, and
+  more than the machine has at 503. Its batches and buckets hold a fixed number
+  of rows however wide the rows are. For a wide design, size them as the
+  benchmark does, as for OLS.
 - **Disk** grows with the width, to 6.8 GB at 503 covariates, a little more
-  than OLS writes for the same design (5.5 GB).
-- **Against OLS.** At 503 covariates, sized the same way, OLS takes 329 s and
-  8.6 GB, and the GLM 1,957 s and 10.6 GB.
+  than OLS writes for the same design (5.3 GB).
+- **Against OLS.** At 503 covariates, sized the same way, OLS takes 157 s and
+  11.0 GB, and the GLM 972 s and 10.8 GB.

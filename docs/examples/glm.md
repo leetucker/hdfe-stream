@@ -111,8 +111,7 @@ previous step's solution, so the count falls from step to step: from 19 at the
 first step to 6 at the eighth on one 3.4-million-row panel. With
 `solver="auto"`, the default, S is therefore built for the first step only, and
 `stream_cg` is used after that. From 400,000 to 1,000,000 workers, `explicit`
-takes within 12% of the time `auto` takes; at 5,000,000, it takes 27 to 30%
-less. With `precond="amg"`, which needs S, it is rebuilt at every step. Setting
+takes within 5% of the time `auto` takes; at 5,000,000, it takes 12% less. With `precond="amg"`, which needs S, it is rebuilt at every step. Setting
 `solver=` explicitly applies it to every step.
 
 ## Options

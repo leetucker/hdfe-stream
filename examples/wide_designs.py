@@ -4,7 +4,8 @@ The in-memory libraries build the whole design -- rows x covariates -- before
 they start. hdfe_stream never does: it holds one bucket or one batch of rows at
 a time, so its memory grows with the number of covariates times the batch, not
 times the data. On the 8.5-million-row benchmark panel, 167 age indicators ran
-pyfixest and xhdfe out of 26 GB, while hdfe_stream finished in 7 GB (see
+pyfixest and xhdfe out of memory on a 30.8 GB machine, while hdfe_stream finished
+in 5.3 GB (see
 benchmarks/covariates_benchmark.py and the README).
 
 Three things matter for a wide design:

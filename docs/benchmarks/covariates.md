@@ -43,30 +43,30 @@ The numbers are in
 :alt: Many covariates: peak disk use of hdfe_stream against the number of covariates, log-log
 ```
 
-Wall time and peak memory ("—": ran out of this machine's 26 GB):
+Wall time and peak memory ("—": killed at this machine's limit, 29.6 GB of its
+30.8 GB):
 
 | covariates | pyfixest (MAP) | pyfixest (LSMR) | xhdfe | hdfe_stream | hdfe_stream, sized |
 |---:|---:|---:|---:|---:|---:|
-| 8 | 132 s, 5.7 GB | 16 s, 7.3 GB | 15 s, 9.1 GB | 7 s, 3.2 GB | 7 s, 3.0 GB |
-| 41 | 520 s, 13.8 GB | 62 s, 18.2 GB | 60 s, 18.2 GB | 22 s, 6.9 GB | 20 s, 3.7 GB |
-| 83 | 976 s, 25.2 GB | 156 s, 25.8 GB | 125 s, 26.0 GB | 58 s, 12.4 GB | 44 s, 4.9 GB |
-| 167 | — | — | — | 127 s, 23.0 GB | 81 s, 5.1 GB |
-| 503 | — | — | — | — | **329 s, 8.6 GB** |
+| 8 | 90 s, 5.8 GB | 13 s, 8.6 GB | 12 s, 9.5 GB | 5 s, 3.1 GB | 5 s, 3.2 GB |
+| 41 | 280 s, 13.9 GB | 34 s, 21.0 GB | 36 s, 22.4 GB | 17 s, 8.4 GB | 15 s, 3.6 GB |
+| 83 | 507 s, 25.2 GB | — | — | 33 s, 14.7 GB | 27 s, 4.2 GB |
+| 167 | — | — | — | 65 s, 24.5 GB | 56 s, 5.3 GB |
+| 503 | — | — | — | — | **157 s, 11.0 GB** |
 
 ## Reading the figures
 
 **The in-memory libraries run out first.** Their peak grows with rows ×
-covariates. At 8.5 million rows all three were within about 1 GB of this
-machine's 26 GB at 83 indicators, and out of memory at 167. hdfe_stream sized
-to the design goes from 3.0 GB at 8 indicators to 5.1 GB at 167 and 8.6 GB at
-503. Of that last figure, about 4.9 GB is the memory-mapped cell table: file
-pages the kernel can drop under pressure. The memory the fit itself allocated
-peaked at 4.6 GB (a separate profile, reading the process's anonymous and
-file-backed pages apart).
+covariates. At 8.5 million rows pyfixest's LSMR demeaner and xhdfe were out of
+memory at 83 indicators, and MAP, which holds the least, used 25.2 GB there and
+was out of memory at 167. hdfe_stream sized to the design goes from 3.2 GB at 8
+indicators to 5.3 GB at 167 and 11.0 GB at 503. Part of that last figure is the
+memory-mapped cell table, whose pages count towards the peak although the
+kernel can drop them under pressure, so the memory the fit itself needs is less.
 
 **Size the batches to the design.** At its defaults hdfe_stream holds a whole
 bucket of up to 20 million rows, with every covariate, while it sorts; that is
-fine for a handful of covariates and not for hundreds (23.0 GB at 167, out of
+fine for a handful of covariates and not for hundreds (24.5 GB at 167, out of
 memory at 503). Every step that holds rows holds all the covariates, so scale
 `rows_per_bucket`, `batch_rows` and `row_group_size` down with the width. The
 benchmark aims at about 1 GB of design per bucket and 250 MB per batch and row
@@ -81,18 +81,19 @@ fit = feols_stream(fml, data, rows_per_bucket=min(20_000_000, int(1e9 // per_row
 
 [Wide designs](../examples/wide_designs.md) puts this together.
 
-**Time grows with the square of the width.** The cross-products cost k × k per
-row; they are formed chunk by chunk as BLAS matrix products, and 503 indicators
-take 5½ minutes where 167 take under 1½. hdfe_stream is the fastest
+**Time grows with the width.** The cross-products cost k × k per row; they are
+formed chunk by chunk as BLAS matrix products. With this machine's 16 cores
+the time grew about in proportion to the width from 83 indicators up, though
+(2.1 times from 83 to 167, 2.8 times from 167 to 503), and 503 indicators took
+2½ minutes where 167 took under a minute. hdfe_stream is the fastest
 configuration at every width measured.
 
-**Timings on this machine are noisy where memory is tight.** Each point is one
-run. Repeated runs of the default configuration at 83 indicators, which holds
-12.4 GB, took between 53 and 83 s; the sized configuration varied by about 15%.
-The differences between libraries above are far larger than that.
+**Timings are noisy where memory is tight.** Each point is one run, so
+differences of 15% or so between configurations should not be read as
+meaningful. The differences between libraries above are far larger than that.
 
 **Disk grows with the width too**, since the working copy of the rows carries
-every covariate: 0.3 GB at 8 indicators, 5.5 GB at 503.
+every covariate: 0.3 GB at 8 indicators, 5.3 GB at 503.
 
 **How the design is built matters.** A formula term such as `i(age_bin)` is
 carried through the partitioning as the one column it is computed from, and the

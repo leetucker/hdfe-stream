@@ -60,20 +60,20 @@ Wall time and peak memory, hdfe_stream at its defaults:
 
 | workers | rows | Poisson: `fepois_stream` | Poisson: pyfixest | logit: `feglm_stream` | logit: pyfixest |
 |---:|---:|---:|---:|---:|---:|
-| 25,000 | 212,000 | 1.8 s, 0.8 GB | 3.2 s, 0.6 GB | 2.3 s, 0.8 GB | 3.0 s, 0.6 GB |
-| 100,000 | 850,000 | 4.7 s, 1.1 GB | 15 s, 1.2 GB | 5.2 s, 1.1 GB | 13 s, 1.2 GB |
-| 400,000 | 3.4 million | 15 s, 1.8 GB | 68 s, 3.6 GB | 16 s, 1.8 GB | 60 s, 3.7 GB |
-| 1,000,000 | 8.5 million | 34 s, 2.6 GB | 203 s, 7.6 GB | 42 s, 2.6 GB | 171 s, 8.0 GB |
-| 5,000,000 | 42.5 million | 287 s, 4.4 GB | out of memory | 351 s, 4.4 GB | out of memory |
+| 25,000 | 212,000 | 1.6 s, 0.8 GB | 2.3 s, 0.6 GB | 1.6 s, 0.7 GB | 2.3 s, 0.6 GB |
+| 100,000 | 850,000 | 3.1 s, 1.0 GB | 9.3 s, 1.2 GB | 3.1 s, 1.0 GB | 8.8 s, 1.2 GB |
+| 400,000 | 3.4 million | 9.2 s, 1.7 GB | 40 s, 3.8 GB | 9.2 s, 1.7 GB | 40 s, 3.8 GB |
+| 1,000,000 | 8.5 million | 23 s, 2.4 GB | 126 s, 8.0 GB | 22 s, 2.5 GB | 111 s, 8.2 GB |
+| 5,000,000 | 42.5 million | 145 s, 4.3 GB | out of memory | 144 s, 4.4 GB | out of memory |
 
-- **Time.** From 100,000 workers up, hdfe_stream is 2.4 to 6 times faster.
-- **Memory.** At 5,000,000 workers pyfixest ran out of this machine's 26 GB,
-  for both models. hdfe_stream peaked at 4.4 GB, or 3.1 GB with the low-memory
-  setting, in about the same time. At 25,000 workers pyfixest uses less, as
-  with OLS: an hdfe_stream process costs about 0.8 GB before it has done
-  anything.
-- **Disk.** About 67 bytes per row: 2.8 GB at 42.5 million rows, where OLS on
-  the same design writes 4.1 GB.
-- **Against OLS.** `feols_stream` fits the same design in 9.0 s at 1,000,000
-  workers and 52 s at 5,000,000, so a Poisson or logit fit costs 4 to 7 OLS
+- **Time.** From 100,000 workers up, hdfe_stream is 3 to 6 times faster.
+- **Memory.** At 5,000,000 workers pyfixest was killed at this machine's
+  limit of 29.6 GB (of 30.8 GB), for both models. hdfe_stream peaked at 4.3 to
+  4.4 GB, or 3.6 GB with the low-memory setting, in about the same time. At
+  25,000 workers pyfixest uses less, as with OLS: an hdfe_stream process costs
+  about 0.8 GB before it has done anything.
+- **Disk.** About 67 bytes per row: 2.8 GB at 42.5 million rows, a little
+  more than OLS on the same design writes (2.6 GB).
+- **Against OLS.** `feols_stream` fits the same design in 4.9 s at 1,000,000
+  workers and 22 s at 5,000,000, so a Poisson or logit fit costs 4 to 7 OLS
   fits.

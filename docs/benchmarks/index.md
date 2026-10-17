@@ -17,10 +17,10 @@ to 503.
 | [KSS](kss.md) | the leave-out variance decomposition of `log_earn ~ age_squared + age_cubed \| worker_id + firm_id`, with and without standard errors | xhdfe |
 
 In brief: hdfe_stream uses a fraction of the memory at scale, and is not slower
-for it. At 5 million workers the AKM regression took 52 s and 4.1 GB, against
-138 s and 25.3 GB for pyfixest (LSMR) and 238 s and 19.0 GB for xhdfe. On
+for it. At 5 million workers the AKM regression took 22 s and 3.9 GB, against
+74 s and 27.0 GB for pyfixest (LSMR) and 79 s and 19.3 GB for xhdfe. On
 small data the in-memory libraries use less memory, since an hdfe_stream process
-costs about 0.9 GB before it has done anything.
+costs about 0.8 GB before it has done anything.
 
 ## How it is measured
 
@@ -39,8 +39,8 @@ per-process high-water mark. The measurements are:
 
 A numba warm-up run comes first, so kernel compilation is not charged to any
 configuration. Configurations that run past three hours are recorded as timed
-out, and processes the kernel kills for lack of memory as out of memory. Both
-appear in the results, and in a note under the figure.
+out, and processes that reach 96% of the machine's memory, which are killed, as out of
+memory. Both appear in the results, and in a note under the figure.
 
 Before reporting a size, the regression and GLM benchmarks check that every
 configuration's coefficients agree. The KSS benchmark reports how far
@@ -55,12 +55,17 @@ dependencies and is not included.
 
 ## The machine
 
-Measured on an Intel Core Ultra 7 258V, 8 cores, 26 GB RAM, Linux (WSL2);
-Python 3.14.8, polars 2.0.0, numpy 2.5.3, numba 0.68.0, scipy 1.18.1,
-pyfixest 0.60.0, xhdfe 2.28.1 (CPU backend). In the regression benchmarks
-hdfe_stream was measured on 2026-10-07 and pyfixest and xhdfe on 2026-10-06;
-the GLM and KSS benchmarks were measured on 2026-10-07 and 2026-10-08. The
-exact versions are in
+Measured on an AWS EC2 `c8id.4xlarge` instance: an Intel Xeon 6975P-C with 16
+vCPUs and 30.8 GB of RAM, Linux, and the instance's local NVMe drive for the
+data and work directories, so that disk traffic is not network traffic. Python
+3.14.8, polars 2.0.0, numpy 2.5.3, numba 0.68.0, scipy 1.18.1, pyfixest 0.60.0,
+xhdfe 2.28.1 (CPU backend) and hdfe_stream 0.4.0. All five benchmarks ran one
+after the other on 2026-10-16 and 17, as a single job on a spot instance.
+The benchmarks run in a service limited to 96% of the machine's memory, with no
+swap; a process that reaches the limit is killed, so "out of memory" in the
+results means needing more than about 29.6 GB. AWS reclaimed the spot instance
+several times; a step that is interrupted starts again from the beginning, so
+every row is from one uninterrupted run. The exact versions are in
 [benchmarks/results/machine.json](https://github.com/leetucker/hdfe-stream/blob/main/benchmarks/results/machine.json).
 
 ## Reproducing them
