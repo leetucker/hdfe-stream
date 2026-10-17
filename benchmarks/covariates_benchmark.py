@@ -46,8 +46,8 @@ import re
 import time
 from pathlib import Path
 
-from _harness import (DATA_DIR, RESULTS_DIR, data_path, measure, run_child,
-                      upsert_csv, write_machine_info)
+from _harness import (DATA_DIR, RESULTS_DIR, data_path, is_done, measure,
+                      run_child, upsert_csv, write_machine_info)
 
 SCRIPT = Path(__file__).resolve()
 N_WORKERS = 1_000_000
@@ -210,13 +210,23 @@ def main():
     write_machine_info(RESULTS_DIR / "machine.json")
     path = covariate_path()
     workdir = DATA_DIR / "work_covariates"
-    # compile numba kernels before timing anything
-    measure(SCRIPT, "hdfe:60", "default", path, workdir)
+    warmed = False
     for width in args.widths:
         _, _, k = formulas(width, path)
         print(f"\n=== age bins {width} months wide: {k} indicators ===", flush=True)
+        todo = [label for label in configs
+                if not is_done(RESULTS_DIR / "covariates.csv",
+                               {"n_covariates": k, "configuration": label},
+                               key=("n_covariates", "configuration"))]
+        if todo and not warmed:
+            # compile numba kernels before timing anything
+            measure(SCRIPT, "hdfe:60", "default", path, workdir)
+            warmed = True
         reports = {}
         for order, (label, (library, variant)) in enumerate(configs.items()):
+            if label not in todo:
+                print(f"  {label:<36}measured before, kept", flush=True)
+                continue
             report = measure(SCRIPT, f"{library}:{width}", variant, path, workdir,
                              timeout=TIMEOUT_S)
             reports[label] = report

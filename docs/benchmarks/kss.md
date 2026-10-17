@@ -52,7 +52,7 @@ At 5 million workers (42.5 million rows):
 | configuration | wall time | peak memory | peak disk |
 |---|---:|---:|---:|
 | xhdfe | 518 s | 20.4 GB | — |
-| xhdfe, standard errors | did not finish within 3 hours | | |
+| xhdfe, standard errors | did not finish within 3 hours (tried once; no longer run at this size) | | |
 | hdfe_stream | 184 s | 4.7 GB | 2.6 GB |
 | hdfe_stream, standard errors | 1,182 s | 11.8 GB | 3.2 GB |
 
@@ -65,7 +65,9 @@ size, and at 5 million workers their estimates agree to within 0.01%.
 **Standard errors are where the time goes.** From 100,000 workers up,
 hdfe_stream's are 3.7 to 11 times faster than xhdfe's: 225 s against 1,794 s at
 a million workers. At 5 million, xhdfe's did not finish in the three hours
-allowed and hdfe_stream's took 20 minutes. The two estimate the trace term
+allowed (the benchmark does not run it above a million workers any more, so a
+rerun does not spend three hours showing that again) and hdfe_stream's took 20
+minutes. The two estimate the trace term
 differently ([methodological differences](../kss/differences.md) §5.2); xhdfe's default is 1,000
 simulated draws of the full quadratic form.
 

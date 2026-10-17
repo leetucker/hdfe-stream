@@ -22,9 +22,11 @@ the full quadratic form, hdfe_stream estimates it with 200 Hutchinson draws
 
 xhdfe needs the data in memory, so reading it is counted, as in the regression
 benchmark; hdfe_stream reads the Parquet file itself. xhdfe runs on its CPU
-backend, its default. Results go to benchmarks/results/kss.csv; the script
-reports how far the two libraries' estimates are apart, which is random-
-projection noise, not disagreement about the estimator.
+backend, its default. xhdfe's standard errors are not run above 1,000,000
+workers, where they did not finish in three hours. Results go to
+benchmarks/results/kss.csv; the script reports how far the two libraries'
+estimates are apart, which is random-projection noise, not disagreement about
+the estimator.
 """
 
 from __future__ import annotations
@@ -33,8 +35,8 @@ import argparse
 import time
 from pathlib import Path
 
-from _harness import (DATA_DIR, RESULTS_DIR, data_path, measure, panel_shape,
-                      run_child, upsert_csv, write_machine_info)
+from _harness import (DATA_DIR, RESULTS_DIR, data_path, is_done, measure,
+                      panel_shape, run_child, upsert_csv, write_machine_info)
 
 SCRIPT = Path(__file__).resolve()
 FML = "log_earn ~ age_squared + age_cubed | worker_id + firm_id"
@@ -54,6 +56,11 @@ CONFIGS = {
 
 LOW_MEMORY = {"rows_per_bucket": 250_000, "batch_rows": 200_000}
 TIMEOUT_S = 3 * 3600
+
+# xhdfe's standard errors are not run on panels larger than this. At 5,000,000
+# workers they did not finish within TIMEOUT_S, so running them again would
+# only spend three hours to show that once more.
+XHDFE_SE_MAX_WORKERS = 1_000_000
 
 
 # --------------------------------------------------------------------------
@@ -128,20 +135,30 @@ def main():
         run_child(runner, *args.child)
         return
 
-    configs = {k: v for k, v in CONFIGS.items()
-               if not args.only or k in args.only}
     write_machine_info(RESULTS_DIR / "machine.json")
     workdir = DATA_DIR / "work_kss"
     for n_workers in args.sizes:
+        configs = {k: v for k, v in CONFIGS.items()
+                   if (not args.only or k in args.only)
+                   and not (k == "xhdfe (standard errors)"
+                            and n_workers > XHDFE_SE_MAX_WORKERS)}
         path = data_path(n_workers)
         shape = panel_shape(path)
         print(f"\n=== {n_workers:,} workers, {shape['firms']:,} firms, "
               f"{shape['rows']:,} rows ===", flush=True)
-        # compile numba kernels before timing anything
-        measure(SCRIPT, "hdfe", "point", data_path(25_000), workdir)
+        todo = [label for label in configs
+                if not is_done(RESULTS_DIR / "kss.csv",
+                               {"n_workers": n_workers, "configuration": label})]
+        if todo:
+            # compile numba kernels before timing anything
+            measure(SCRIPT, "hdfe", "point", data_path(25_000), workdir)
 
         reports = {}
-        for order, (label, (kind, variant)) in enumerate(configs.items()):
+        for label, (kind, variant) in configs.items():
+            order = list(CONFIGS).index(label)
+            if label not in todo:
+                print(f"  {label:<32}measured before, kept", flush=True)
+                continue
             report = measure(SCRIPT, kind, variant, path, workdir,
                              timeout=TIMEOUT_S)
             reports[label] = report

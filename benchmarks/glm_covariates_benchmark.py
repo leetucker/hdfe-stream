@@ -26,8 +26,8 @@ import argparse
 import time
 from pathlib import Path
 
-from _harness import (DATA_DIR, RESULTS_DIR, glm_data_path, measure, run_child,
-                      upsert_csv, write_machine_info)
+from _harness import (DATA_DIR, RESULTS_DIR, glm_data_path, is_done, measure,
+                      run_child, upsert_csv, write_machine_info)
 from covariates_benchmark import DEFAULT_WIDTHS, N_WORKERS, level_of, sized_options
 
 SCRIPT = Path(__file__).resolve()
@@ -152,15 +152,25 @@ def main():
     write_machine_info(RESULTS_DIR / "machine.json")
     path = covariate_path()
     workdir = DATA_DIR / "work_glm_covariates"
-    # compile numba kernels before timing anything
-    for family in OUTCOME:
-        measure(SCRIPT, f"{family}:hdfe:60", "default", path, workdir)
+    warmed = False
     for width in args.widths:
         _, k = formula("poisson", width, path)
         print(f"\n=== age bins {width} months wide: {k} indicators ===", flush=True)
+        todo = [label for label in configs
+                if not is_done(RESULTS_DIR / "glm_covariates.csv",
+                               {"n_covariates": k, "configuration": label},
+                               key=("n_covariates", "configuration"))]
+        if todo and not warmed:
+            # compile numba kernels before timing anything
+            for family in OUTCOME:
+                measure(SCRIPT, f"{family}:hdfe:60", "default", path, workdir)
+            warmed = True
         reports = {}
         for label, (family, library, variant) in configs.items():
             order = list(CONFIGS).index(label)
+            if label not in todo:
+                print(f"  {label:<42}measured before, kept", flush=True)
+                continue
             report = measure(SCRIPT, f"{family}:{library}:{width}", variant, path,
                              workdir, timeout=TIMEOUT_S)
             reports[label] = report
@@ -186,7 +196,8 @@ def main():
 
         for family in OUTCOME:
             ok = [reports[label] for label, c in configs.items()
-                  if c[0] == family and reports[label]["status"] == "ok"]
+                  if c[0] == family and label in reports
+                  and reports[label]["status"] == "ok"]
             if len(ok) > 1:
                 base = ok[0]["coef"]
                 gap = max(abs(r["coef"].get(level, float("nan")) - value)

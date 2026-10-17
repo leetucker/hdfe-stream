@@ -33,8 +33,8 @@ import argparse
 import time
 from pathlib import Path
 
-from _harness import (DATA_DIR, RESULTS_DIR, data_path, measure, panel_shape,
-                      run_child, upsert_csv, write_machine_info)
+from _harness import (DATA_DIR, RESULTS_DIR, data_path, is_done, measure,
+                      panel_shape, run_child, upsert_csv, write_machine_info)
 
 SCRIPT = Path(__file__).resolve()
 FML = "log_earn ~ age_squared + age_cubed | worker_id + firm_id + year"
@@ -209,12 +209,19 @@ def main():
               f"{shape['rows']:,} rows ({path.stat().st_size / 1e6:.0f} MB "
               f"on disk) ===", flush=True)
 
-        # warm up once so numba kernel compilation (cached on disk) is not
-        # charged to the first configuration that happens to run
-        measure(SCRIPT, "hdfe", "explicit", data_path(25_000), workdir)
+        todo = [label for label in configs
+                if not is_done(RESULTS_DIR / "akm.csv",
+                               {"n_workers": n_workers, "configuration": label})]
+        if todo:
+            # warm up once so numba kernel compilation (cached on disk) is not
+            # charged to the first configuration that happens to run
+            measure(SCRIPT, "hdfe", "explicit", data_path(25_000), workdir)
 
         reports = {}
         for order, (label, (kind, variant)) in enumerate(configs.items()):
+            if label not in todo:
+                print(f"  {label:<38}measured before, kept", flush=True)
+                continue
             report = measure(SCRIPT, kind, variant, path, workdir,
                              timeout=TIMEOUT_S)
             reports[label] = report

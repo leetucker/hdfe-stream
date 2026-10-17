@@ -10,7 +10,7 @@ rows) and vary its width: the number of covariates, from 8 to 503.
 | script | job | compared with |
 |---|---|---|
 | `akm_benchmark.py` | `log_earn ~ age_squared + age_cubed \| worker_id + firm_id + year`, clustered by worker | pyfixest (MAP and LSMR demeaners), xhdfe |
-| `kss_benchmark.py` | the KSS leave-out variance decomposition of `log_earn ~ age_squared + age_cubed \| worker_id + firm_id`, with and without standard errors | xhdfe |
+| `kss_benchmark.py` | the KSS leave-out variance decomposition of `log_earn ~ age_squared + age_cubed \| worker_id + firm_id`, with and without standard errors | xhdfe (its standard errors up to 1,000,000 workers) |
 | `covariates_benchmark.py` | `log_earn ~ i(age_bin) \| worker_id + firm_id`, clustered by worker, with age bins from five years to one month wide | pyfixest (both demeaners), xhdfe |
 | `glm_benchmark.py` | Poisson and logit regressions of a count and a binary outcome on `age_squared + age_cubed \| worker_id + firm_id + year`, clustered by worker | pyfixest's `fepois` and `feglm` (LSMR demeaner) |
 | `glm_covariates_benchmark.py` | the same two outcomes on `i(age_bin) \| worker_id + firm_id`, clustered by worker, with the covariates benchmark's age bins | pyfixest's `fepois` and `feglm` (LSMR demeaner) |

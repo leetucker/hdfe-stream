@@ -32,7 +32,7 @@ import argparse
 import time
 from pathlib import Path
 
-from _harness import (DATA_DIR, RESULTS_DIR, glm_data_path, measure,
+from _harness import (DATA_DIR, RESULTS_DIR, glm_data_path, is_done, measure,
                       panel_shape, run_child, upsert_csv, write_machine_info)
 
 SCRIPT = Path(__file__).resolve()
@@ -158,13 +158,21 @@ def main():
               f"{shape['rows']:,} rows ({path.stat().st_size / 1e6:.0f} MB "
               f"on disk) ===", flush=True)
 
-        # compile numba kernels before timing anything
-        for family in OUTCOME:
-            measure(SCRIPT, f"{family}:hdfe", "auto", glm_data_path(25_000), workdir)
+        todo = [label for label in configs
+                if not is_done(RESULTS_DIR / "glm.csv",
+                               {"n_workers": n_workers, "configuration": label})]
+        if todo:
+            # compile numba kernels before timing anything
+            for family in OUTCOME:
+                measure(SCRIPT, f"{family}:hdfe", "auto", glm_data_path(25_000),
+                        workdir)
 
         reports = {}
         for label, (family, library, variant) in configs.items():
             order = list(CONFIGS).index(label)
+            if label not in todo:
+                print(f"  {label:<34}measured before, kept", flush=True)
+                continue
             report = measure(SCRIPT, f"{family}:{library}", variant, path, workdir,
                              timeout=TIMEOUT_S)
             reports[label] = report
@@ -192,7 +200,7 @@ def main():
 
         for family in OUTCOME:
             worst = agreement([reports[label] for label, c in configs.items()
-                               if c[0] == family])
+                               if c[0] == family and label in reports])
             print(f"  {family} estimates: largest relative difference "
                   f"{worst:.1e}", flush=True)
 

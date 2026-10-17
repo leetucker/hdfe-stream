@@ -15,11 +15,19 @@ The child measures
 The parent writes one CSV row per (size, configuration) as soon as it has it,
 so a run that dies part-way keeps everything measured so far, and re-running a
 size replaces that size's rows rather than duplicating them.
+
+A run that is restarted can skip what it already measured. When the environment
+variable HDFE_BENCH_LEDGER names a file, every row written is also recorded
+there with a digest, and `is_done` reports a configuration as finished only
+if its row is still in the CSV exactly as the ledger recorded it. Without the
+variable, which is the normal case, nothing is skipped and nothing extra is
+written.
 """
 
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 import platform
@@ -198,6 +206,61 @@ def measure(script, kind, variant, path, workdir, timeout=None):
     return {"status": "failed: no result line"}
 
 
+LEDGER_ENV = "HDFE_BENCH_LEDGER"
+
+# a row with one of these statuses is a result, to be kept rather than
+# measured again; a failure may be the process being stopped, so it is not
+_FINAL = ("ok", "timeout", "killed (out of memory)")
+
+
+def _digest(row):
+    """Identify a row by its non-empty values, as text, so that the row as
+    written and as read back from the CSV give the same digest."""
+    items = sorted((k, str(v)) for k, v in row.items() if v not in (None, ""))
+    return hashlib.sha1(json.dumps(items).encode()).hexdigest()
+
+
+def _ledger():
+    name = os.environ.get(LEDGER_ENV)
+    if not name:
+        return None, {}
+    path = Path(name)
+    try:
+        return path, json.loads(path.read_text())
+    except (OSError, ValueError):
+        return path, {}
+
+
+def _entry(path, row, key):
+    return Path(path).name, "|".join(str(row[k]) for k in key)
+
+
+def _atomic_write(path, write):
+    """Write through `write(handle)` to a temporary file, then rename it, so
+    that a process stopped part-way never leaves half a file."""
+    path = Path(path)
+    temporary = path.with_name(path.name + ".part")
+    with open(temporary, "w", newline="") as handle:
+        write(handle)
+    os.replace(temporary, path)
+
+
+def is_done(path, values, key=("n_workers", "configuration")):
+    """Whether the configuration with these key `values` (a dict) was already
+    measured by this run: its row is in the CSV at `path`, unchanged since it
+    was written, with a final status. Always False unless the ledger is on."""
+    ledger_path, ledger = _ledger()
+    if ledger_path is None or not Path(path).exists():
+        return False
+    name, entry = _entry(path, values, key)
+    with open(path, newline="") as handle:
+        for row in csv.DictReader(handle):
+            if "|".join(str(row[k]) for k in key) == entry:
+                return (row["status"].startswith(_FINAL)
+                        and ledger.get(name, {}).get(entry) == _digest(row))
+    return False
+
+
 def upsert_csv(path, rows, key=("n_workers", "configuration")):
     """Write `rows` into the CSV at `path`, replacing rows with the same key."""
     path = Path(path)
@@ -211,10 +274,19 @@ def upsert_csv(path, rows, key=("n_workers", "configuration")):
     merged = kept + [{k: v for k, v in r.items()} for r in rows]
     fields = list(dict.fromkeys(f for r in merged for f in r))
     merged.sort(key=lambda r: (int(r[key[0]]), int(r.get("order") or 0)))
-    with open(path, "w", newline="") as handle:
+
+    def write(handle):
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(merged)
+
+    _atomic_write(path, write)
+    ledger_path, ledger = _ledger()
+    if ledger_path is not None:
+        for r in rows:
+            name, entry = _entry(path, r, key)
+            ledger.setdefault(name, {})[entry] = _digest(r)
+        _atomic_write(ledger_path, lambda handle: handle.write(json.dumps(ledger)))
 
 
 def machine_info():
