@@ -395,7 +395,8 @@ def _find_components(lf: pl.LazyFrame, dims: tuple[str, str], fe_cols: dict,
     # finds the distinct levels with a hash table per thread, and two at once
     # peaked at twice the memory.
     log(f"connected components: factorizing {d0} and {d1}")
-    maps = {d: complete.select(fe_cols[d]).unique().sort(fe_cols[d]).collect()
+    maps = {d: complete.select(fe_cols[d]).unique().sort(fe_cols[d])
+                       .collect(engine="streaming")
             for d in dims}
     n0, n1 = maps[d0].height, maps[d1].height
     index = [_hash_index(maps[d], fe_cols[d]) for d in dims]

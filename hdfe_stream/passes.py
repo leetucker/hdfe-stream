@@ -200,8 +200,9 @@ class _PassesMixin:
                 coded = restrict(coded)
         for name, cols, cc, path in maps:
             self._log(f"pass 0: factorizing {name}")
-            lf.select(cols).unique().sort(cols).with_row_index(cc).sink_parquet(path)
-            nl = pl.scan_parquet(path).select(pl.len()).collect().item()
+            (lf.select(cols).unique().sort(cols).with_row_index(cc)
+               .sink_parquet(path, engine="streaming"))
+            nl = pl.scan_parquet(path).select(pl.len()).collect(engine="streaming").item()
             if name in self.o_fe:
                 self.n_levels[name] = nl
             else:
@@ -213,7 +214,7 @@ class _PassesMixin:
             # go to disk in the order they arrive, in one file.
             self._log("pass 0: writing rows (no fixed effects: no grouping)")
             out = str(self.workdir / "rows_b0000.parquet")
-            coded.sink_parquet(out, row_group_size=self.rgs)
+            coded.sink_parquet(out, row_group_size=self.rgs, engine="streaming")
             self.paths["rows"] = [out]
             self._track_disk()
             for spec in self.clusters.values():
@@ -227,7 +228,7 @@ class _PassesMixin:
         shutil.rmtree(self.paths["partitioned"], ignore_errors=True)
         (coded.with_columns((key.hash(seed=20260921) % P).cast(pl.UInt32).alias(BUCKET))
               .sink_parquet(pl.PartitionBy(self.paths["partitioned"], key=BUCKET,
-                                           include_key=False)))
+                                           include_key=False), engine="streaming"))
 
         # Sort each bucket by fe[0] and assign dense codes that keep
         # increasing across buckets.

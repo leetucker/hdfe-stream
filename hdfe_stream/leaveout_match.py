@@ -83,9 +83,9 @@ def build_match_table(row_fit, alpha, psi, path):
              .select(alpha, psi,
                      (pl.col("_wy") / pl.col(MATCH_WEIGHT)).alias(y),
                      MATCH_WEIGHT, MATCH_ROWS))
-    table.sink_parquet(path)
+    table.sink_parquet(path, engine="streaming")
     return int(pl.scan_parquet(path).select(pl.col(MATCH_ROWS).sum())
-               .collect().item())
+               .collect(engine="streaming").item())
 
 
 def stayer_sigma2(row_fit, match_fit, alpha, psi):
