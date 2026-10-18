@@ -585,7 +585,7 @@ class _InferenceMixin:
                # the dense code is an internal label; the level values identify
                # the rows for the caller
                .drop(self.code_of[f])
-               .sink_parquet(paths["fe"][f]))
+               .sink_parquet(paths["fe"][f], engine="streaming"))
 
         meat = {t: sc.T @ sc for t, sc in scores.items()}
         meat.update(meat_sub)

@@ -203,7 +203,7 @@ class _PassesMixin:
             self._log(f"pass 0: factorizing {name}")
             self._sink(lf.select(cols).unique().sort(cols).with_row_index(cc), path,
                        f"pass 0 factorize {name}")
-            nl = pl.scan_parquet(path).select(pl.len()).collect().item()
+            nl = pl.scan_parquet(path).select(pl.len()).collect(engine="streaming").item()
             if name in self.o_fe:
                 self.n_levels[name] = nl
             else:
