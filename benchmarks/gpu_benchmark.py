@@ -7,21 +7,28 @@ The job is akm_benchmark.py's,
 
     log_earn ~ age_squared + age_cubed | worker_id + firm_id + year
 
-clustered by worker, on the same simulated panels. Five configurations:
+clustered by worker, on the same simulated panels. Seven configurations:
 
   * hdfe_stream on the CPU, as everywhere else (its default solver);
   * hdfe_stream with the solve on the GPU (``device="cuda"``, through CuPy);
   * the same, with the fit's Polars queries on the GPU as well
     (``polars_engine="gpu"``, cudf-polars);
+  * pyfixest with its LSMR demeaner on its default backend (``within``, on
+    the CPU), as "pyfixest (LSMR)" in akm_benchmark.py;
+  * pyfixest with its LSMR demeaner on PyTorch on the GPU
+    (``LsmrDemeaner(backend="torch", device="cuda")``, in float64, its
+    default precision). pyfixest falls back to a CPU demeaner without a word
+    when torch cannot be imported, so the result is kept only if torch sees
+    the GPU and the fit allocated memory on it;
   * xhdfe on the CPU, its default;
   * xhdfe with its CUDA backend (``XHDFE_GPU_BACKEND=cuda``), which needs a
     CUDA build of xhdfe. Its result is kept only if xhdfe reports that the
     GPU was used (``gpu_used_``), since it returns a CPU result otherwise.
 
 On a machine without an NVIDIA GPU the script says so and exits without
-measuring anything. The other benchmarks are not repeated: hdfe_stream on the
-CPU and xhdfe on the CPU are the reference points on this machine, and the
-comparison with pyfixest is in akm_benchmark.py.
+measuring anything. The other benchmarks are not repeated: each library on
+the CPU is the reference point for itself on the GPU, on this machine, and
+pyfixest's MAP demeaner, which has no GPU version, is in akm_benchmark.py.
 
 Measured as in the other benchmarks (benchmarks/_harness.py), plus the peak
 GPU memory of the configuration's process (polled from nvidia-smi) and, for
@@ -30,6 +37,9 @@ engine could not run and ran on the CPU instead. Results go to
 benchmarks/results/gpu.csv, the machine to benchmarks/results/gpu_machine.json.
 Every configuration starts a fresh process, so the GPU ones pay for creating
 a CUDA context (well under a second) each time, as a user's script would.
+What is compiled once and cached on disk is not charged to them: numba's
+kernels, CuPy's and cudf's, and pyfixest's torch.compile of LSMR are warmed
+up on the smallest panel first.
 """
 
 from __future__ import annotations
@@ -41,6 +51,7 @@ import shutil
 import subprocess
 import threading
 import time
+import warnings
 from pathlib import Path
 
 from _harness import (
@@ -66,6 +77,8 @@ CONFIGS = {
     "hdfe_stream (CPU)": ("hdfe", "cpu"),
     "hdfe_stream (GPU solve)": ("hdfe", "cuda"),
     "hdfe_stream (GPU solve + GPU Polars)": ("hdfe", "cuda+polars"),
+    "pyfixest (LSMR, CPU)": ("pyfixest", "cpu"),
+    "pyfixest (LSMR, GPU)": ("pyfixest", "cuda"),
     "xhdfe (CPU)": ("xhdfe", "cpu"),
     "xhdfe (GPU)": ("xhdfe", "cuda"),
 }
@@ -126,6 +139,43 @@ class GpuMemoryPoller:
 # the child process: one configuration, one size
 # --------------------------------------------------------------------------
 
+def run_pyfixest(variant, path):
+    import pandas as pd
+    import pyfixest as pf
+
+    if variant == "cuda":
+        try:
+            import torch
+        except ImportError as err:
+            raise RuntimeError("torch is not installed, and pyfixest would quietly "
+                               "demean on the CPU instead") from err
+        if not torch.cuda.is_available():
+            raise RuntimeError(f"torch {torch.__version__} sees no CUDA device "
+                               "(a CPU-only build?)")
+        demeaner = pf.LsmrDemeaner(backend="torch", device="cuda")
+    else:
+        demeaner = pf.LsmrDemeaner()
+    t0 = time.perf_counter()
+    frame = pd.read_parquet(path)
+    t_read = time.perf_counter() - t0
+    # pyfixest reports what it changed by itself (torch.compile falling back
+    # to eager execution, a CPU fallback) only as warnings: keep them
+    with GpuMemoryPoller() as gpu, warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        t0 = time.perf_counter()
+        fit = pf.feols(FML, data=frame, vcov={"CRV1": "worker_id"},
+                       fixef_rm="none", demeaner=demeaner)
+        t_fit = time.perf_counter() - t0
+    if variant == "cuda" and torch.cuda.max_memory_allocated() == 0:
+        raise RuntimeError("pyfixest allocated nothing on the GPU")
+    coefs = fit.coef().to_dict()
+    notes = sorted({str(w.message).strip().splitlines()[0][:160] for w in caught
+                    if not issubclass(w.category, (DeprecationWarning, FutureWarning))})
+    return {"t_read": t_read, "t_fit": t_fit, "n_obs": int(fit._N),
+            "coefs": {k: float(coefs[k]) for k in COEFS}, "gpu_peak_mb": gpu.peak_mb,
+            "notes": "; ".join(notes)}
+
+
 def run_xhdfe(variant, path):
     if variant == "cuda":
         os.environ["XHDFE_GPU_BACKEND"] = "cuda"
@@ -182,6 +232,8 @@ def run_hdfe(variant, path, workdir):
 def runner(kind, variant, path, workdir):
     if kind == "xhdfe":
         return run_xhdfe(variant, path)
+    if kind == "pyfixest":
+        return run_pyfixest(variant, path)
     return run_hdfe(variant, path, workdir)
 
 
@@ -202,7 +254,8 @@ def gpu_machine_info(found):
     info["gpus"] = [dict(zip(("name", "memory_mib", "driver", "compute_capability"), g))
                     for g in found]
     info.update({name: version(name) for name in
-                 ("cupy-cuda13x", "cupy-cuda12x", "cudf-polars-cu13", "cudf-polars-cu12")})
+                 ("cupy-cuda13x", "cupy-cuda12x", "cudf-polars-cu13", "cudf-polars-cu12",
+                  "torch")})
     return info
 
 
@@ -252,14 +305,15 @@ def main():
               f"{shape['rows']:,} rows ===", flush=True)
         todo = [label for label in configs
                 if not is_done(CSV, {"n_workers": n_workers, "configuration": label})]
-        # warm up, once, what each pending hdfe_stream configuration compiles
-        # and caches on disk (numba's kernels; CuPy's and cudf's), so that it
-        # is not charged to whichever size runs first
+        # warm up, once, what each pending configuration compiles and caches
+        # on disk (numba's kernels; CuPy's and cudf's; pyfixest's
+        # torch.compile), so that it is not charged to whichever size runs
+        # first; xhdfe is compiled ahead of time
         for label in todo:
             kind, variant = configs[label]
-            if kind == "hdfe" and variant not in warmed:
+            if kind != "xhdfe" and (kind, variant) not in warmed:
                 measure(SCRIPT, kind, variant, data_path(25_000), workdir)
-                warmed.add(variant)
+                warmed.add((kind, variant))
 
         reports = {}
         for label, (kind, variant) in configs.items():
@@ -285,6 +339,7 @@ def main():
                     solver=report.get("solver"), device=report.get("device"),
                     polars_cpu_fallbacks=report.get("polars_cpu_fallbacks"),
                     polars_cpu_fallback_reasons=report.get("polars_cpu_fallback_reasons"),
+                    notes=report.get("notes") or None,
                     **{f"coef_{k}": repr(report["coefs"][k]) for k in COEFS})
                 solve = (f"   solve {row['solve_s']:6.2f} s"
                          if row["solve_s"] is not None else "")
@@ -293,6 +348,8 @@ def main():
                       f"{row['peak_gpu_memory_mb']:7,.0f} MB{solve}", flush=True)
                 if row["polars_cpu_fallbacks"]:
                     print(f"  {'':<40}on the CPU: {row['polars_cpu_fallbacks']}", flush=True)
+                if row["notes"]:
+                    print(f"  {'':<40}warned: {row['notes']}", flush=True)
             else:
                 print(f"  {label:<40}{report['status']}", flush=True)
             upsert_csv(CSV, [row])

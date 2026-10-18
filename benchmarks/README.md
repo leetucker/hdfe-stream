@@ -39,10 +39,12 @@ its default; no GPU was involved.
 `gpu_benchmark.py` is separate and experimental: the AKM regression above,
 on one machine with an NVIDIA GPU, for hdfe_stream on the CPU, with its solve
 on the GPU (`device="cuda"`), and with its Polars queries on the GPU as well
-(`polars_engine="gpu"`), against xhdfe on the CPU and on its CUDA backend. It
-needs CuPy and cudf-polars for the hdfe_stream configurations and a CUDA build
-of xhdfe for its GPU one (`XHDFE_ENABLE_CUDA=ON CMAKE_CUDA_ARCHITECTURES=90 pip
-install ...`). On a machine without a GPU it says so and measures nothing.
+(`polars_engine="gpu"`), against pyfixest's LSMR demeaner on its default
+backend and on PyTorch on the GPU (`LsmrDemeaner(backend="torch",
+device="cuda")`), and xhdfe on the CPU and on its CUDA backend. It needs CuPy
+and cudf-polars for the hdfe_stream configurations, a CUDA build of PyTorch
+for pyfixest's GPU one, and a CUDA build of xhdfe for its GPU one
+(`XHDFE_ENABLE_CUDA=ON CMAKE_CUDA_ARCHITECTURES=90 pip install ...`). On a machine without a GPU it says so and measures nothing.
 Results go to `results/gpu.csv`, with the GPU and package versions in
 `results/gpu_machine.json`; they are not drawn in the figures.
 
