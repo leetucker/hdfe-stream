@@ -203,11 +203,13 @@ class _InferenceMixin:
             q = [pl.col(ccol).min().alias("lo"), pl.col(ccol).max().alias("hi")]
             chk = (pl.col("lo") != pl.col("hi")).any()
             if d == self.g_fe:      # bucket by bucket: rows are bucketed by fe[0]
-                ok = not any(pl.scan_parquet(f).group_by(GCODE).agg(q).select(chk)
-                             .collect(engine="streaming").item() for f in self.paths["rows"])
+                ok = not any(self._collect(pl.scan_parquet(f).group_by(GCODE).agg(q)
+                                           .select(chk), f"nesting {d}", engine="streaming").item()
+                             for f in self.paths["rows"])
             else:
-                ok = not (pl.scan_parquet(self.paths["rows"]).group_by(dcol).agg(q).select(chk)
-                          .collect(engine="streaming").item())
+                ok = not self._collect(pl.scan_parquet(self.paths["rows"]).group_by(dcol)
+                                       .agg(q).select(chk), f"nesting {d}",
+                                       engine="streaming").item()
             if ok:
                 out.append(d)
         return out
@@ -299,10 +301,12 @@ class _InferenceMixin:
         out = []
         for j, v in enumerate(self.slope_vars):
             for d in self.o_fe:
-                spread = (pl.scan_parquet(self.paths["rows"])
-                          .group_by(self.code_of[d])
-                          .agg((pl.col(tcol(j + 1)).max() - pl.col(tcol(j + 1)).min()).alias("r"))
-                          .select(pl.col("r").max()).collect(engine="streaming").item())
+                spread = self._collect(
+                    pl.scan_parquet(self.paths["rows"])
+                      .group_by(self.code_of[d])
+                      .agg((pl.col(tcol(j + 1)).max() - pl.col(tcol(j + 1)).min()).alias("r"))
+                      .select(pl.col("r").max()), f"slope spread {v}",
+                      engine="streaming").item()
                 if spread == 0:
                     out.append((v, d))
                     break

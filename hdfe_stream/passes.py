@@ -139,10 +139,11 @@ class _PassesMixin:
             combo = [pl.struct(cols).hash(seed=7).approx_n_unique().alias("__combos")]
         self._log("pass 0: scanning data (counts, means"
                   + (", approximate cardinalities)" if need_card or combo else ")"))
-        mom = (lf.select([pl.len().alias("n")] + wstats + tstats + card + combo
-                         + [pl.col(vcol(j)).mean() for j in range(m)]
-                         + [pl.col(vcol(j)).var().alias(f"var{j}") for j in range(m)])
-                 .collect(engine="streaming"))
+        mom = self._collect(lf.select([pl.len().alias("n")] + wstats + tstats + card + combo
+                                      + [pl.col(vcol(j)).mean() for j in range(m)]
+                                      + [pl.col(vcol(j)).var().alias(f"var{j}")
+                                         for j in range(m)]),
+                            "pass 0 scan", engine="streaming")
         approx = {d: mom[f"__card_{d}"].item() for d in self.fe_user} if need_card else {}
         g, why = self._choose_stream(approx)
         self._setup_dims(g)
@@ -200,7 +201,8 @@ class _PassesMixin:
                 coded = restrict(coded)
         for name, cols, cc, path in maps:
             self._log(f"pass 0: factorizing {name}")
-            lf.select(cols).unique().sort(cols).with_row_index(cc).sink_parquet(path)
+            self._sink(lf.select(cols).unique().sort(cols).with_row_index(cc), path,
+                       f"pass 0 factorize {name}")
             nl = pl.scan_parquet(path).select(pl.len()).collect().item()
             if name in self.o_fe:
                 self.n_levels[name] = nl
@@ -213,7 +215,7 @@ class _PassesMixin:
             # go to disk in the order they arrive, in one file.
             self._log("pass 0: writing rows (no fixed effects: no grouping)")
             out = str(self.workdir / "rows_b0000.parquet")
-            coded.sink_parquet(out, row_group_size=self.rgs)
+            self._sink(coded, out, "pass 0 write rows", row_group_size=self.rgs)
             self.paths["rows"] = [out]
             self._track_disk()
             for spec in self.clusters.values():
@@ -225,9 +227,12 @@ class _PassesMixin:
         key = pl.col(g_cols[0]) if len(g_cols) == 1 else pl.struct(g_cols)
         self._log(f"pass 0: hash-partitioning rows into {P} {self.g_fe} buckets")
         shutil.rmtree(self.paths["partitioned"], ignore_errors=True)
-        (coded.with_columns((key.hash(seed=20260921) % P).cast(pl.UInt32).alias(BUCKET))
-              .sink_parquet(pl.PartitionBy(self.paths["partitioned"], key=BUCKET,
-                                           include_key=False)))
+        self._sink(coded.with_columns((key.hash(seed=20260921) % P).cast(pl.UInt32)
+                                      .alias(BUCKET)),
+                   pl.PartitionBy(self.paths["partitioned"], key=BUCKET, include_key=False),
+                   "pass 0 partition",
+                   before_retry=lambda: shutil.rmtree(self.paths["partitioned"],
+                                                      ignore_errors=True))
 
         # Sort each bucket by fe[0] and assign dense codes that keep
         # increasing across buckets.
@@ -279,14 +284,18 @@ class _PassesMixin:
             # A sort holds the whole bucket anyway, so it is collected and
             # written rather than sunk: Polars 2.0's streaming sort peaks at
             # about 1.5x the memory of its in-memory engine.
-            sorted_bucket = (bucket
+            query = (bucket
                .sort(sort_by)
                .with_columns((new_group.cast(pl.UInt32).cum_sum() - 1 + offset)
-                             .cast(pl.UInt32).alias(GCODE))
-               .collect(engine="in-memory"))
-            sorted_bucket.write_parquet(out, row_group_size=self.rgs)
-            offset = sorted_bucket[GCODE].max() + 1
-            del sorted_bucket
+                             .cast(pl.UInt32).alias(GCODE)))
+            if self._sort_on_gpu(query, out):
+                offset = (pl.scan_parquet(out).select(pl.col(GCODE).max())
+                          .collect(engine="streaming").item() + 1)
+            else:
+                sorted_bucket = query.collect(engine="in-memory")
+                sorted_bucket.write_parquet(out, row_group_size=self.rgs)
+                offset = sorted_bucket[GCODE].max() + 1
+                del sorted_bucket
             self.paths["rows"].append(out)
         self.n_levels = {self.g_fe: offset, **self.n_levels}
         self._track_disk()
@@ -548,7 +557,7 @@ class _PassesMixin:
         ).fill_null(False)
         self._sample_spec = {
             "source": raw, "row_id": self.row_id, "usable": usable,
-            "n_raw": raw.select(pl.len()).collect(engine="streaming").item(),
+            "n_raw": self._collect(raw.select(pl.len()), "row count", engine="streaming").item(),
             "fe_cols": dict(self.fe_cols),
             "tables": {"min_degree": dict(self._pruned_tables),
                        "disconnected": dict(self._disconnected_tables),
@@ -663,9 +672,9 @@ class _PassesMixin:
         while quiet < len(dims) - bool(found):
             d = dims[i % len(dims)]
             on = self.fe_cols[d]
-            bad = (cur.group_by(on).agg(pl.len().alias(f"{PREFIX}n"))
-                      .filter(pl.col(f"{PREFIX}n") == 1).select(on)
-                      .collect(engine="streaming"))
+            bad = self._collect(cur.group_by(on).agg(pl.len().alias(f"{PREFIX}n"))
+                                   .filter(pl.col(f"{PREFIX}n") == 1).select(on),
+                                f"singletons {d}", engine="streaming")
             if bad.height:
                 found.setdefault(d, []).append(bad)
                 cur = _drop_levels(cur, {d: bad}, self.fe_cols)

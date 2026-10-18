@@ -11,6 +11,7 @@ import gc
 import logging
 import time
 import traceback
+from pathlib import Path
 from typing import Any, Sequence
 
 import numba as nb
@@ -169,6 +170,23 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
     precond : {"jacobi", "amg"}, default "jacobi"
         ``"amg"`` is pyamg smoothed aggregation, for the explicit solver
         only.
+    device : {"cpu", "cuda"}, default "cpu"
+        Experimental. ``"cuda"`` runs the solve on an NVIDIA GPU through CuPy
+        (``pip install cupy-cuda13x``, or the build for your CUDA version):
+        S is built on the CPU, copied to the GPU once, and the
+        conjugate-gradient iterations run there. Needs ``solver="auto"`` or
+        ``"explicit"`` and ``precond="jacobi"``; if S exceeds `max_s_gb`,
+        ``"auto"`` falls back to ``"stream_cg"`` on the CPU, as without a
+        GPU. Only the solve moves: the passes over the rows, and everything
+        after the fit, stay on the CPU. The estimates agree with the CPU's to
+        within the solver tolerance, not to the last digit. A GPU's double
+        precision is only fast on data-center cards (A100, H100, B200).
+    polars_engine : {"cpu", "gpu"}, default "cpu"
+        Experimental. ``"gpu"`` runs the fit's Polars queries (pass 0's scan,
+        factorization, partitioning and sorts, and the checks after the
+        solve) on the cudf-polars GPU engine (``pip install
+        cudf-polars-cu13``). A query the engine cannot run is run on the CPU
+        instead, and listed in ``diagnostics["polars_gpu_fallbacks"]``.
     tol : float, default 1e-10
         Conjugate-gradient convergence tolerance, on each column's residual
         relative to its right-hand side.
@@ -303,7 +321,8 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
                  verbose: bool = True, logger: logging.Logger | None = None,
                  log_level: int = logging.INFO, outputs: str = "auto",
                  save_resid: bool = True, keep_intermediates: bool = False,
-                 collapse_cells: bool | str = "auto") -> None:
+                 collapse_cells: bool | str = "auto", device: str = "cpu",
+                 polars_engine: str = "cpu") -> None:
         ys, xs = _norm_vars(y), _norm_vars(x if x is not None else [])
         self.var_names = list(ys) + [k for k in xs if k not in ys]
         self.var_exprs = {**xs, **ys}
@@ -376,6 +395,22 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         if assembly not in ("auto", "cells", "rows"):
             raise ValueError("assembly must be 'auto', 'cells' or 'rows'")
         self.solver, self.precond = solver, precond
+        if device not in ("cpu", "cuda"):
+            raise ValueError("device must be 'cpu' or 'cuda'")
+        if device == "cuda" and (solver not in ("auto", "explicit") or precond != "jacobi"):
+            raise ValueError("device='cuda' runs the explicit solver with the Jacobi "
+                             "preconditioner: use solver='auto' or 'explicit' and "
+                             "precond='jacobi'")
+        if polars_engine not in ("cpu", "gpu"):
+            raise ValueError("polars_engine must be 'cpu' or 'gpu'")
+        if device == "cuda":
+            from .gpu import cuda_backend
+            cuda_backend()          # fail now, not after pass 0, without CuPy or a GPU
+        if polars_engine == "gpu":
+            from .gpu import check_polars_gpu
+            check_polars_gpu()
+        self.device, self.polars_engine = device, polars_engine
+        self.polars_gpu_fallbacks = []
         if self.slopes and solver == "within":
             raise ValueError("solver='within' does not support varying slopes; "
                              "use 'auto', 'explicit' or 'stream_cg'")
@@ -436,6 +471,7 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         self.workdir = p = self._run.path
         self.disk_peak = 0
         self.slope_redundancy = None    # found once per fit by _redundant_slopes
+        self.polars_gpu_fallbacks = []
         self.paths = {
             "maps": {},
             "partitioned": str(p / "rows_partitioned"),
@@ -449,6 +485,55 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
 
     def _log(self, msg):
         _log(self.verbose, msg, self.logger, self.log_level)
+
+    # The fit's own Polars queries go through these two, so that
+    # polars_engine="gpu" can send them to the cudf-polars engine. The engine
+    # is asked to raise rather than fall back silently, and a query it cannot
+    # run is run again on the CPU and recorded under `what`, which is how the
+    # benchmarks can tell what actually ran on the GPU. On the CPU the engine
+    # is always named, as everywhere in the library, so that Polars 1 and 2
+    # run the same one.
+    def _gpu_engine(self):
+        # one engine, and so one GPU memory pool, for all of a fit's queries
+        if getattr(self, "_polars_gpu", None) is None:
+            self._polars_gpu = pl.GPUEngine(raise_on_fail=True)
+        return self._polars_gpu
+
+    def _gpu_failed(self, what, err):
+        reason = (str(err).strip().splitlines() or [type(err).__name__])[0][:200]
+        self.polars_gpu_fallbacks.append({"query": what, "reason": reason})
+        self._debug(f"  polars GPU engine: {what} ran on the CPU ({reason})")
+
+    def _collect(self, lf, what, engine):
+        if self.polars_engine == "gpu":
+            try:
+                return lf.collect(engine=self._gpu_engine())
+            except Exception as err:            # noqa: BLE001
+                self._gpu_failed(what, err)
+        return lf.collect(engine=engine)
+
+    def _sink(self, lf, target, what, before_retry=None, **kw):
+        if self.polars_engine == "gpu":
+            try:
+                return lf.sink_parquet(target, engine=self._gpu_engine(), **kw)
+            except Exception as err:            # noqa: BLE001
+                self._gpu_failed(what, err)
+                if before_retry is not None:
+                    before_retry()
+        return lf.sink_parquet(target, engine="streaming", **kw)
+
+    def _sort_on_gpu(self, query, out):
+        """Pass 0's bucket sort, written straight from the GPU; False if
+        the CPU is to do it (no GPU engine asked for, or it could not)."""
+        if self.polars_engine != "gpu":
+            return False
+        try:
+            query.sink_parquet(out, row_group_size=self.rgs, engine=self._gpu_engine())
+            return True
+        except Exception as err:                # noqa: BLE001
+            self._gpu_failed("pass 0 sort", err)
+            Path(out).unlink(missing_ok=True)
+            return False
 
     def _acc_copies(self, levels, width):
         """How many per-thread copies of a levels x width float64 accumulator
@@ -674,6 +759,8 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         for r in results:
             r.diagnostics["disk_peak_gb"] = round(peak, 3)
             r.diagnostics["disk_results_gb"] = round(kept, 3)
+            if self.polars_engine == "gpu":
+                r.diagnostics["polars_gpu_fallbacks"] = list(self.polars_gpu_fallbacks)
         self._log(f"done in {time.time()-t0:.1f}s; peak disk use {peak:.2f} GB, result files "
                   f"{kept:.2f} GB in {self.workdir}"
                   + (" (removed with the results)" if self.outputs == "auto" else ""))
