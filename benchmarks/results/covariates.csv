@@ -1,26 +1,36 @@
 n_covariates,bin_months,n_workers,configuration,order,status,wall_s,read_s,fit_s,peak_memory_mb,import_memory_mb,peak_disk_mb,n_coef
 8,60,1000000,pyfixest (MAP),0,ok,90.311,0.123,90.188,5829.4,18.1,0.0,8
+8,60,1000000,fixest (R),0,ok,17.917,0.239,17.678,3508.4,187.9,0,8
 8,60,1000000,pyfixest (LSMR),1,ok,13.029,0.126,12.903,8608.2,18.1,0.0,8
+8,60,1000000,FixedEffectModels.jl,1,ok,22.706,0.657,22.049,3250.6,603.9,0,8
 8,60,1000000,xhdfe,2,ok,11.819,0.12,11.699,9458.3,18.1,0.0,9
 8,60,1000000,hdfe_stream,3,ok,5.31,0.0,5.31,3059.5,18.1,297.0,8
 8,60,1000000,hdfe_stream (sized to the design),4,ok,5.332,0.0,5.332,3174.5,18.1,297.0,8
 41,12,1000000,pyfixest (MAP),0,ok,280.497,0.122,280.375,13899.7,18.1,0.0,41
+41,12,1000000,fixest (R),0,ok,63.081,0.241,62.84,10532.9,188.1,0,41
 41,12,1000000,pyfixest (LSMR),1,ok,33.648,0.119,33.528,21023.8,18.1,0.0,41
+41,12,1000000,FixedEffectModels.jl,1,ok,89.162,0.756,88.406,7806.6,604.0,0,41
 41,12,1000000,xhdfe,2,ok,35.999,0.12,35.878,22404.4,18.1,0.0,42
 41,12,1000000,hdfe_stream,3,ok,17.359,0.0,17.359,8370.2,18.1,602.7,41
 41,12,1000000,hdfe_stream (sized to the design),4,ok,15.019,0.0,15.019,3647.0,18.1,604.4,41
 83,6,1000000,pyfixest (MAP),0,ok,507.358,0.125,507.234,25225.6,18.1,0.0,83
+83,6,1000000,fixest (R),0,ok,119.026,0.243,118.783,19385.2,188.0,0,83
 83,6,1000000,pyfixest (LSMR),1,killed (out of memory),,,,,,,
+83,6,1000000,FixedEffectModels.jl,1,ok,177.26,0.771,176.489,13662.8,604.6,0,83
 83,6,1000000,xhdfe,2,killed (out of memory),,,,,,,
 83,6,1000000,hdfe_stream,3,ok,33.202,0.0,33.202,14722.9,17.8,1030.8,83
 83,6,1000000,hdfe_stream (sized to the design),4,ok,27.47,0.0,27.47,4248.5,18.0,1035.5,83
 167,3,1000000,pyfixest (MAP),0,killed (out of memory),,,,,,,
+167,3,1000000,fixest (R),0,killed (out of memory),,,,,,,
 167,3,1000000,pyfixest (LSMR),1,killed (out of memory),,,,,,,
+167,3,1000000,FixedEffectModels.jl,1,ok,321.528,0.788,320.74,24060.3,588.3,0,167
 167,3,1000000,xhdfe,2,killed (out of memory),,,,,,,
 167,3,1000000,hdfe_stream,3,ok,64.669,0.0,64.669,24463.4,17.8,1883.2,167
 167,3,1000000,hdfe_stream (sized to the design),4,ok,56.317,0.0,56.317,5331.6,18.0,1895.4,167
 503,1,1000000,pyfixest (MAP),0,killed (out of memory),,,,,,,
+503,1,1000000,fixest (R),0,out of memory: cannot allocate vector of size 31.9 Gb,,,,,,,
 503,1,1000000,pyfixest (LSMR),1,killed (out of memory),,,,,,,
+503,1,1000000,FixedEffectModels.jl,1,out of memory: ERROR: LoadError: OutOfMemoryError(),,,,,,,
 503,1,1000000,xhdfe,2,killed (out of memory),,,,,,,
 503,1,1000000,hdfe_stream,3,killed (out of memory),,,,,,,
 503,1,1000000,hdfe_stream (sized to the design),4,ok,157.197,0.0,157.197,11013.9,17.8,5308.2,503

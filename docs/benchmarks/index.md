@@ -10,15 +10,16 @@ to 503.
 
 | benchmark | job | compared with |
 |---|---|---|
-| [AKM regression](akm.md) | `log_earn ~ age_squared + age_cubed \| worker_id + firm_id + year`, clustered by worker | pyfixest (MAP and LSMR demeaners), xhdfe |
-| [Many covariates](covariates.md) | `log_earn ~ i(age_bin) \| worker_id + firm_id`, clustered by worker, with age bins from five years to one month wide | pyfixest (both demeaners), xhdfe |
+| [AKM regression](akm.md) | `log_earn ~ age_squared + age_cubed \| worker_id + firm_id + year`, clustered by worker | pyfixest (MAP and LSMR demeaners), xhdfe, fixest (R), FixedEffectModels.jl (Julia) |
+| [Many covariates](covariates.md) | `log_earn ~ i(age_bin) \| worker_id + firm_id`, clustered by worker, with age bins from five years to one month wide | pyfixest (both demeaners), xhdfe, fixest (R), FixedEffectModels.jl (Julia) |
 | [Poisson and logit](glm.md) | a count and a binary outcome on `age_squared + age_cubed \| worker_id + firm_id + year`, clustered by worker | pyfixest's `fepois` and `feglm` (LSMR demeaner) |
 | [Poisson and logit, many covariates](glm_covariates.md) | the same two outcomes on `i(age_bin) \| worker_id + firm_id`, clustered by worker | pyfixest's `fepois` and `feglm` (LSMR demeaner) |
 | [KSS](kss.md) | the leave-out variance decomposition of `log_earn ~ age_squared + age_cubed \| worker_id + firm_id`, with and without standard errors | xhdfe |
 
 In brief: hdfe_stream uses a fraction of the memory at scale, and is not slower
 for it. At 5 million workers the AKM regression took 22 s and 3.9 GB, against
-74 s and 27.0 GB for pyfixest (LSMR) and 79 s and 19.3 GB for xhdfe. On
+74 s and 27.0 GB for pyfixest (LSMR), 79 s and 19.3 GB for xhdfe, 79 s and
+9.5 GB for FixedEffectModels.jl, and 152 s and 9.1 GB for fixest. On
 small data the in-memory libraries use less memory, since an hdfe_stream process
 costs about 0.8 GB before it has done anything.
 
@@ -28,8 +29,9 @@ Every configuration runs in its own subprocess, since peak memory is a
 per-process high-water mark. The measurements are:
 
 - **Wall time:** end to end, including reading the data. The in-memory
-  libraries need it in a DataFrame first; hdfe_stream reads the Parquet file
-  itself, in batches. That difference is the comparison, not an artifact of
+  libraries need it in a data frame first (pandas, R's data.frame read with
+  arrow, or Julia's DataFrame read with Parquet2.jl); hdfe_stream reads the
+  Parquet file itself, in batches. That difference is the comparison, not an artifact of
   how it is measured.
 - **Peak memory:** the process's `VmHWM`, which includes the roughly 0.5 GB
   that importing the libraries costs.
@@ -47,6 +49,15 @@ configuration's coefficients agree. The KSS benchmark reports how far
 hdfe_stream's and xhdfe's estimates are apart; that gap is random-projection
 noise, well under 1% at every size measured.
 
+fixest and FixedEffectModels.jl run as R and Julia processes, measured the
+same way. Both use every logical CPU, as the Python libraries do (fixest's
+default is half of them, and Julia's one thread); FixedEffectModels.jl is given
+a tolerance of 1e-8, since at its default of 1e-6 its estimates fall short of
+the others' accuracy; and singletons are kept or dropped as pyfixest does in
+each benchmark. Julia compiles on first use, so FixedEffectModels.jl fits a
+small panel first, untimed, as hdfe_stream's numba kernels are compiled before
+it is timed.
+
 xhdfe is compared on its CPU backend, which is its default; no GPU was
 involved. The GLM benchmarks compare with pyfixest alone, since xhdfe fits
 linear models only. pytwoway was also considered for KSS, but version 0.3.21
@@ -59,11 +70,16 @@ Measured on an AWS EC2 `c8id.4xlarge` instance: an Intel Xeon 6975P-C with 16
 vCPUs and 30.8 GB of RAM, Linux, and the instance's local NVMe drive for the
 data and work directories, so that disk traffic is not network traffic. Python
 3.14.8, polars 2.0.0, numpy 2.5.3, numba 0.68.0, scipy 1.18.1, pyfixest 0.60.0,
-xhdfe 2.28.1 (CPU backend) and hdfe_stream 0.4.0. All five benchmarks ran one
-after the other on 2026-10-16 and 17, as a single job on a spot instance.
+xhdfe 2.28.1 (CPU backend) and hdfe_stream 0.4.0; R 4.5.3 with fixest 0.14.2,
+and Julia 1.13.2 with FixedEffectModels.jl 2.1.0. All five benchmarks ran one
+after the other on 2026-10-16 and 17, as a single job on a spot instance;
+fixest and FixedEffectModels.jl were added on 2026-10-19, measured on the same
+instance type set up the same way, with the same Python environment, in a
+second job that ran only them.
 The benchmarks run in a service limited to 96% of the machine's memory, with no
-swap; a process that reaches the limit is killed, so "out of memory" in the
-results means needing more than about 29.6 GB. AWS reclaimed the spot instance
+swap; a process that reaches the limit is killed, and one that asks for a
+single block larger than the machine can back is refused it, so "out of memory"
+in the results means needing more than about 29.6 GB. AWS reclaimed the spot instance
 several times; a step that is interrupted starts again from the beginning, so
 every row is from one uninterrupted run. The exact versions are in
 [benchmarks/results/machine.json](https://github.com/leetucker/hdfe-stream/blob/main/benchmarks/results/machine.json).

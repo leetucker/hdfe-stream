@@ -4,13 +4,15 @@ A standard three-way AKM specification,
 `log_earn ~ age_squared + age_cubed | worker_id + firm_id + year`, clustered by
 worker, on the simulated panel that ships with the library. It is compared with
 [pyfixest](https://github.com/py-econometrics/pyfixest), under both of its
-demeaners, and with [xhdfe](https://github.com/reisportela/xhdfe-xfe), on its
-CPU backend. Sizes run from 25,000 to 5,000,000 workers, with firms = workers /
-15 at every size and about 8.5 rows per worker, so the largest panel has 42.5
-million rows. Every configuration agrees with every other on the coefficients
-to within 1e-10, so these are measurements of equally good answers. Wall time
-includes reading the data, because pyfixest and xhdfe need it in memory before
-they can start and hdfe_stream reads it itself; [how it is
+demeaners, with [xhdfe](https://github.com/reisportela/xhdfe-xfe), on its CPU
+backend, and with R's [fixest](https://lrberge.github.io/fixest/) and Julia's
+[FixedEffectModels.jl](https://github.com/FixedEffects/FixedEffectModels.jl).
+Sizes run from 25,000 to 5,000,000 workers, with firms = workers / 15 at every
+size and about 8.5 rows per worker, so the largest panel has 42.5 million rows.
+Every configuration agrees with every other on the coefficients to within
+2e-9, so these are measurements of equally good answers. Wall time includes
+reading the data, because the other libraries need it in memory before they can
+start and hdfe_stream reads it itself; [how it is
 measured](index.md#how-it-is-measured) has the details.
 
 ```bash
@@ -55,15 +57,18 @@ At 5 million workers:
 | pyfixest (MAP, its default) | 919 s | 20.8 GB | — |
 | pyfixest (LSMR) | 74 s | 27.0 GB | — |
 | xhdfe | 79 s | 19.3 GB | — |
+| fixest (R) | 152 s | 9.1 GB | — |
+| FixedEffectModels.jl (Julia) | 79 s | 9.5 GB | — |
 | hdfe_stream (`explicit`, its default) | 22 s | 3.9 GB | 2.6 GB |
 | hdfe_stream (`stream_cg`) | 22 s | 3.9 GB | 2.6 GB |
 | **hdfe_stream (`stream_cg`, low memory)** | **25 s** | **3.6 GB** | 2.7 GB |
 
 ## Reading the figures
 
-**Memory is the point.** At 5 million workers the in-memory libraries peak at
-19–27 GB: pyfixest's LSMR run needed 27.0 GB of this machine's 30.8 GB.
-hdfe_stream peaks at 3.9 GB with its defaults and 3.6 GB with the batch and
+**Memory is the point.** At 5 million workers pyfixest and xhdfe peak at
+19–27 GB: pyfixest's LSMR run needed 27.0 GB of this machine's 30.8 GB. fixest
+and FixedEffectModels.jl are leaner, at 9.1 and 9.5 GB. hdfe_stream peaks at
+3.9 GB with its defaults and 3.6 GB with the batch and
 bucket sizes turned down ("low memory": `rows_per_bucket=250_000`,
 `batch_rows=200_000`), for about 10% more time and the same answer. What it
 spends instead is disk: about 61 bytes per row, 2.6 GB at 42.5 million rows,
@@ -73,22 +78,28 @@ to the data. hdfe_stream's low-memory setting grows far more slowly: 0.8 GB at
 
 **It is not slower for it.** From 400,000 workers up, hdfe_stream is the
 fastest configuration measured: 2.6 s against xhdfe's 3.4 s there, and at 5
-million workers 22 s against pyfixest's 74 s (LSMR) or 919 s (MAP) and xhdfe's
-79 s. Below that xhdfe is faster, by a second or less at 100,000 workers
-(1.1 s against 1.4 s). With AKM panel data,
+million workers 22 s against 74 s for pyfixest (LSMR; 919 s with MAP), 79 s for
+xhdfe and FixedEffectModels.jl, and 152 s for fixest. Below that the in-memory
+libraries are faster, by a second or less: at 100,000 workers fixest takes
+0.8 s and xhdfe 1.1 s, against hdfe_stream's 1.4 s. fixest's time grows faster
+than the data from a million workers up (15 s there, 152 s for five times the
+rows). With AKM panel data,
 reducing rows to worker-firm cells before solving more than pays for the disk
 traffic. The simulated panel has about 8.5 rows per worker and one cell per
 row, which suits this approach; a specification where the cell table is no
 smaller than the data, and the fixed effects are less local, may do worse.
 
-**At 100,000 workers and below, the in-memory libraries use less memory.**
-Running any hdfe_stream fit costs about 0.8 GB, most of it importing polars,
-numba and scipy and starting Polars' streaming engine and numba's thread pools.
-On small data that floor dominates: at 25,000 workers xhdfe peaks at 0.35 GB and
-pyfixest at about 0.6 GB, and at 100,000 xhdfe still needs 0.63 GB against
-hdfe_stream's 1.2 GB. By 400,000 workers hdfe_stream uses the least (1.8 GB,
-against 2.5 GB for xhdfe and 2.9 GB for pyfixest's LSMR). This is the concrete version of "use pyfixest (or
-xhdfe) if your data fits".
+**On small data the in-memory libraries use less memory.** Running any
+hdfe_stream fit costs about 0.8 GB, most of it importing polars, numba and
+scipy and starting Polars' streaming engine and numba's thread pools. On small
+data that floor dominates: at 25,000 workers fixest peaks at 0.31 GB, xhdfe at
+0.35 GB and pyfixest at about 0.6 GB (FixedEffectModels.jl at 0.9 GB, most of it
+the Julia runtime and compiled code). fixest stays the leanest up to 400,000
+workers, at 1.0 GB against hdfe_stream's 1.8 GB (1.1 GB in the low-memory
+setting) and 2.5 GB for xhdfe; at a million workers fixest,
+FixedEffectModels.jl and hdfe_stream's defaults all need about 2.4–2.5 GB, and
+from there hdfe_stream pulls away. This is the concrete version of "use
+pyfixest (or another in-memory library) if your data fits".
 
 **The default pyfixest demeaner is not the one to compare against.**
 `MapDemeaner` (alternating projections) is 9 to 12 times slower than
@@ -96,9 +107,11 @@ xhdfe) if your data fits".
 alternating projections struggles with. If you are comparing, compare against
 LSMR.
 
-**hdfe_stream's `within` solver** uses more memory at scale: 15.1 GB at 5
-million workers, where `stream_cg` and `explicit` stay near 4 GB. Prefer
-those when memory is the constraint.
+**hdfe_stream's `within` solver** is measured but no longer drawn; its rows
+are in akm.csv. It is no faster than the default at any size here (1.17 s
+against 1.14 s at 25,000 workers, 50 s against 22 s at 5 million), and uses
+more memory at scale: 15.1 GB at 5 million workers, where `stream_cg` and
+`explicit` stay near 4 GB.
 
 ## Trading memory for time
 

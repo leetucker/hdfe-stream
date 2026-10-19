@@ -1,5 +1,6 @@
 """Time, peak memory and peak disk as the number of covariates grows: hdfe_stream
-against pyfixest and xhdfe, on one panel.
+against pyfixest and xhdfe, and R's fixest and Julia's FixedEffectModels.jl, on
+one panel.
 
     python benchmarks/covariates_benchmark.py                 # every width
     python benchmarks/covariates_benchmark.py 12 3            # pick bin widths
@@ -31,9 +32,14 @@ collinear with the fixed effects, and the benchmark would be timing each
 library's collinearity handling as much as its estimation.
 
 Each library gets the categorical term in its own formula syntax (xhdfe's is
-formulaic's C()) and builds its own design, as a user would. pyfixest and
-xhdfe need the data in memory; hdfe_stream reads the Parquet file itself, in
-batches. hdfe_stream runs twice: at its defaults, and with bucket, batch and
+formulaic's C(), fixest's is i() as in pyfixest, and FixedEffectModels.jl's a
+column with dummy coding) and builds its own design, as a user would.
+pyfixest, xhdfe, fixest and FixedEffectModels.jl need the data in memory;
+hdfe_stream reads the Parquet file itself, in batches. Singletons are dropped,
+pyfixest's and hdfe_stream's default (fixest is asked to; it is
+FixedEffectModels.jl's default too), and fixest and FixedEffectModels.jl use
+every logical CPU, as in the regression benchmark, where the R and Julia
+settings are explained. hdfe_stream runs twice: at its defaults, and with bucket, batch and
 row-group sizes scaled down with the width of the design (`sized_options`
 below), which is the setting to use for a wide model. Results go to
 benchmarks/results/covariates.csv.
@@ -46,8 +52,9 @@ import re
 import time
 from pathlib import Path
 
-from _harness import (DATA_DIR, RESULTS_DIR, data_path, is_done, measure,
-                      run_child, upsert_csv, write_machine_info)
+from _harness import (DATA_DIR, EXTERNAL, RESULTS_DIR, data_path, external_command,
+                      external_missing, is_done, measure, run_child, upsert_csv,
+                      write_machine_info)
 
 SCRIPT = Path(__file__).resolve()
 N_WORKERS = 1_000_000
@@ -61,6 +68,8 @@ CONFIGS = {
     "xhdfe": ("xhdfe", "default"),
     "hdfe_stream": ("hdfe", "default"),
     "hdfe_stream (sized to the design)": ("hdfe", "sized"),
+    "fixest (R)": ("fixest", "default"),
+    "FixedEffectModels.jl": ("fem", "default"),
 }
 
 # "sized to the design": rows held at once scale down with the width of the
@@ -96,6 +105,18 @@ def covariate_path():
     return path
 
 
+def warmup_path():
+    """The first rows of the covariate panel, which FixedEffectModels.jl fits
+    before it is timed, so that compiling is not counted."""
+    path = DATA_DIR / f"covariates_{N_WORKERS}_head.parquet"
+    if not path.exists():
+        import polars as pl
+
+        pl.scan_parquet(covariate_path()).head(200_000).sink_parquet(
+            path, engine="streaming")
+    return path
+
+
 def formulas(width, path):
     """(pyfixest/hdfe_stream formula, xhdfe formula, number of indicators)."""
     import polars as pl
@@ -112,8 +133,9 @@ def formulas(width, path):
 
 def level_of(name):
     """The age bin a coefficient belongs to, from any library's naming:
-    'age_bin_3::101' (pyfixest), 'C(age_bin_3)[T.101]' (formulaic)."""
-    match = re.search(r"(?:::|\[T\.)(-?\d+)\]?$", name)
+    'age_bin_3::101' (pyfixest, fixest), 'C(age_bin_3)[T.101]' (formulaic),
+    'age_bin_3: 101' (FixedEffectModels.jl)."""
+    match = re.search(r"(?:::|\[T\.|: )(-?\d+)\]?$", name)
     return int(match.group(1)) if match else None
 
 
@@ -177,6 +199,29 @@ def run_hdfe(variant, width, path, workdir):
     return out
 
 
+def external(kind, width, path):
+    """The command for fixest or FixedEffectModels.jl, or None."""
+    import polars as pl
+
+    column = f"age_bin_{width}"
+    ref = pl.scan_parquet(path).select(pl.col(column).min()).collect(
+        engine="streaming").item()
+    return external_command(kind, path=path, warmup_path=warmup_path(),
+                            outcome="log_earn", covariates=[],
+                            categorical={"column": column, "ref": ref},
+                            fixed_effects=["worker_id", "firm_id"],
+                            cluster="worker_id", drop_singletons=True,
+                            columns=columns_for(width))
+
+
+def external_report(report):
+    """A fixest or FixedEffectModels.jl report, in the form of the others'."""
+    coefs = report.pop("coefs")
+    report["coef"] = {str(level_of(k)): float(v) for k, v in coefs.items()}
+    report["n_coef"] = len(coefs)
+    return report
+
+
 def runner(kind, variant, path, workdir):
     library, width = kind.split(":")
     width = int(width)
@@ -218,7 +263,7 @@ def main():
                 if not is_done(RESULTS_DIR / "covariates.csv",
                                {"n_covariates": k, "configuration": label},
                                key=("n_covariates", "configuration"))]
-        if todo and not warmed:
+        if not warmed and any(configs[label][0] == "hdfe" for label in todo):
             # compile numba kernels before timing anything
             measure(SCRIPT, "hdfe:60", "default", path, workdir)
             warmed = True
@@ -227,8 +272,16 @@ def main():
             if label not in todo:
                 print(f"  {label:<36}measured before, kept", flush=True)
                 continue
+            command = None
+            if library in EXTERNAL:
+                command = external(library, width, path)
+                if command is None:
+                    print(f"  {label:<36}{external_missing(library)}", flush=True)
+                    continue
             report = measure(SCRIPT, f"{library}:{width}", variant, path, workdir,
-                             timeout=TIMEOUT_S)
+                             timeout=TIMEOUT_S, command=command)
+            if command is not None and report["status"] == "ok":
+                report = external_report(report)
             reports[label] = report
             row = {"n_covariates": k, "bin_months": width, "n_workers": N_WORKERS,
                    "configuration": label, "order": order,

@@ -17,9 +17,14 @@ Only this file needs changing to restyle them; the numbers stay in the CSVs.
 
 Colors follow the library, not the rank of the line, so a library looks the
 same in every figure: xhdfe is aqua in both benchmarks, hdfe_stream's default
-magenta, its low-memory setting violet. Every series also has its own marker,
-so no line is identified by color alone. Points that failed or timed out are
-left out, and listed in the note under the figure.
+magenta, its low-memory setting violet, fixest red, FixedEffectModels.jl green.
+Every series also has its own marker, so no line is identified by color alone.
+Points that failed or timed out are left out, and listed in the note under the
+figure.
+
+Only the configurations listed in SERIES are drawn. The CSVs keep others: the
+AKM benchmark's "hdfe_stream (within)" is measured and kept in akm.csv, but not
+drawn, as the default solver does better at every size but the smallest.
 """
 
 from __future__ import annotations
@@ -62,8 +67,9 @@ SERIES = {
         "xhdfe": ("aqua", "D", "-"),
         "hdfe_stream (explicit)": ("yellow", "^", "-"),
         "hdfe_stream (stream_cg)": ("magenta", "v", "-"),
-        "hdfe_stream (within)": ("green", "P", "-"),
         "hdfe_stream (stream_cg, low memory)": ("violet", "X", "-"),
+        "fixest (R)": ("red", "p", "-"),
+        "FixedEffectModels.jl": ("green", "h", "-"),
     },
     # standard errors are the same library doing more work: same color, dashed
     "kss": {
@@ -79,6 +85,8 @@ SERIES = {
         "xhdfe": ("aqua", "D", "-"),
         "hdfe_stream": ("magenta", "v", "-"),
         "hdfe_stream (sized to the design)": ("violet", "X", "-"),
+        "fixest (R)": ("red", "p", "-"),
+        "FixedEffectModels.jl": ("green", "h", "-"),
     },
     "glm": {
         "pyfixest fepois (LSMR)": ("orange", "s", "-", "pyfixest (LSMR)"),
@@ -143,7 +151,7 @@ def read(name):
 
 
 def _in_memory(label):
-    return label.startswith(("pyfixest", "xhdfe"))
+    return label.startswith(("pyfixest", "xhdfe", "fixest", "FixedEffectModels"))
 
 
 def figure(bench, metric, theme_name, rows):

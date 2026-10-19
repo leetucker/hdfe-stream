@@ -12,14 +12,19 @@
  "numba": "0.68.0",
  "scipy": "1.18.1",
  "pandas": "3.0.6",
- "measured": "2026-10-17",
+ "R": "4.5.3",
+ "fixest": "0.14.2",
+ "julia": "1.13.2",
+ "FixedEffectModels.jl": "2.1.0",
+ "measured": "2026-10-19",
  "ec2": {
-  "run": "2026-10-16T1704Z_c8id.4xlarge_spot",
+  "run": "2026-10-19T0328Z_c8id.4xlarge_spot_external-503",
   "instance_type": "c8id.4xlarge",
   "market": "spot",
   "region": "us-east-2",
   "az": "us-east-2c",
   "memory_max": "96% of memory (systemd MemoryMax)",
-  "data_disk": "local NVMe (/dev/nvme1n1)"
+  "data_disk": "local NVMe (/dev/nvme0n1)",
+  "baseline": "2026-10-19T0257Z_c8id.4xlarge_spot_external"
  }
 }

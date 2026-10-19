@@ -389,6 +389,49 @@ z
      <use xlink:href="#m1806be16ce" x="300.813051" y="122.334958" style="fill: #4a3aa7; stroke: #fcfcfb; stroke-width: 1.2; stroke-linejoin: miter"/>
     </g>
    </g>
+   <g id="line2d_37">
+    <path d="M 62.362592 215.527017 
+L 156.45706 125.972584 
+L 197.066954 76.280423 
+" clip-path="url(#p2034b3658c)" style="fill: none; stroke: #e34948; stroke-width: 2; stroke-linecap: square"/>
+    <defs>
+     <path id="mc6cb08bd41" d="M 0 -3.5 
+L -3.328698 -1.081559 
+L -2.057248 2.831559 
+L 2.057248 2.831559 
+L 3.328698 -1.081559 
+z
+" style="stroke: #fcfcfb; stroke-width: 1.2; stroke-linejoin: miter"/>
+    </defs>
+    <g clip-path="url(#p2034b3658c)">
+     <use xlink:href="#mc6cb08bd41" x="62.362592" y="215.527017" style="fill: #e34948; stroke: #fcfcfb; stroke-width: 1.2; stroke-linejoin: miter"/>
+     <use xlink:href="#mc6cb08bd41" x="156.45706" y="125.972584" style="fill: #e34948; stroke: #fcfcfb; stroke-width: 1.2; stroke-linejoin: miter"/>
+     <use xlink:href="#mc6cb08bd41" x="197.066954" y="76.280423" style="fill: #e34948; stroke: #fcfcfb; stroke-width: 1.2; stroke-linejoin: miter"/>
+    </g>
+   </g>
+   <g id="line2d_38">
+    <path d="M 62.362592 221.744217 
+L 156.45706 150.373155 
+L 197.066954 104.778431 
+L 237.324722 58.680348 
+" clip-path="url(#p2034b3658c)" style="fill: none; stroke: #008300; stroke-width: 2; stroke-linecap: square"/>
+    <defs>
+     <path id="m63236656e7" d="M 0 -3.5 
+L -3.031089 -1.75 
+L -3.031089 1.75 
+L -0 3.5 
+L 3.031089 1.75 
+L 3.031089 -1.75 
+z
+" style="stroke: #fcfcfb; stroke-width: 1.2; stroke-linejoin: miter"/>
+    </defs>
+    <g clip-path="url(#p2034b3658c)">
+     <use xlink:href="#m63236656e7" x="62.362592" y="221.744217" style="fill: #008300; stroke: #fcfcfb; stroke-width: 1.2; stroke-linejoin: miter"/>
+     <use xlink:href="#m63236656e7" x="156.45706" y="150.373155" style="fill: #008300; stroke: #fcfcfb; stroke-width: 1.2; stroke-linejoin: miter"/>
+     <use xlink:href="#m63236656e7" x="197.066954" y="104.778431" style="fill: #008300; stroke: #fcfcfb; stroke-width: 1.2; stroke-linejoin: miter"/>
+     <use xlink:href="#m63236656e7" x="237.324722" y="58.680348" style="fill: #008300; stroke: #fcfcfb; stroke-width: 1.2; stroke-linejoin: miter"/>
+    </g>
+   </g>
    <g id="text_11">
     <text style="font-size: 8px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #52514e" x="47.812453" y="33.641376" transform="rotate(-0 47.812453 33.641376)">this machine's memory (30.8 GB)</text>
    </g>
@@ -396,7 +439,7 @@ z
     <text style="font-size: 11px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #0b0b0b" x="45.082344" y="19.157422" transform="rotate(-0 45.082344 19.157422)">Many covariates (8.5 million rows): peak memory</text>
    </g>
    <g id="legend_1">
-    <g id="line2d_37">
+    <g id="line2d_39">
      <path d="M 328.92341 40.946016 
 L 340.62341 40.946016 
 L 352.32341 40.946016 
@@ -408,7 +451,7 @@ L 352.32341 40.946016
     <g id="text_13">
      <text style="font-size: 9px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #0b0b0b" x="359.52341" y="44.096016" transform="rotate(-0 359.52341 44.096016)">pyfixest (MAP)</text>
     </g>
-    <g id="line2d_38">
+    <g id="line2d_40">
      <path d="M 328.92341 54.446719 
 L 340.62341 54.446719 
 L 352.32341 54.446719 
@@ -420,7 +463,7 @@ L 352.32341 54.446719
     <g id="text_14">
      <text style="font-size: 9px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #0b0b0b" x="359.52341" y="57.596719" transform="rotate(-0 359.52341 57.596719)">pyfixest (LSMR)</text>
     </g>
-    <g id="line2d_39">
+    <g id="line2d_41">
      <path d="M 328.92341 67.947422 
 L 340.62341 67.947422 
 L 352.32341 67.947422 
@@ -432,7 +475,7 @@ L 352.32341 67.947422
     <g id="text_15">
      <text style="font-size: 9px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #0b0b0b" x="359.52341" y="71.097422" transform="rotate(-0 359.52341 71.097422)">xhdfe</text>
     </g>
-    <g id="line2d_40">
+    <g id="line2d_42">
      <path d="M 328.92341 81.448125 
 L 340.62341 81.448125 
 L 352.32341 81.448125 
@@ -444,7 +487,7 @@ L 352.32341 81.448125
     <g id="text_16">
      <text style="font-size: 9px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #0b0b0b" x="359.52341" y="84.598125" transform="rotate(-0 359.52341 84.598125)">hdfe_stream</text>
     </g>
-    <g id="line2d_41">
+    <g id="line2d_43">
      <path d="M 328.92341 94.948828 
 L 340.62341 94.948828 
 L 352.32341 94.948828 
@@ -456,11 +499,35 @@ L 352.32341 94.948828
     <g id="text_17">
      <text style="font-size: 9px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #0b0b0b" x="359.52341" y="98.098828" transform="rotate(-0 359.52341 98.098828)">hdfe_stream (sized to the design)</text>
     </g>
+    <g id="line2d_44">
+     <path d="M 328.92341 108.449531 
+L 340.62341 108.449531 
+L 352.32341 108.449531 
+" style="fill: none; stroke: #e34948; stroke-width: 2; stroke-linecap: square"/>
+     <g>
+      <use xlink:href="#mc6cb08bd41" x="340.62341" y="108.449531" style="fill: #e34948; stroke: #fcfcfb; stroke-width: 1.2; stroke-linejoin: miter"/>
+     </g>
+    </g>
+    <g id="text_18">
+     <text style="font-size: 9px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #0b0b0b" x="359.52341" y="111.599531" transform="rotate(-0 359.52341 111.599531)">fixest (R)</text>
+    </g>
+    <g id="line2d_45">
+     <path d="M 328.92341 121.950234 
+L 340.62341 121.950234 
+L 352.32341 121.950234 
+" style="fill: none; stroke: #008300; stroke-width: 2; stroke-linecap: square"/>
+     <g>
+      <use xlink:href="#m63236656e7" x="340.62341" y="121.950234" style="fill: #008300; stroke: #fcfcfb; stroke-width: 1.2; stroke-linejoin: miter"/>
+     </g>
+    </g>
+    <g id="text_19">
+     <text style="font-size: 9px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #0b0b0b" x="359.52341" y="125.100234" transform="rotate(-0 359.52341 125.100234)">FixedEffectModels.jl</text>
+    </g>
    </g>
   </g>
-  <g id="text_18">
+  <g id="text_20">
    <text style="font-size: 8px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; fill: #52514e" transform="translate(5.328 287.051156)">Missing (out of memory): pyfixest (MAP) at 167 and 503; pyfixest (LSMR) at 83, 167 and 503; xhdfe at 83, 167 and</text>
-   <text style="font-size: 8px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; fill: #52514e" transform="translate(5.328 296.653344)">503; hdfe_stream at 503 covariates.</text>
+   <text style="font-size: 8px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; fill: #52514e" transform="translate(5.328 296.653344)">503; hdfe_stream at 503; fixest (R) at 167 and 503; FixedEffectModels.jl at 503 covariates.</text>
   </g>
  </g>
  <defs>
