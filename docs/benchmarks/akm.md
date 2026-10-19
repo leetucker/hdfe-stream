@@ -98,8 +98,8 @@ the Julia runtime and compiled code). fixest stays the leanest up to 400,000
 workers, at 1.0 GB against hdfe_stream's 1.8 GB (1.1 GB in the low-memory
 setting) and 2.5 GB for xhdfe; at a million workers fixest,
 FixedEffectModels.jl and hdfe_stream's defaults all need about 2.4–2.5 GB, and
-from there hdfe_stream pulls away. This is the concrete version of "use
-pyfixest (or another in-memory library) if your data fits".
+from there hdfe_stream pulls away. On small panels, then, an in-memory library
+is the lighter and quicker choice.
 
 **The default pyfixest demeaner is not the one to compare against.**
 `MapDemeaner` (alternating projections) is 9 to 12 times slower than

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - **Experimental GPU options.** `device="cuda"` runs the solve on an NVIDIA
   GPU through CuPy, and `polars_engine="gpu"` runs the fit's Polars queries on
@@ -15,7 +15,6 @@
 - The choice of Polars engine is now always explicitly specified in the
   codebase. This fixes an issue where the in-memory engine would be used in
   Polars 1.x.x despite the streaming engine being used in Polars 2.x.x.
-
 
 ## 0.4.0
 

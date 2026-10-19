@@ -67,17 +67,42 @@ with examples, the KSS bias correction, benchmarks and the function reference.
 
 ## When to use this, and when not to
 
-**Use pyfixest.** It is the better tool whenever your data fits in memory:
-mature, broader in scope, more inference options, and no scratch directory to
-think about. If a `pandas` DataFrame of your data fits comfortably in RAM, stop
-reading.
+**When your data do not fit in memory, use this.** It was built for that case:
+a matched employer–employee panel — tens of millions of rows, millions of
+worker effects, an AKM variance decomposition — on a machine or a secure
+enclave where the data are larger than the memory you are allowed. Every other
+library compared here needs the whole panel in memory before it starts; this
+one holds a bounded slice of it at a time, and uses scratch disk for the rest.
 
-**Use this** when it doesn't. The case it was built for is a matched
-employer–employee panel — tens of millions of rows, millions of worker effects,
-an AKM variance decomposition — on a machine or a secure enclave where the data
-is larger than the memory you are allowed. Concretely, reach for it when:
+**When they do fit, it is still a sensible default for medium and large
+regressions.** From about 400,000 workers (3.4 million rows) up, it was the
+fastest of the libraries benchmarked: against pyfixest, xhdfe, R's fixest and
+Julia's FixedEffectModels.jl on the AKM regression and on wide designs, against
+pyfixest on Poisson and logit, and against xhdfe on the KSS decomposition, and
+at the largest sizes it used a fraction of their memory. At 5 million workers it fitted the AKM
+regression in 22 seconds on a 16-vCPU machine, about as fast as xhdfe on an
+NVIDIA H100 (24 seconds), without a GPU (see [should I use a GPU?](#should-i-use-a-gpu)). The
+benchmarks are simulated employer–employee panels, a shape that suits its
+design ([how it works](#how-it-works-in-one-paragraph)); one whose fixed-effect cells are no smaller than
+the data may do less well.
 
-- the data does not fit in memory, or fits so tightly that nothing else does;
+**On small data it gains you nothing.** Below about 400,000 workers the
+in-memory libraries were faster — by a second or less on the regression, and
+by six seconds on the smallest KSS decomposition — and lighter: an hdfe_stream
+process starts at about 0.8 GB.
+
+**Use [pyfixest](https://github.com/py-econometrics/pyfixest) when you need
+what a streaming design does not offer.** It is more mature and more widely
+used, and has inference and clustering options this library lacks or limits:
+CRV3 with fixed effects that are not nested in the clusters, separation checks
+on the covariates and bias corrections for Poisson and logit, and more (see
+[limitations](https://leetucker.github.io/hdfe-stream/index.html#limitations)). **Use [xhdfe](https://github.com/reisportela/xhdfe-xfe)
+when GPU speed is the priority**: its CUDA backend made the most of the GPU in
+the [GPU benchmark](https://leetucker.github.io/hdfe-stream/benchmarks/gpu.html).
+
+This library is at its strongest when:
+
+- the data do not fit in memory, or fit so tightly that nothing else does;
 - you have one very high-cardinality dimension (workers, patients, students)
   whose groups each touch only a few levels of the others;
 - you want **worker-specific slopes** as well as intercepts (`worker_id[t]`),

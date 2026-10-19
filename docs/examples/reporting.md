@@ -35,8 +35,9 @@ stats Observations               169,833              169,833
 A multi-model result expands into one column per model, and `type="tex"`
 writes LaTeX.
 
-A model that fits in memory is quicker with pyfixest; a big one needs
-hdfe_stream. They can go in the same table, and on the same data they agree:
+A small model is quicker with pyfixest; a big one is quicker with hdfe_stream,
+and one too big for memory needs it. They can go in the same table, and on the
+same data they agree:
 
 ```python
 in_memory = pf.feols(fml, data=pl.read_parquet(path).to_pandas(),

@@ -137,10 +137,11 @@ fit = feols_stream(fml, "panel.parquet", device="cuda", polars_engine="gpu")
 On an AWS EC2 `p5.4xlarge`: one NVIDIA H100 (80 GB), 16 vCPUs of an AMD EPYC
 7R13, NVIDIA driver 595.91 (CUDA 13.2), and the instance's local NVMe drive for
 the data. The benchmarks were limited to 29.6 GB of memory, as on the CPU
-machine, so that every configuration had the same room as there. Python and its
-packages were those of the other benchmarks, except Polars 1.39.3, which
-cudf-polars 26.6 needs (2.0.0 elsewhere), with CuPy 14.2.0, cudf-polars 26.6.0
-and PyTorch 2.14.1 (CUDA 13.0). The CPU numbers here are therefore not those of
+machine, so that every configuration had the same room as there. This was
+hdfe_stream 0.5.0, the release that added the GPU options (the other benchmarks
+ran on 0.4.0). Python and its packages were those of the other benchmarks,
+except Polars 1.39.3, which cudf-polars 26.6 needs (2.0.0 elsewhere), with CuPy
+14.2.0, cudf-polars 26.6.0 and PyTorch 2.14.1 (CUDA 13.0). The CPU numbers here are therefore not those of
 the other pages: this is a different, older CPU, with an older Polars, and
 hdfe_stream took 28 s at 5 million workers here against 22 s there.
 

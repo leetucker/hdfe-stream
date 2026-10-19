@@ -4,7 +4,7 @@
  "memory_gb": 249.7,
  "platform": "Linux-7.0.0-1014-aws-x86_64-with-glibc2.39",
  "python": "3.14.8",
- "hdfe-stream": "0.4.0",
+ "hdfe-stream": "0.5.0",
  "pyfixest": "0.60.0",
  "xhdfe": "2.28.1.20260929",
  "polars": "1.39.3",
