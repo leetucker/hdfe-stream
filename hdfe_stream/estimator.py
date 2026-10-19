@@ -180,13 +180,19 @@ class StreamingHDFE(_PassesMixin, _SolveMixin, _InferenceMixin, _InverseMixin,
         GPU. Only the solve moves: the passes over the rows, and everything
         after the fit, stay on the CPU. The estimates agree with the CPU's to
         within the solver tolerance, not to the last digit. A GPU's double
-        precision is only fast on data-center cards (A100, H100, B200).
+        precision is only fast on data-center cards (A100, H100, B200). On
+        an H100 it did not make the AKM benchmark's solve faster; see the
+        "CPU and GPU" benchmark in the documentation.
     polars_engine : {"cpu", "gpu"}, default "cpu"
         Experimental. ``"gpu"`` runs the fit's Polars queries (pass 0's scan,
         factorization, partitioning and sorts, and the checks after the
         solve) on the cudf-polars GPU engine (``pip install
         cudf-polars-cu13``). A query the engine cannot run is run on the CPU
         instead, and listed in ``diagnostics["polars_gpu_fallbacks"]``.
+        cudf-polars supports a narrow range of Polars versions, so installing
+        it can change yours. With ``device="cuda"`` as well, on an H100, it
+        made the AKM benchmark about 10% faster at 5 million workers, and
+        slower at a million and below.
     tol : float, default 1e-10
         Conjugate-gradient convergence tolerance, on each column's residual
         relative to its right-hand side.

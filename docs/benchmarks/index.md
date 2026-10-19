@@ -6,7 +6,8 @@ five sizes from 25,000 to 5,000,000 workers (212,000 to 42.5 million rows); the
 number of firms is always workers / 15, so the number of workers is the only
 thing that changes along their x axis. The other two hold the data at 1,000,000
 workers (8.5 million rows) and vary its width: the number of covariates, from 8
-to 503.
+to 503. A sixth, on a machine of its own, measures hdfe_stream's experimental
+GPU options and the other libraries' GPU paths.
 
 | benchmark | job | compared with |
 |---|---|---|
@@ -15,6 +16,7 @@ to 503.
 | [Poisson and logit](glm.md) | a count and a binary outcome on `age_squared + age_cubed \| worker_id + firm_id + year`, clustered by worker | pyfixest's `fepois` and `feglm` (LSMR demeaner) |
 | [Poisson and logit, many covariates](glm_covariates.md) | the same two outcomes on `i(age_bin) \| worker_id + firm_id`, clustered by worker | pyfixest's `fepois` and `feglm` (LSMR demeaner) |
 | [KSS](kss.md) | the leave-out variance decomposition of `log_earn ~ age_squared + age_cubed \| worker_id + firm_id`, with and without standard errors | xhdfe |
+| [CPU and GPU](gpu.md) | the AKM regression on a machine with an NVIDIA H100, with hdfe_stream's experimental GPU options | pyfixest (LSMR, on PyTorch on the GPU), xhdfe (CUDA backend), each also on the CPU |
 
 In brief: hdfe_stream uses a fraction of the memory at scale, and is not slower
 for it. At 5 million workers the AKM regression took 22 s and 3.9 GB, against
@@ -59,7 +61,8 @@ small panel first, untimed, as hdfe_stream's numba kernels are compiled before
 it is timed.
 
 xhdfe is compared on its CPU backend, which is its default; no GPU was
-involved. The GLM benchmarks compare with pyfixest alone, since xhdfe fits
+involved, except in the [CPU and GPU](gpu.md) benchmark, which has its own
+machine. The GLM benchmarks compare with pyfixest alone, since xhdfe fits
 linear models only. pytwoway was also considered for KSS, but version 0.3.21
 needs numpy < 2 and an older scipy, so it cannot run alongside hdfe_stream's
 dependencies and is not included.
@@ -141,4 +144,5 @@ covariates
 glm
 glm_covariates
 kss
+gpu
 ```

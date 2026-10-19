@@ -91,6 +91,20 @@ cluster's scratch filesystem) and leave `workdir` out; a `workdir` passed to a
 call takes precedence, and with neither, the system temporary directory is
 used.
 
+## Should I use a GPU?
+
+Probably not for this. hdfe_stream has experimental GPU options (`device="cuda"`
+for the solve, `polars_engine="gpu"` for the Polars queries), but on an NVIDIA
+H100 their gains were modest throughout and appeared only at large sizes:
+about 10% at 5 million workers with both options on, and no consistent gain
+below that. A GPU-oriented library such as
+[xhdfe](https://github.com/reisportela/xhdfe-xfe) is the better choice if GPU
+performance is the priority: its CUDA backend took 24 s at 5 million workers,
+against 107 s on its CPU backend. But hdfe_stream on a 16-vCPU CPU machine took
+22 s, and that machine costs about an eighth as much per hour as AWS's smallest
+H100 machine. [CPU and GPU](benchmarks/gpu.md) has the numbers, and how to try
+the options.
+
 ## How it works, in one paragraph
 
 One fixed-effect dimension — normally the largest — is **streamed**: it
@@ -135,6 +149,11 @@ Without `formula` you still get [`StreamingHDFE`](reference/lowlevel.md), the
 lower-level interface that takes column names or Polars expressions instead of a
 formula string.
 
+The experimental GPU options need CuPy and cudf-polars for your CUDA version
+(`pip install cupy-cuda13x cudf-polars-cu13`); there is no extra for them,
+since the packages differ by CUDA version. See
+[CPU and GPU](benchmarks/gpu.md#using-the-gpu-options).
+
 ## Where to go next
 
 - **[Examples](examples/index.md)** walk through the library one feature at a
@@ -147,7 +166,7 @@ formula string.
   implementations.
 - **[Benchmarks](benchmarks/index.md)** compare time, memory and disk with
   pyfixest, xhdfe, fixest and FixedEffectModels.jl, from 212,000 to 42.5
-  million rows and from 8 to 503 covariates.
+  million rows and from 8 to 503 covariates, and on a GPU.
 - **[Function reference](reference/index.md)** documents every option.
 
 ## Limitations

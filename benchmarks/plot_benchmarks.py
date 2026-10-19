@@ -10,6 +10,9 @@ dark version:
 
     docs/figures/<benchmark>_{time,memory,disk}.{light,dark}.svg
 
+The GPU benchmark (gpu.csv, measured on its own machine) has wall time, peak
+memory and peak GPU memory instead of disk: gpu_{time,memory,gpu_memory}.
+
 The GLM figures have two panels, Poisson and logit, with one legend: a setting
 has the same color in both.
 
@@ -18,6 +21,7 @@ Only this file needs changing to restyle them; the numbers stay in the CSVs.
 Colors follow the library, not the rank of the line, so a library looks the
 same in every figure: xhdfe is aqua in both benchmarks, hdfe_stream's default
 magenta, its low-memory setting violet, fixest red, FixedEffectModels.jl green.
+In the GPU benchmark a library's GPU configurations are dashed, in its color.
 Every series also has its own marker, so no line is identified by color alone.
 Points that failed or timed out are left out, and listed in the note under the
 figure.
@@ -88,6 +92,16 @@ SERIES = {
         "fixest (R)": ("red", "p", "-"),
         "FixedEffectModels.jl": ("green", "h", "-"),
     },
+    # each library on the CPU and, dashed, on the GPU
+    "gpu": {
+        "pyfixest (LSMR, CPU)": ("orange", "s", "-"),
+        "pyfixest (LSMR, GPU)": ("orange", "P", "--"),
+        "xhdfe (CPU)": ("aqua", "D", "-"),
+        "xhdfe (GPU)": ("aqua", "d", "--"),
+        "hdfe_stream (CPU)": ("magenta", "v", "-"),
+        "hdfe_stream (GPU solve)": ("magenta", "^", "--"),
+        "hdfe_stream (GPU solve + GPU Polars)": ("violet", "X", "--"),
+    },
     "glm": {
         "pyfixest fepois (LSMR)": ("orange", "s", "-", "pyfixest (LSMR)"),
         "fepois_stream": ("magenta", "v", "-", "hdfe_stream"),
@@ -120,7 +134,10 @@ METRICS = {
     "time": ("wall_s", "Wall time (seconds)", 1.0),
     "memory": ("peak_memory_mb", "Peak memory (GB)", 1e-3),
     "disk": ("peak_disk_mb", "Peak disk (GB)", 1e-3),
+    "gpu_memory": ("peak_gpu_memory_mb", "Peak GPU memory (GB)", 1e-3),
 }
+# the figures of each benchmark; the others have time, memory and disk
+FIGURES_OF = {"gpu": ("time", "memory", "gpu_memory")}
 
 TITLES = {
     "akm": "AKM regression",
@@ -128,6 +145,7 @@ TITLES = {
     "covariates": "Many covariates (8.5 million rows)",
     "glm": "Poisson and logit regression",
     "glm_covariates": "Poisson and logit, many covariates (8.5 million rows)",
+    "gpu": "AKM regression, CPU and GPU",
 }
 
 # the x axis: column, tick label, axis label (given the rows), point name
@@ -142,7 +160,7 @@ X_AXES = {
                    "to 1-month bins)", "covariates"),
 }
 AXIS = {"akm": "workers", "kss": "workers", "covariates": "covariates",
-        "glm": "workers", "glm_covariates": "covariates"}
+        "glm": "workers", "glm_covariates": "covariates", "gpu": "workers"}
 
 
 def read(name):
@@ -211,11 +229,12 @@ def figure(bench, metric, theme_name, rows):
             legend_lines.setdefault(name, line)
             drawn += 1
 
-        if metric == "memory" and (limit := _machine_memory_gb()):
+        if metric == "memory" and (limit := _memory_limit(bench)):
             # what the in-memory libraries run into; a recessive rule, not a series
+            what, limit = limit
             ax.axhline(limit, color=theme["axis"], linewidth=1, linestyle=(0, (4, 3)),
                        zorder=1)
-            ax.annotate(f"this machine's memory ({limit:g} GB)", xy=(0.01, limit),
+            ax.annotate(f"{what} ({limit:g} GB)", xy=(0.01, limit),
                         xycoords=("axes fraction", "data"), xytext=(0, 3),
                         textcoords="offset points", fontsize=8, color=theme["muted"],
                         va="bottom")
@@ -232,7 +251,7 @@ def figure(bench, metric, theme_name, rows):
         if panel:
             ax.set_title(panel, color=theme["text"], loc="left", fontsize=10, pad=6)
         else:
-            ax.set_title(f"{TITLES[bench]}: {ylabel.split(' (')[0].lower()}",
+            ax.set_title(f"{_title(bench)}: {_lower(ylabel.split(' (')[0])}",
                          color=theme["text"], loc="left", fontsize=11, pad=10)
         # label 1-2-5 steps in plain decimals; leave the other minor ticks bare
         ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 5.0)))
@@ -266,6 +285,8 @@ def figure(bench, metric, theme_name, rows):
         if len(drawn_disk) > 1:
             notes.append("The hdfe_stream settings write almost the same "
                          "amount, so their lines overlap.")
+    if metric == "gpu_memory":
+        notes.append("The CPU configurations use no GPU memory and are not shown.")
     for why, where in skipped.items():
         notes.append(f"Missing ({why}): " + "; ".join(
             f"{label} at {_and(xs)}" for label, xs in where.items())
@@ -277,7 +298,7 @@ def figure(bench, metric, theme_name, rows):
                  fontsize=8, ha="left", va="bottom")
     bottom, top = 0.035 * len(lines) + (0.01 if lines else 0), 1
     if wide:
-        fig.suptitle(f"{TITLES[bench]}: {ylabel.split(' (')[0].lower()}",
+        fig.suptitle(f"{_title(bench)}: {_lower(ylabel.split(' (')[0])}",
                      color=theme["text"], x=0.01, ha="left", fontsize=11)
         # one axis label for both panels, above the notes
         fig.supxlabel(axis_label(n_rows, sizes), color=theme["muted"], fontsize=10,
@@ -291,21 +312,49 @@ def _and(items):
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
-def _machine_memory_gb():
+def _lower(text):
+    """'Peak GPU memory' -> 'peak GPU memory'."""
+    return text[:1].lower() + text[1:]
+
+
+def _machine(bench):
+    name = "gpu_machine.json" if bench == "gpu" else "machine.json"
     try:
-        return json.loads((RESULTS / "machine.json").read_text()).get("memory_gb")
+        return json.loads((RESULTS / name).read_text())
     except (OSError, ValueError):
-        return None
+        return {}
+
+
+def _title(bench):
+    """The GPU benchmark's title names its GPU, as gpu_machine.json has it."""
+    if bench != "gpu":
+        return TITLES[bench]
+    gpus = _machine(bench).get("gpus") or [{}]
+    model = (gpus[0].get("name") or "").removeprefix("NVIDIA ").split(" ")[0]
+    return f"{TITLES[bench]} (NVIDIA {model})" if model else TITLES[bench]
+
+
+def _memory_limit(bench):
+    """(what, GB) for the rule on a memory figure: the machine's memory, or,
+    on the GPU machine, which has far more, the limit its benchmarks ran
+    under (the CPU machine's, so that its configurations had the same room)."""
+    info = _machine(bench)
+    if bench != "gpu":
+        return ("this machine's memory", info["memory_gb"]) if info.get("memory_gb") else None
+    cap = (info.get("ec2") or {}).get("memory_max", "").split(" ")[0]
+    if cap.endswith("M") and cap[:-1].isdigit():
+        return "the benchmarks' memory limit", int(cap[:-1]) / 1000
+    return None
 
 
 def main():
     FIGURES.mkdir(parents=True, exist_ok=True)
-    for bench in ("akm", "kss", "covariates", "glm", "glm_covariates"):
+    for bench in ("akm", "kss", "covariates", "glm", "glm_covariates", "gpu"):
         if not (RESULTS / f"{bench}.csv").exists():
             print(f"no results for {bench}; run benchmarks/{bench}_benchmark.py")
             continue
         rows = read(bench)
-        for metric in METRICS:
+        for metric in FIGURES_OF.get(bench, ("time", "memory", "disk")):
             for theme in THEMES:
                 fig, drawn = figure(bench, metric, theme, rows)
                 path = FIGURES / f"{bench}_{metric}.{theme}.svg"
