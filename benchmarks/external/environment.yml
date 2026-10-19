@@ -1,0 +1,14 @@
+# R and fixest for the benchmarks' "fixest (R)" configurations, from
+# conda-forge, at the versions the published results were measured with:
+#
+#   micromamba create -p benchmarks/external/.r -f benchmarks/external/environment.yml
+#
+# (or conda/mamba with the same arguments). See benchmarks/README.md.
+name: hdfe-stream-benchmarks-r
+channels:
+  - conda-forge
+dependencies:
+  - r-base=4.5.3
+  - r-fixest=0.14.2
+  - r-arrow=25.0.0
+  - r-jsonlite=2.0.0

@@ -141,15 +141,19 @@ takes column names or Polars expressions instead of a formula string.
 The standard three-way AKM regression,
 `log_earn ~ age_squared + age_cubed | worker_id + firm_id + year`, clustered by
 worker, on a simulated panel of 5 million workers and 42.5 million rows,
-against [pyfixest](https://github.com/py-econometrics/pyfixest) and
-[xhdfe](https://github.com/reisportela/xhdfe-xfe). Every configuration agrees on
-the coefficients to within 1e-10.
+against [pyfixest](https://github.com/py-econometrics/pyfixest),
+[xhdfe](https://github.com/reisportela/xhdfe-xfe), R's
+[fixest](https://lrberge.github.io/fixest/) and Julia's
+[FixedEffectModels.jl](https://github.com/FixedEffects/FixedEffectModels.jl).
+Every configuration agrees on the coefficients to within 2e-9.
 
 | configuration | wall time | peak memory | peak disk |
 |---|---:|---:|---:|
 | pyfixest (MAP, its default) | 919 s | 20.8 GB | — |
 | pyfixest (LSMR) | 74 s | 27.0 GB | — |
 | xhdfe | 79 s | 19.3 GB | — |
+| fixest (R) | 152 s | 9.1 GB | — |
+| FixedEffectModels.jl (Julia) | 79 s | 9.5 GB | — |
 | hdfe_stream (`explicit`, its default) | 22 s | 3.9 GB | 2.6 GB |
 | hdfe_stream (`stream_cg`) | 22 s | 3.9 GB | 2.6 GB |
 | **hdfe_stream (`stream_cg`, low memory)** | **25 s** | **3.6 GB** | 2.7 GB |
@@ -176,7 +180,7 @@ decomposition, with how each was measured.
   errors and weak-identification diagnostic, and every way it differs from the
   reference implementations.
 - [**Benchmarks**](https://leetucker.github.io/hdfe-stream/benchmarks/index.html): time, memory and disk against
-  pyfixest and xhdfe.
+  pyfixest, xhdfe, fixest and FixedEffectModels.jl.
 - [**Function reference**](https://leetucker.github.io/hdfe-stream/reference/index.html): every option.
 - [**Limitations**](https://leetucker.github.io/hdfe-stream/index.html#limitations): what it does not do.
 - [**Changelog**](https://github.com/leetucker/hdfe-stream/blob/main/CHANGELOG.md).

@@ -1,0 +1,7 @@
+[deps]
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+FixedEffectModels = "9d5cd8c9-2029-5cab-9928-427838db53e3"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+Parquet2 = "98572fba-bba0-415d-956f-fa77e587d26d"
+StatsModels = "3eaba693-59b7-5ba5-a881-562e759f1c8d"
+Vcov = "ec2bfdc2-55df-4fc9-b9ae-4958c2cf2486"

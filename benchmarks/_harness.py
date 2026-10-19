@@ -16,6 +16,13 @@ The parent writes one CSV row per (size, configuration) as soon as it has it,
 so a run that dies part-way keeps everything measured so far, and re-running a
 size replaces that size's rows rather than duplicating them.
 
+Two libraries in other languages, R's fixest and Julia's FixedEffectModels.jl,
+run the same way from benchmarks/external/: a script per language, given what
+to fit as JSON, measures itself as the Python child does (VmHWM for peak
+memory) and prints the same RESULT line. Neither language is a dependency:
+where one is not installed, its configurations are skipped, and nothing is
+written for them (benchmarks/README.md says how to install them).
+
 A run that is restarted can skip what it already measured. When the environment
 variable HDFE_BENCH_LEDGER names a file, every row written is also recorded
 there with a digest, and `is_done` reports a configuration as finished only
@@ -42,6 +49,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DATA_DIR = HERE / "data"
 RESULTS_DIR = HERE / "results"
+EXTERNAL_DIR = HERE / "external"
 
 # the simulated panel has firms = workers / 15 at every size (simulate_akm's
 # default), so the x axis of every figure is a single, interpretable dimension
@@ -178,13 +186,18 @@ def run_child(runner, kind, variant, path, workdir):
     print("RESULT " + json.dumps(result, default=float))
 
 
-def measure(script, kind, variant, path, workdir, timeout=None):
-    """Run one configuration in a subprocess and return its report."""
+# how R, Julia and Python say that an allocation was refused
+OUT_OF_MEMORY = ("cannot allocate vector of size", "OutOfMemoryError", "MemoryError")
+
+
+def measure(script, kind, variant, path, workdir, timeout=None, command=None):
+    """Run one configuration in a subprocess and return its report: the
+    script's own child, or `command` (from `external_command`) instead."""
     workdir = Path(workdir)
     if workdir.exists():
         shutil.rmtree(workdir)
-    command = [sys.executable, str(script), "--child", kind, variant,
-               str(path), str(workdir)]
+    command = command or [sys.executable, str(script), "--child", kind, variant,
+                          str(path), str(workdir)]
     env = dict(os.environ, PYTHONWARNINGS="ignore")
     try:
         proc = subprocess.run(command, capture_output=True, text=True, env=env,
@@ -196,8 +209,15 @@ def measure(script, kind, variant, path, workdir, timeout=None):
     if proc.returncode == -9:
         return {"status": "killed (out of memory)"}
     if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
-        return {"status": "failed: " + " | ".join(tail)[:300]}
+        output = (proc.stderr or proc.stdout).strip().splitlines()
+        # an allocation larger than the machine can back is refused outright,
+        # before the kernel would kill the process, and each language reports
+        # it in its own words
+        refused = next((line.strip() for line in output if any(
+            sign in line for sign in OUT_OF_MEMORY)), None)
+        if refused:
+            return {"status": "out of memory: " + refused[:200]}
+        return {"status": "failed: " + " | ".join(output[-3:])[:300]}
     for line in proc.stdout.splitlines():
         if line.startswith("RESULT "):
             report = json.loads(line[len("RESULT "):])
@@ -206,11 +226,100 @@ def measure(script, kind, variant, path, workdir, timeout=None):
     return {"status": "failed: no result line"}
 
 
+# --------------------------------------------------------------------------
+# R and Julia
+# --------------------------------------------------------------------------
+
+EXTERNAL = {
+    # kind -> (language, executable, its environment variable, script)
+    "fixest": ("R", "Rscript", "HDFE_BENCH_RSCRIPT", "fixest.R"),
+    "fem": ("Julia", "julia", "HDFE_BENCH_JULIA", "fixedeffectmodels.jl"),
+}
+
+
+def external_executable(kind):
+    """Rscript or julia: from its environment variable if set, else the R
+    environment of benchmarks/README.md (benchmarks/external/.r), else PATH.
+    None if not installed."""
+    _language, name, variable, _script = EXTERNAL[kind]
+    if os.environ.get(variable):
+        return os.environ[variable]
+    local = EXTERNAL_DIR / ".r" / "bin" / name
+    if local.exists():
+        return str(local)
+    return shutil.which(name)
+
+
+def external_command(kind, **spec):
+    """The command that runs one fit with fixest ("fixest") or
+    FixedEffectModels.jl ("fem"), or None if that language is not installed.
+
+    The fit is described by `spec`: path, outcome, covariates (numeric
+    columns), categorical ({"column", "ref"} for a set of indicators, or None),
+    fixed_effects, cluster, drop_singletons, columns (to read, or None for all)
+    and, for Julia, warmup_path (a small panel of the same columns, fitted
+    first so that compilation is not timed). Both use every logical CPU, as
+    the Python libraries do: fixest's own default is half of them, and
+    Julia's is one thread.
+
+    FixedEffectModels.jl is also given a tolerance of 1e-8. At its default,
+    1e-6, its coefficients on the covariates benchmark are up to 1e-4 (relative)
+    from every other library's, which agree to about 1e-8 among themselves; at
+    1e-8 it agrees with them as closely, so its times are for equally good
+    answers, at about 1.5 times its default time."""
+    executable = external_executable(kind)
+    if executable is None:
+        return None
+    spec = {"threads": os.cpu_count(), **({"tol": 1e-8} if kind == "fem" else {}),
+            **spec}
+    for key in ("path", "warmup_path"):
+        if key in spec:
+            spec[key] = str(spec[key])
+    script = str(EXTERNAL_DIR / EXTERNAL[kind][3])
+    if kind == "fem":
+        return [executable, f"--threads={spec['threads']}",
+                f"--project={EXTERNAL_DIR / 'julia'}", script, json.dumps(spec)]
+    return [executable, script, json.dumps(spec)]
+
+
+def external_missing(kind):
+    language, name, variable, _script = EXTERNAL[kind]
+    return (f"skipped: {language} is not installed (no {name} on PATH; or set "
+            f"{variable})")
+
+
+def external_versions():
+    """R, fixest, Julia and FixedEffectModels.jl, where installed."""
+    out = {}
+    commands = {
+        "fixest": ['cat(paste(R.version$major, R.version$minor, sep = "."), '
+                   'as.character(packageVersion("fixest")))'],
+        "fem": ['import Pkg; print(VERSION, " ", Pkg.dependencies()[Base.UUID('
+                '"9d5cd8c9-2029-5cab-9928-427838db53e3")].version)'],
+    }
+    names = {"fixest": ("R", "fixest"), "fem": ("julia", "FixedEffectModels.jl")}
+    for kind, (code,) in commands.items():
+        executable = external_executable(kind)
+        if executable is None:
+            continue
+        command = ([executable, "-e", code] if kind == "fixest" else
+                   [executable, "--startup-file=no",
+                    f"--project={EXTERNAL_DIR / 'julia'}", "-e", code])
+        try:
+            words = subprocess.run(command, capture_output=True, text=True,
+                                   timeout=300).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if len(words) == 2:
+            out.update(zip(names[kind], words))
+    return out
+
+
 LEDGER_ENV = "HDFE_BENCH_LEDGER"
 
 # a row with one of these statuses is a result, to be kept rather than
 # measured again; a failure may be the process being stopped, so it is not
-_FINAL = ("ok", "timeout", "killed (out of memory)")
+_FINAL = ("ok", "timeout", "killed (out of memory)", "out of memory")
 
 
 def _digest(row):
@@ -321,6 +430,7 @@ def machine_info():
             **{name: version(name) for name in
                ("hdfe-stream", "pyfixest", "xhdfe", "polars", "numpy", "numba",
                 "scipy", "pandas")},
+            **external_versions(),
             "measured": time.strftime("%Y-%m-%d")}
 
 

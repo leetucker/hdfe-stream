@@ -4,10 +4,11 @@ The same kind of comparison as the [AKM regression](akm.md), holding the data
 fixed and varying its width: the million-worker panel (8.5 million rows, 66,665
 firms) with age entered as indicators,
 `log_earn ~ i(age_bin) | worker_id + firm_id`, clustered by worker, in bins from
-five years wide (8 indicators) down to one month (503). hdfe_stream runs at its
-defaults and "sized to the design", with bucket, batch and row-group sizes
-scaled down as the design widens (the rule is below). Every configuration that
-finished agrees with every other to within 1e-8.
+five years wide (8 indicators) down to one month (503). It is compared with
+pyfixest (both demeaners), xhdfe, R's fixest and Julia's FixedEffectModels.jl.
+hdfe_stream runs at its defaults and "sized to the design", with bucket, batch
+and row-group sizes scaled down as the design widens (the rule is below). Every
+configuration that finished agrees with every other to within 1e-7.
 
 ```bash
 python benchmarks/covariates_benchmark.py
@@ -43,23 +44,25 @@ The numbers are in
 :alt: Many covariates: peak disk use of hdfe_stream against the number of covariates, log-log
 ```
 
-Wall time and peak memory ("—": killed at this machine's limit, 29.6 GB of its
-30.8 GB):
+Wall time and peak memory ("—": out of memory at this machine's limit, 29.6 GB
+of its 30.8 GB):
 
-| covariates | pyfixest (MAP) | pyfixest (LSMR) | xhdfe | hdfe_stream | hdfe_stream, sized |
-|---:|---:|---:|---:|---:|---:|
-| 8 | 90 s, 5.8 GB | 13 s, 8.6 GB | 12 s, 9.5 GB | 5 s, 3.1 GB | 5 s, 3.2 GB |
-| 41 | 280 s, 13.9 GB | 34 s, 21.0 GB | 36 s, 22.4 GB | 17 s, 8.4 GB | 15 s, 3.6 GB |
-| 83 | 507 s, 25.2 GB | — | — | 33 s, 14.7 GB | 27 s, 4.2 GB |
-| 167 | — | — | — | 65 s, 24.5 GB | 56 s, 5.3 GB |
-| 503 | — | — | — | — | **157 s, 11.0 GB** |
+| covariates | pyfixest (MAP) | pyfixest (LSMR) | xhdfe | fixest (R) | FixedEffectModels.jl | hdfe_stream | hdfe_stream, sized |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 8 | 90 s, 5.8 GB | 13 s, 8.6 GB | 12 s, 9.5 GB | 18 s, 3.5 GB | 23 s, 3.3 GB | 5 s, 3.1 GB | 5 s, 3.2 GB |
+| 41 | 280 s, 13.9 GB | 34 s, 21.0 GB | 36 s, 22.4 GB | 63 s, 10.5 GB | 89 s, 7.8 GB | 17 s, 8.4 GB | 15 s, 3.6 GB |
+| 83 | 507 s, 25.2 GB | — | — | 119 s, 19.4 GB | 177 s, 13.7 GB | 33 s, 14.7 GB | 27 s, 4.2 GB |
+| 167 | — | — | — | — | 322 s, 24.1 GB | 65 s, 24.5 GB | 56 s, 5.3 GB |
+| 503 | — | — | — | — | — | — | **157 s, 11.0 GB** |
 
 ## Reading the figures
 
 **The in-memory libraries run out first.** Their peak grows with rows ×
 covariates. At 8.5 million rows pyfixest's LSMR demeaner and xhdfe were out of
-memory at 83 indicators, and MAP, which holds the least, used 25.2 GB there and
-was out of memory at 167. hdfe_stream sized to the design goes from 3.2 GB at 8
+memory at 83 indicators, and MAP used 25.2 GB there and was out of memory at
+167, as was fixest. FixedEffectModels.jl, the leanest of them, finished 167
+indicators in 24.1 GB; at 503 the design alone is 34 GB, and none of them could
+hold it. hdfe_stream sized to the design goes from 3.2 GB at 8
 indicators to 5.3 GB at 167 and 11.0 GB at 503. Part of that last figure is the
 memory-mapped cell table, whose pages count towards the peak although the
 kernel can drop them under pressure, so the memory the fit itself needs is less.

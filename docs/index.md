@@ -85,7 +85,7 @@ You are trading memory for disk, and you need scratch space: about five times
 the size of your Parquet input while the fit runs, and only the result files
 once it finishes. See [benchmarks](benchmarks/index.md) for what that buys:
 on a 42.5-million-row panel, the AKM regression took 22 seconds and 3.9 GB,
-where pyfixest and xhdfe needed 19–27 GB. Point `workdir=` at the scratch space,
+where the other libraries needed 9–27 GB. Point `workdir=` at the scratch space,
 or set the `HDFE_STREAM_WORKDIR` environment variable once (for example to a
 cluster's scratch filesystem) and leave `workdir` out; a `workdir` passed to a
 call takes precedence, and with neither, the system temporary directory is
@@ -146,8 +146,8 @@ formula string.
   weak-identification diagnostic, and every way it departs from the reference
   implementations.
 - **[Benchmarks](benchmarks/index.md)** compare time, memory and disk with
-  pyfixest and xhdfe, from 212,000 to 42.5 million rows and from 8 to 503
-  covariates.
+  pyfixest, xhdfe, fixest and FixedEffectModels.jl, from 212,000 to 42.5
+  million rows and from 8 to 503 covariates.
 - **[Function reference](reference/index.md)** documents every option.
 
 ## Limitations

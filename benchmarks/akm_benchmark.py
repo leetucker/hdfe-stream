@@ -1,5 +1,5 @@
 """Time, peak memory and peak disk on an AKM regression: hdfe_stream against
-pyfixest and xhdfe.
+pyfixest and xhdfe, and R's fixest and Julia's FixedEffectModels.jl.
 
     python benchmarks/akm_benchmark.py                  # the default sizes
     python benchmarks/akm_benchmark.py 25000 100000     # pick your own
@@ -16,25 +16,39 @@ clustered by worker. Results go to benchmarks/results/akm.csv, one row per
 figures in the README are drawn from that file.
 
 pyfixest and xhdfe need the data in memory as a pandas DataFrame, so reading it
-is part of the job and is counted. hdfe_stream is given the Parquet path and
+is part of the job and is counted; so do fixest (a data.frame, read with arrow)
+and FixedEffectModels.jl (a DataFrame, read with Parquet2.jl). hdfe_stream is given the Parquet path and
 does its own reading, in batches. That difference *is* the comparison -- it is
 not an artifact of how this is measured.
 
 The libraries are asked for comparable accuracy rather than identical settings,
 since their convergence criteria measure different things. Defaults are used
 throughout -- xhdfe on its CPU backend, which is its default -- and the script
-checks that the coefficients agree before reporting a size, so the times are
-for equally good answers.
+checks that the coefficients agree before reporting a size (with the ones
+already in akm.csv, when only some configurations are run), so the times are
+for equally good answers. fixest and FixedEffectModels.jl use every logical
+CPU, as the Python libraries do (their own defaults are half of them, and one
+thread), and FixedEffectModels.jl keeps singletons, as pyfixest is told to
+(fixef_rm="none"); the panels have almost none, and dropping them does not
+change the estimates. FixedEffectModels.jl is given a tolerance of 1e-8, as
+its default (1e-6) leaves its estimates short of the others' accuracy; and it
+compiles on first use, so it fits the smallest panel first, untimed
+(_harness.external_command has both).
+
+fixest and FixedEffectModels.jl run only where R and Julia are installed
+(benchmarks/README.md); elsewhere they are skipped.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import time
 from pathlib import Path
 
-from _harness import (DATA_DIR, RESULTS_DIR, data_path, is_done, measure,
-                      panel_shape, run_child, upsert_csv, write_machine_info)
+from _harness import (DATA_DIR, EXTERNAL, RESULTS_DIR, data_path, external_command,
+                      external_missing, is_done, measure, panel_shape, run_child,
+                      upsert_csv, write_machine_info)
 
 SCRIPT = Path(__file__).resolve()
 FML = "log_earn ~ age_squared + age_cubed | worker_id + firm_id + year"
@@ -53,6 +67,8 @@ CONFIGS = {
     # the same solve with the batch and bucket sizes turned down: this is the
     # knob the in-memory libraries have no equivalent of
     "hdfe_stream (stream_cg, low memory)": ("hdfe", "stream_cg+lowmem"),
+    "fixest (R)": ("fixest", "default"),
+    "FixedEffectModels.jl": ("fem", "default"),
 }
 
 # what "low memory" means above: smaller read batches and more buckets, so less
@@ -127,6 +143,15 @@ def run_hdfe(solver, path, workdir):
     return out
 
 
+def external(kind, path):
+    """The command for fixest or FixedEffectModels.jl, or None."""
+    return external_command(kind, path=path, warmup_path=data_path(25_000),
+                            outcome="log_earn", covariates=list(COEFS),
+                            categorical=None,
+                            fixed_effects=["worker_id", "firm_id", "year"],
+                            cluster="worker_id", drop_singletons=False, columns=None)
+
+
 def runner(kind, variant, path, workdir):
     if kind == "pyfixest":
         return run_pyfixest(variant, path)
@@ -166,15 +191,29 @@ def memory_sweep(n_workers):
               f"| {report['peak_disk_mb']:,.0f} MB |")
 
 
-def check_agreement(reports):
+def stored_coefs(n_workers, skip):
+    """The coefficients in akm.csv for this size, of the configurations not in
+    `skip` (those being measured again)."""
+    path = RESULTS_DIR / "akm.csv"
+    if not path.exists():
+        return []
+    with open(path, newline="") as handle:
+        return [{k: float(r[f"coef_{k}"]) for k in COEFS}
+                for r in csv.DictReader(handle)
+                if int(r["n_workers"]) == n_workers and r["status"] == "ok"
+                and r["configuration"] not in skip and r.get(f"coef_{COEFS[0]}")]
+
+
+def check_agreement(reports, stored=()):
     """All configurations must produce the same estimates, or the timings are
-    not comparable. Returns the largest relative difference."""
-    ok = [r for r in reports.values() if r["status"] == "ok"]
+    not comparable. Returns the largest relative difference, among the
+    configurations just measured and those `stored` before."""
+    ok = [r["coefs"] for r in reports.values() if r["status"] == "ok"] + list(stored)
     if len(ok) < 2:
         return 0.0
-    base = ok[0]["coefs"]
-    return max(abs(r["coefs"][k] - base[k]) / max(abs(base[k]), 1e-12)
-               for r in ok[1:] for k in COEFS)
+    base = ok[0]
+    return max(abs(c[k] - base[k]) / max(abs(base[k]), 1e-12)
+               for c in ok[1:] for k in COEFS)
 
 
 def main():
@@ -212,7 +251,7 @@ def main():
         todo = [label for label in configs
                 if not is_done(RESULTS_DIR / "akm.csv",
                                {"n_workers": n_workers, "configuration": label})]
-        if todo:
+        if any(configs[label][0] == "hdfe" for label in todo):
             # warm up once so numba kernel compilation (cached on disk) is not
             # charged to the first configuration that happens to run
             measure(SCRIPT, "hdfe", "explicit", data_path(25_000), workdir)
@@ -222,8 +261,14 @@ def main():
             if label not in todo:
                 print(f"  {label:<38}measured before, kept", flush=True)
                 continue
+            command = None
+            if kind in EXTERNAL:
+                command = external(kind, path)
+                if command is None:
+                    print(f"  {label:<38}{external_missing(kind)}", flush=True)
+                    continue
             report = measure(SCRIPT, kind, variant, path, workdir,
-                             timeout=TIMEOUT_S)
+                             timeout=TIMEOUT_S, command=command)
             reports[label] = report
             row = {"n_workers": n_workers, "n_firms": shape["firms"],
                    "n_rows": shape["rows"], "configuration": label,
@@ -244,7 +289,7 @@ def main():
                 print(f"  {label:<38}{report['status']}", flush=True)
             upsert_csv(RESULTS_DIR / "akm.csv", [row])
 
-        worst = check_agreement(reports)
+        worst = check_agreement(reports, stored_coefs(n_workers, reports))
         verdict = "agree" if worst < 1e-6 else "DISAGREE"
         print(f"  estimates {verdict}: largest relative difference "
               f"{worst:.1e}", flush=True)

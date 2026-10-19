@@ -220,6 +220,7 @@ __marimo__/
 # hdfe_stream: simulated data, scratch space and output written by the examples
 examples/output/
 benchmarks/data/
+benchmarks/external/.r/
 prototypes/.ref-venv/
 prototypes/.xhdfe-venv/
 
