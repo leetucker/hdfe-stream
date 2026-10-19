@@ -207,11 +207,23 @@ class _SolveMixin:
             except _STooLarge as err:
                 if self.solver == "explicit":
                     raise MemoryError(f"{err}; raise max_s_gb or use solver='stream_cg'") from None
-                self._log(f"  {err}; falling back to stream_cg")
+                self._log(f"  {err}; falling back to stream_cg"
+                          + (", on the CPU" if self.device == "cuda" else ""))
                 info["fallback"] = str(err)
+                if self.device == "cuda":
+                    info["device"] = "cpu"
                 solver = "stream_cg"
         info["solver"] = solver
 
+        if solver == "explicit" and self.device == "cuda":
+            # the same PCG on the GPU (gpu.py); S goes to the device once and
+            # the host copy is released with this frame
+            from .gpu import explicit_solver
+            t0 = time.time()
+            solve, name = explicit_solver(S, self._jacobi(), self.tol, self.maxiter,
+                                          self._debug if self.verbose else None)
+            info.update(device=name, device_setup_seconds=round(time.time() - t0, 2))
+            return solve, info
         if solver == "explicit":
             indptr, indices, data = S.indptr, S.indices, S.data
 

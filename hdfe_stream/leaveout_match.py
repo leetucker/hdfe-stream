@@ -182,7 +182,8 @@ def leave_out_match(row_fit, alpha, psi, workdir, n_draws, seed, block,
                              str(table), workdir=workdir / "match_fit",
                              weights=MATCH_WEIGHT, keep_intermediates=True,
                              stream=alpha, fixef_rm="none", verbose=verbose,
-                             logger=logger)
+                             logger=logger,
+                             device=getattr(row_fit._estimator, "device", "cpu"))
     estimator = match_fit._estimator
     estimator.reload_intermediates()
     estimator._match_person_years = person_years

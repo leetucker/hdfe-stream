@@ -420,10 +420,11 @@ class StreamingGLM(StreamingHDFE):
         # change, and on the AKM panels rebuilding it cost more than streaming
         # the cells once per CG iteration, the more so as later steps start
         # from the previous solution and need fewer iterations (docs/examples/glm.md).
-        # AMG needs S, so with it S is rebuilt every step.
+        # AMG needs S, so with it S is rebuilt every step, and so does the GPU
+        # solve (device="cuda"), which runs only on S.
         if self.solver == "auto":
-            self.solver = ("explicit" if self.precond == "amg" and info["solver"] != "stream_cg"
-                           else "stream_cg")
+            self.solver = ("explicit" if (self.precond == "amg" or self.device == "cuda")
+                           and info["solver"] != "stream_cg" else "stream_cg")
         acc = np.zeros((nb.get_num_threads(), c, c))
         _nb_assemble(self.starts, self.codes, self.n, agg.sums_id, self.offs, gamma, acc)
         return gamma, agg.W + acc.sum(axis=0), info

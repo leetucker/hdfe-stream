@@ -36,6 +36,44 @@ pip install "git+https://github.com/reisportela/xhdfe-xfe.git"
 The figures here used commit `f71420b` (2.28.1), on its CPU backend, which is
 its default; no GPU was involved.
 
+`gpu_benchmark.py` is separate and experimental: the AKM regression above,
+on one machine with an NVIDIA GPU, for hdfe_stream on the CPU, with its solve
+on the GPU (`device="cuda"`), and with its Polars queries on the GPU as well
+(`polars_engine="gpu"`), against pyfixest's LSMR demeaner on its default
+backend and on PyTorch on the GPU (`LsmrDemeaner(backend="torch",
+device="cuda")`), and xhdfe on the CPU and on its CUDA backend. It needs CuPy
+and cudf-polars for the hdfe_stream configurations, a CUDA build of PyTorch
+for pyfixest's GPU one, and a CUDA build of xhdfe for its GPU one:
+
+```bash
+XHDFE_ENABLE_CUDA=ON CMAKE_CUDA_ARCHITECTURES=90 \
+    pip install --no-deps --reinstall "git+https://github.com/reisportela/xhdfe-xfe.git@f71420b"
+```
+
+(90 for an H100: the GPU's compute capability without the dot). With the CUDA
+13 toolkit, xhdfe 2.28.1 needs one change to build: `cub::Max()` in
+`src/fe_absorption_cuda.cu`, which CUDA 13 removed, becomes
+`cuda::maximum<>{}`, the same operation. Its build also checks the compiled
+GPU code with `cuobjdump` and `nvdisasm`, which some CUDA installs leave out
+(`pip install nvidia-cuda-cuobjdump nvidia-cuda-nvdisasm` at the toolkit's
+version provides them, with `CUOBJDUMP` pointing at the first). The published
+GPU results used that change, as `results/gpu_machine.json` records.
+
+On a machine without a GPU the benchmark says so and measures nothing.
+Results go to `results/gpu.csv`, with the GPU and package versions in
+`results/gpu_machine.json`, and are drawn as `docs/figures/gpu_*.svg`.
+
+The GLM benchmarks compare with pyfixest alone, since xhdfe fits linear models
+only, and with its LSMR demeaner alone: its default MAP demeaner stops with
+"Demeaning failed after 10000 iterations" on these panels at every size tried,
+for both models. The count and binary outcomes are simulated from the same
+worker effects, firm effects and age profile as `log_earn`
+(`_harness.glm_data_path`).
+
+pytwoway was also considered. Version 0.3.21 needs numpy < 2 (it uses
+`np.bool8`) and a scipy old enough to accept `minres(tol=)`, so it cannot run
+alongside hdfe_stream's dependencies and is not included.
+
 ### R and Julia
 
 The regression and covariates benchmarks also compare with R's
@@ -79,17 +117,6 @@ same job as the others:
   compiled code, as they are for numba in hdfe_stream. The compiled code's
   memory stays in the peak.
 
-The GLM benchmarks compare with pyfixest alone, since xhdfe fits linear models
-only, and with its LSMR demeaner alone: its default MAP demeaner stops with
-"Demeaning failed after 10000 iterations" on these panels at every size tried,
-for both models. The count and binary outcomes are simulated from the same
-worker effects, firm effects and age profile as `log_earn`
-(`_harness.glm_data_path`).
-
-pytwoway was also considered. Version 0.3.21 needs numpy < 2 (it uses
-`np.bool8`) and a scipy old enough to accept `minres(tol=)`, so it cannot run
-alongside hdfe_stream's dependencies and is not included.
-
 ## How it is measured
 
 Every configuration runs in its own subprocess, since peak memory is a
@@ -122,8 +149,8 @@ noise, well under 1% at every size measured.
 
 ## Results files
 
-`results/akm.csv`, `results/kss.csv` and `results/glm.csv` hold one row per
-(size, configuration), and `results/covariates.csv` and
+`results/akm.csv`, `results/kss.csv`, `results/glm.csv` and `results/gpu.csv`
+hold one row per (size, configuration), and `results/covariates.csv` and
 `results/glm_covariates.csv` one per (number of covariates, configuration).
 Re-running a size replaces that size's rows. `results/machine.json` records the
 hardware and package versions (R's and Julia's too, where installed). The
@@ -142,6 +169,10 @@ columns are:
 | `n_obs_pruned` (KSS) | observations left after pruning to the leave-one-out connected set |
 | `family`, `n_obs`, `irls_steps` (GLM) | `poisson` or `logit`; observations after dropping separated fixed-effect levels; IRLS steps, for hdfe_stream |
 | `n_covariates`, `bin_months`, `n_coef` (covariates) | indicators in the design, the age-bin width, and coefficients reported: the same number, except that xhdfe also reports an intercept alongside the absorbed effects, as reghdfe does |
+| `solve_s`, `solver`, `device` (GPU) | for hdfe_stream: seconds in the solve, the solver used, and where it ran |
+| `peak_gpu_memory_mb` (GPU) | the process's peak GPU memory, polled from `nvidia-smi` |
+| `polars_cpu_fallbacks`, `polars_cpu_fallback_reasons` (GPU) | with `polars_engine="gpu"`: the queries the GPU engine could not run, which ran on the CPU, and why |
+| `notes` (GPU) | warnings a library printed while fitting |
 
 `plot_benchmarks.py` reads only these files, so the figures can be restyled
 without re-running anything.

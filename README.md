@@ -59,6 +59,9 @@ with examples, the KSS bias correction, benchmarks and the function reference.
   through pyfixest
 - [Memory and disk controls](https://leetucker.github.io/hdfe-stream/examples/out_of_core.html),
   a choice of solvers, and logging
+- [Experimental GPU options](https://leetucker.github.io/hdfe-stream/benchmarks/gpu.html#using-the-gpu-options): the
+  solve on an NVIDIA GPU (`device="cuda"`) and the Polars queries on
+  cudf-polars (`polars_engine="gpu"`)
 - [Simulated panels](https://leetucker.github.io/hdfe-stream/examples/index.html#the-simulated-data)
   with known effects, for testing
 
@@ -136,6 +139,11 @@ wheels.
 Without `formula` you still get `StreamingHDFE`, the lower-level interface that
 takes column names or Polars expressions instead of a formula string.
 
+The experimental GPU options need CuPy and cudf-polars for your CUDA version
+(`pip install cupy-cuda13x cudf-polars-cu13`); there is no extra for them,
+since the packages differ by CUDA version. See
+[CPU and GPU](https://leetucker.github.io/hdfe-stream/benchmarks/gpu.html#using-the-gpu-options).
+
 ## Performance
 
 The standard three-way AKM regression,
@@ -168,6 +176,18 @@ costs about 0.8 GB before it has done anything. The
 [benchmarks](https://leetucker.github.io/hdfe-stream/benchmarks/index.html) cover every size from 212,000 rows up,
 designs with up to 503 covariates, Poisson and logit, and the KSS
 decomposition, with how each was measured.
+
+### Should I use a GPU?
+
+Probably not for this. hdfe_stream's GPU options are experimental, and on an
+NVIDIA H100 their gains were modest throughout and appeared only at large
+sizes: about 10% at 5 million workers with both options on, and no consistent
+gain below that. A GPU-oriented library such as
+[xhdfe](https://github.com/reisportela/xhdfe-xfe) is the better choice if GPU
+performance is the priority: its CUDA backend took 24 s at 5 million workers,
+against 107 s on its CPU backend. But hdfe_stream on a 16-vCPU CPU machine took
+22 s, and that machine costs about an eighth as much per hour as AWS's
+smallest H100 machine. [CPU and GPU](https://leetucker.github.io/hdfe-stream/benchmarks/gpu.html) has the numbers.
 
 ## Documentation
 

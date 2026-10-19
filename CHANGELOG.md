@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- **Experimental GPU options.** `device="cuda"` runs the solve on an NVIDIA
+  GPU through CuPy, and `polars_engine="gpu"` runs the fit's Polars queries on
+  the cudf-polars GPU engine, with any query it cannot run run on the CPU and
+  listed in `diagnostics["polars_gpu_fallbacks"]`. Neither changes the
+  estimates beyond the solver tolerance. On an NVIDIA H100 they gained about
+  10% at 5 million workers and nothing consistent below; see the new "CPU and
+  GPU" benchmark, which also measures pyfixest's and xhdfe's GPU paths.
+- The regression and many-covariates benchmarks also compare with R's fixest
+  and Julia's FixedEffectModels.jl. The AKM figures no longer draw
+  `solver="within"`, whose results stay in `akm.csv`.
+- The choice of Polars engine is now always explicitly specified in the
+  codebase. This fixes an issue where the in-memory engine would be used in
+  Polars 1.x.x despite the streaming engine being used in Polars 2.x.x.
+
+
 ## 0.4.0
 
 New features.
