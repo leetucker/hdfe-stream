@@ -20,7 +20,7 @@ from conftest import FE_DOF_PF, rel
 pf = pytest.importorskip("pyfixest")
 
 from hdfe_stream import bonferroni, feols_stream, fepois_stream, holm  # noqa: E402
-from hdfe_stream.multcomp import _holm  # noqa: E402
+from hdfe_stream.core.multcomp import _holm  # noqa: E402
 
 FML = "log_earn ~ age_squared + age_cubed + x2 + z1 | worker_id + firm_id + year"
 VCOVS = ["iid", {"CRV1": "firm_id"}]

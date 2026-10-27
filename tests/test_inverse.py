@@ -18,7 +18,7 @@ import polars as pl
 import pytest
 import scipy.sparse as sp
 
-from hdfe_stream._columns import GCODE, WCOL, vcol
+from hdfe_stream.core._columns import GCODE, WCOL, vcol
 from hdfe_stream import StreamingHDFE
 from hdfe_stream.simulate import simulate_akm
 

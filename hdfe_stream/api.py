@@ -7,14 +7,15 @@ from typing import Any, Sequence
 
 import polars as pl
 
-from ._types import PathLike, Source, Vcov
+from .core._types import PathLike, Source, Vcov
 
 from .estimator import StreamingHDFE
 from .glm import StreamingGLM
-from .report import _log
-from .formula import _plan_formula, _pyfixest_formula_api
-from .results import HDFEMulti, HDFEResult, _vcov_key
-from .utils import _as_lazy
+from .core.report import _log
+from .core.formula import _plan_formula, _pyfixest_formula_api
+from .core.results import HDFEMulti, HDFEResult
+from .core.results_base import _vcov_key
+from .core.utils import _as_lazy
 
 
 def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,

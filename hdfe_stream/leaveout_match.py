@@ -163,7 +163,7 @@ def leave_out_match(row_fit, alpha, psi, workdir, n_draws, seed, block,
     attached as `.match_fit` and the row-level one as `.fit`.
     """
     from .api import feols_stream
-    from .report import _log
+    from .core.report import _log
 
     if se and se_variance == "person_year" and row_fit.weights is not None:
         raise ValueError(

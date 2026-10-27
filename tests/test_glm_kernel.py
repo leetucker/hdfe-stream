@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from scipy import special
 
-from hdfe_stream.kernels_glm import _expit, _log_expit, _log_ndtr, _ndtr
+from hdfe_stream.core.kernels_glm import _expit, _log_expit, _log_ndtr, _ndtr
 
 GRID = np.concatenate([np.linspace(-60.0, 60.0, 4801),
                        [-745.0, -700.0, -40.0, -20.0001, -19.9999, 5.9999, 6.0001, 709.0]])

@@ -89,40 +89,43 @@ Step 4 (streamed, numba +    per model: stream rows for fe[0] effects,
 
 Layout
 ------
-api.py             `feols_stream`, `fepois_stream`, `feglm_stream`
-estimator.py       `StreamingHDFE`: options, layout, the driver
-glm.py             `StreamingGLM`: IRLS over the same passes
-families.py        GLM families: Poisson, logit, probit
-passes.py          pass 0/1      (mixin)
-solve.py           step 2        (mixin)
-inference.py       steps 3/4     (mixin)
-kernels_base.py    numba kernels
-kernels_slopes.py  numba kernels, varying slopes
-kernels_glm.py     numba kernels, GLM cell sums and group effects
-formula.py         pyfixest formula -> Polars expressions (input side)
-reporting.py       pyfixest etable/coefplot views (output side)
-feterms.py         'worker_id[t]' / 'firm_id^year' parsing
-connected.py       `connected_components`: components of a pair of FE
-                   dimensions, the largest connected set (also `connected=`)
-results.py         `HDFEResult`, `HDFEMulti`
-multcomp.py        `bonferroni`, `holm`, `rwolf`, `wyoung`: multiple-testing corrections
-wildboot.py        the wild cluster bootstrap, from per-cluster sums (`bootcluster=`)
-workspace.py       run directories, `cleanup()`
-report.py          logging / printing
-utils.py           small shared helpers
+The estimators and the leave-out (KSS) estimators are in this package; the
+machinery they share is in `core/`, for other estimators built on the same
+passes (see core/__init__.py for its modules).
+
+api.py              `feols_stream`, `fepois_stream`, `feglm_stream`
+estimator.py        `StreamingHDFE`: the core driver plus the leave-out mixins
+glm.py              `StreamingGLM`: IRLS over the same passes
+inverse.py          S^- and the projection A S^- A', out of core (mixin)
+leaveout.py         `leave_out_kss`: KSS variance components (mixins)
+leaveout_match.py   leave-match-out estimation
+leaveout_se.py      standard errors of the components (mixin)
+leaveout_weakid.py  weak-identification diagnostics (mixin)
+am_interval.py      the Andrews-Mikusheva weak-identification interval
+kernels_inverse.py  numba kernels, the projection
+kernels_se.py       numba kernels, the standard errors
+simulate.py         simulated panels
+core/estimator.py   `_StreamingBase`: options, layout, the driver
+core/passes.py      pass 0/1      (mixin)
+core/solve.py       step 2        (mixin)
+core/inference.py   steps 3/4     (mixin)
+core/irls.py        IRLS's weighted least-squares steps (mixin)
+core/results*.py    `HDFEResult`, `HDFEMulti`, and their model-independent bases
+core/reporting.py   pyfixest etable/coefplot views (output side)
+core/formula.py     pyfixest formula -> Polars expressions (input side)
 """
 
 from .api import feglm_stream, fepois_stream, feols_stream
-from .connected import ConnectedComponents, connected_components
+from .core.connected import ConnectedComponents, connected_components
 from .estimator import StreamingHDFE
 from .glm import StreamingGLM
 from .leaveout_se import ComponentSE
 from .leaveout_weakid import WeakIdDiagnostics
 from .leaveout import leave_out_kss
-from .multcomp import bonferroni, holm, rwolf, wyoung
-from .reporting import etable
-from .results import HDFEMulti, HDFEResult
-from .workspace import cleanup
+from .core.multcomp import bonferroni, holm, rwolf, wyoung
+from .core.reporting import etable
+from .core.results import HDFEMulti, HDFEResult
+from .core.workspace import cleanup
 
 __all__ = [
     "feols_stream",
@@ -150,7 +153,7 @@ def _detect_version():
         from importlib.metadata import version
         return version("hdfe-stream")
     except Exception:                 # source tree without an installed dist
-        return "0.5.0"
+        return "0.5.1"
 
 
 __version__ = _detect_version()

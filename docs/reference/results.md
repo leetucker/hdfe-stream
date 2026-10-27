@@ -26,5 +26,15 @@
    .. autoproperty:: files_dir
 
 .. autoclass:: HDFEMulti
-   :members: fetch_model, tidy, summary, summary_text, summary_dict, summary_json, sample, to_pyfixest, cleanup
+   :no-members:
+
+   .. automethod:: fetch_model
+   .. automethod:: to_pyfixest
+   .. automethod:: sample
+   .. automethod:: cleanup
+   .. automethod:: tidy
+   .. automethod:: summary_text
+   .. automethod:: summary_dict
+   .. automethod:: summary_json
+   .. automethod:: summary
 ```

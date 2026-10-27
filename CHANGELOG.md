@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.1
+
+Internal restructuring. Nothing changes for code that imports from
+`hdfe_stream` itself, the documented `hdfe_stream.simulate` and
+`hdfe_stream.leaveout` paths included, and no estimate changes.
+
+- **`hdfe_stream.core`**: the machinery the estimators share now lives in its
+  own subpackage, for other estimators built on the same streaming passes to
+  import without the leave-out (KSS) estimators. It holds the passes, the
+  solve, inference, the numba kernels, formula parsing, results and
+  reporting. Its names are internal, not a supported API.
+- `StreamingHDFE` is the core driver (`core/estimator.py`) with the leave-out
+  mixins added. `StreamingGLM`'s weighted least-squares steps, which do not
+  depend on the GLM family, are in `core/irls.py`. Per-group kernels that do
+  not depend on the model have moved from `kernels_inverse.py` to
+  `core/kernels_groups.py`.
+- `HDFEResult` and `HDFEMulti` derive from new base classes
+  (`core.results_base.RegressionResult` and `RegressionMulti`). These hold
+  what follows from a vector of estimates and its vcov alone: `tidy`,
+  `confint`, `wald_test`, the summaries, the pyfixest view behind `etable`,
+  and the multiple-testing corrections. Output is unchanged. `repr()` of a
+  result lists its fields in a new order, the base class's first.
+- The modules that moved were undocumented, and their old paths no longer
+  import: `hdfe_stream.results`, `reporting`, `connected`, `multcomp`,
+  `workspace`, `families`, `utils`, `gpu`, `wildboot`, `formula`, `feterms`,
+  `passes`, `solve`, `inference`, `report`, `_columns`, `_types` and the
+  `kernels_*` modules other than `kernels_inverse` and `kernels_se`. Import
+  public names from `hdfe_stream` (`hdfe_stream.HDFEResult`,
+  `hdfe_stream.connected_components`, `hdfe_stream.cleanup`, ...).
+- The numba kernels are cached under their new paths, so the first fit after
+  upgrading compiles them once more.
+
 ## 0.5.0
 
 - **Experimental GPU options.** `device="cuda"` runs the solve on an NVIDIA

@@ -9,15 +9,16 @@ import numpy as np
 import polars as pl
 
 from .results import HDFEMulti, HDFEResult
+from .results_base import RegressionMulti, RegressionResult
 
 
 def _family(models, param):
     """One row per (model, coefficient): the hypotheses being corrected for."""
-    if isinstance(models, (HDFEResult, HDFEMulti)):
+    if isinstance(models, (RegressionResult, RegressionMulti)):
         models = [models]
     fits = []
     for m in models:
-        fits += list(m) if isinstance(m, HDFEMulti) else [m]
+        fits += list(m) if isinstance(m, RegressionMulti) else [m]
     if not fits:
         raise ValueError("no models given")
     params = [param] if isinstance(param, str) else list(param)
@@ -168,11 +169,11 @@ def wyoung(models: HDFEResult | HDFEMulti | Iterable, param: str | list, reps: i
 
 
 def _fits(models):
-    if isinstance(models, (HDFEResult, HDFEMulti)):
+    if isinstance(models, (RegressionResult, RegressionMulti)):
         models = [models]
     fits = []
     for m in models:
-        fits += list(m) if isinstance(m, HDFEMulti) else [m]
+        fits += list(m) if isinstance(m, RegressionMulti) else [m]
     return fits
 
 
@@ -185,7 +186,7 @@ def _resampled(models, param, reps, seed, weights_type):
     params = [param] if isinstance(param, str) else list(param)
     tests = [(fit, fit.coefnames.index(p)) for fit in _fits(models) for p in params]
     for fit, _ in tests:
-        if fit._boot is None:
+        if getattr(fit, "_boot", None) is None:
             raise ValueError(f"{fit.fml}: fit with bootcluster= to bootstrap it")
     t, tstar, _ = _bootstrap(tests, reps, weights_type, True, seed)
     return table, t, tstar

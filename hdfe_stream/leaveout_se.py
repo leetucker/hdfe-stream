@@ -55,10 +55,11 @@ from dataclasses import dataclass, field
 import numba as nb
 import numpy as np
 
-from ._columns import GCODE, WCOL, vcol
-from .kernels_inverse import _nb_group_sums, _nb_reduce_rows
+from .core._columns import GCODE, WCOL, vcol
+from .core.kernels_groups import _nb_group_sums
+from .core.report import _log
+from .kernels_inverse import _nb_reduce_rows
 from .kernels_se import _nb_bii_moments, _nb_cov_cross, _nb_readout
-from .report import _log
 
 # rows per block when reducing row-sized arrays; bounds the working set
 _BLOCK_ROWS = 1_000_000

@@ -22,7 +22,7 @@ import pytest
 from conftest import FE_DOF_PF
 
 from hdfe_stream import StreamingGLM, feols_stream, rwolf, wyoung  # noqa: E402
-from hdfe_stream.wildboot import _draws, _Test  # noqa: E402
+from hdfe_stream.core.wildboot import _draws, _Test  # noqa: E402
 
 G_STATES = 12
 
@@ -148,7 +148,7 @@ def test_shared_draws_across_models(frame):
     """Each cluster gets the same weight in every model, keyed by its value:
     a model on a subset of the states sees the full set's weights for its
     states."""
-    from hdfe_stream.wildboot import _bootstrap
+    from hdfe_stream.core.wildboot import _bootstrap
 
     full = fit("y ~ x + x2 | firm", frame, bootcluster="state")
     part = fit("y ~ x + x2 | firm", frame.filter(pl.col("state") != 0), bootcluster="state")
@@ -221,7 +221,7 @@ def test_wildboottest_matches_pyfixest(frame, pf_ok, reps, weights_type, impose_
     fixed-effect dummy in k), and with this package's tie rule its p-value
     is ours."""
     import pyfixest as pf
-    from hdfe_stream.wildboot import _bootstrap
+    from hdfe_stream.core.wildboot import _bootstrap
 
     fml = "y ~ x + x2 + C(year) | firm"
     with fit(fml, frame, vcov={"CRV1": "state"}, bootcluster="state") as res:
@@ -244,7 +244,7 @@ def test_stepdown_rules_match_pyfixest(pf_ok):
     statistics without ties."""
     from pyfixest.estimation.post_estimation.multcomp import (_get_rwolf_pval,
                                                               _get_wyoung_pval)
-    from hdfe_stream.multcomp import _rwolf_p, _wyoung_p
+    from hdfe_stream.core.multcomp import _rwolf_p, _wyoung_p
 
     rng = np.random.default_rng(5)
     for _ in range(10):
@@ -263,7 +263,7 @@ def test_rwolf_wyoung_match_pyfixest(frame, pf_ok):
     import pyfixest as pf
     from scipy import special
 
-    from hdfe_stream.multcomp import _rwolf_p, _wyoung_p
+    from hdfe_stream.core.multcomp import _rwolf_p, _wyoung_p
 
     fml = "y + y2 + y3 ~ x + x2 | firm"
     multi = fit(fml, frame, vcov={"CRV1": "state"}, bootcluster="state")

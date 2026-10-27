@@ -51,11 +51,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from ._columns import GCODE, vcol
-from .kernels_inverse import _nb_group_sums, _nb_rademacher, _nb_reduce_rows
+from .core._columns import GCODE, vcol
+from .core.kernels_groups import _nb_group_sums, _nb_rademacher
+from .core.report import _log, _warn
+from .kernels_inverse import _nb_reduce_rows
 from .kernels_se import _nb_readout
 from .leaveout_se import COMPONENTS
-from .report import _log, _warn
 
 #: KSS Section 6.2: a squared eigenvalue ratio at or above this counts toward q
 WEAK_ID_THRESHOLD = 0.1

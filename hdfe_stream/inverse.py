@@ -24,10 +24,11 @@ from contextlib import contextmanager
 import numba as nb
 import numpy as np
 
-from ._columns import GCODE, WCOL, vcol
+from .core._columns import GCODE, WCOL, vcol
+from .core.kernels_groups import _nb_rademacher
+from .core.utils import iter_group_chunks
 from .kernels_inverse import (_nb_center_rows, _nb_project_coef, _nb_project_rows,
-                              _nb_rademacher, _nb_reduce_rows, _nb_spread_groups)
-from .utils import iter_group_chunks
+                              _nb_reduce_rows, _nb_spread_groups)
 
 # Shared-state contract with the other mixins
 # -------------------------------------------

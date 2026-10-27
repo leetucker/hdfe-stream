@@ -21,7 +21,8 @@ from pathlib import Path
 import pytest
 
 import hdfe_stream
-from hdfe_stream import StreamingHDFE, feols_stream, workspace
+from hdfe_stream import StreamingHDFE, feols_stream
+from hdfe_stream.core import workspace
 
 pytest.importorskip("pyfixest")
 

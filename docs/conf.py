@@ -68,3 +68,35 @@ html_theme_options = {
 
 copybutton_prompt_text = r">>> |\.\.\. |\$ "
 copybutton_prompt_is_regexp = True
+
+
+# viewcode links a method's [source] by the class it is documented on, so a
+# public class's methods inherited from a base in hdfe_stream.core
+# (StreamingHDFE's driver, HDFEResult's reporting) need the base's tags under
+# the public class's name too.
+def _inherited_tags(app, modname):
+    from sphinx.errors import PycodeError
+    from sphinx.pycode import ModuleAnalyzer
+
+    try:
+        analyzer = ModuleAnalyzer.for_module(modname)
+        analyzer.find_tags()
+    except PycodeError:          # not Python source: let viewcode decide
+        return None
+    tags = dict(analyzer.tags)
+    for name in hdfe_stream.__all__:
+        cls = getattr(hdfe_stream, name)
+        if not isinstance(cls, type):
+            continue
+        for base in cls.__mro__[1:]:
+            if base.__module__ != modname:
+                continue
+            prefix = base.__qualname__ + "."
+            for tag, entry in analyzer.tags.items():
+                if tag.startswith(prefix):
+                    tags.setdefault(f"{cls.__name__}.{tag[len(prefix):]}", entry)
+    return analyzer.code, tags
+
+
+def setup(app):
+    app.connect("viewcode-find-source", _inherited_tags)

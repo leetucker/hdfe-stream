@@ -215,7 +215,7 @@ def test_movers_only():
 def test_join_fallback(monkeypatch, k):
     """Coding by join, used if two levels share a 64-bit hash or a row's
     hash is not found, gives the same answer as coding by hash."""
-    import hdfe_stream.connected as connected
+    import hdfe_stream.core.connected as connected
 
     df = _panel(seed=8).with_columns(pl.col("f").cast(pl.String))
     a = connected_components(df, "w + f^yr", min_degree=k, **_quiet(batch_rows=500))

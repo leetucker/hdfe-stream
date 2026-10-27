@@ -17,7 +17,7 @@ import polars as pl
 import pytest
 import scipy.sparse as sp
 
-from hdfe_stream._columns import GCODE, vcol
+from hdfe_stream.core._columns import GCODE, vcol
 from hdfe_stream import StreamingHDFE as _StreamingHDFE
 from hdfe_stream.simulate import simulate_akm, simulate_bottleneck
 
@@ -211,8 +211,8 @@ def test_different_seeds_give_different_but_comparable_estimates(estimator,
 # sample selection: the leave-one-out connected set
 # --------------------------------------------------------------------------
 
-from hdfe_stream.connected import connected_components  # noqa: E402
-from hdfe_stream.kernels_graph import (_nb_articulation_points,  # noqa: E402
+from hdfe_stream.core.connected import connected_components  # noqa: E402
+from hdfe_stream.core.kernels_graph import (_nb_articulation_points,  # noqa: E402
                                        _nb_bfs_components)
 
 

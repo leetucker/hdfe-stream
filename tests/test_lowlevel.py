@@ -197,7 +197,7 @@ def test_auto_solver_falls_back_when_the_matrix_is_too_large(akm, workdir):
 def test_row_wise_check(expr, row_wise):
     """Only expressions whose value on a row depends on that row alone may be
     evaluated bucket by bucket; everything else must be caught."""
-    from hdfe_stream.utils import _row_wise
+    from hdfe_stream.core.utils import _row_wise
     assert _row_wise(expr)[0] is row_wise
 
 

@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 from scipy import special
 
-from .results import HDFEMulti, HDFEResult
+from .results_base import RegressionMulti, RegressionResult
 
 
 # --------------------------------------------------------------------------
@@ -83,16 +83,16 @@ def _adapter_classes():
 
 
 def _crit(obj, q):
-    """Quantile for confidence intervals: normal for GLMs, t otherwise, as
-    pyfixest has it."""
-    if obj._method != "feols":
+    """Quantile for confidence intervals: normal when the result's inference
+    is (GLMs, as pyfixest has it), t otherwise."""
+    if obj._stream_result._normal_inference:
         return special.ndtri(q)
     return special.stdtrit(obj._df_t, q)
 
 
 def _fill_pyfixest(obj, r):
-    from .families import get_family
-    method = get_family(r.family).method if r.family else "feols"
+    """The attributes pyfixest's reporting reads, from a `RegressionResult`:
+    the coefficient table and vcov here, the rest from its `_pyfixest_attrs`."""
     se = r.se
     t = np.divide(r.beta, se, out=np.full_like(r.beta, np.nan), where=se > 0)
     kind = r.vcov_type
@@ -104,34 +104,25 @@ def _fill_pyfixest(obj, r):
                                 Gs if len(Gs) == 1 else [min(Gs)] * len(Gs))
     else:
         vtype, detail, clustervar, G = kind, kind, None, None
-    glm = method != "feols"
-    crit = special.ndtri(0.975) if glm else special.stdtrit(r.df_t, 0.975)
+    normal = r._normal_inference
+    crit = special.ndtri(0.975) if normal else special.stdtrit(r.df_t, 0.975)
     obj.__dict__.update({
         "_fml": r.fml, "_depvar": r.depvar,
-        # the FE string as written in the formula, without spaces: maketables
-        # matches FE rows across models by the text between '+' signs, spaces
-        # included, so "a + b + c" and "a + b" would not share their "b" row
-        "_fixef": (_fixef_string(r.fml.split("|")[1] if "|" in r.fml
-                                 else " + ".join(r.fe_names)) if r.fe_names else None),
-        "_has_fixef": bool(r.fe_names), "_coefnames": list(r.coefnames), "_k": len(r.coefnames),
+        "_coefnames": list(r.coefnames), "_k": len(r.coefnames),
         "_beta_hat": np.asarray(r.beta), "_se": se, "_tstat": t,
-        "_pvalue": 2 * (special.ndtr(-np.abs(t)) if glm else special.stdtr(r.df_t, -np.abs(t))),
+        "_pvalue": 2 * (special.ndtr(-np.abs(t)) if normal
+                        else special.stdtr(r.df_t, -np.abs(t))),
         "_conf_int": np.vstack([r.beta - crit * se, r.beta + crit * se]),
         "_vcov": r.vcov, "_vcov_type": vtype, "_vcov_type_detail": detail,
         "_clustervar": clustervar, "_G": G, "_df_t": r.df_t,
         "_N": int(r.n_obs) if float(r.n_obs).is_integer() else r.n_obs,
-        "_r2": r.r2, "_adj_r2": r.adj_r2, "_r2_adj": r.adj_r2,
-        "_r2_within": r.r2_within, "_adj_r2_within": r.adj_r2_within, "_rmse": r.rmse,
-        "_F_stat": None, "deviance": r.deviance if glm else None, "_method": method,
-        "_loglik": r.loglik if glm else None, "_pseudo_r2": r.pseudo_r2 if glm else None,
-        "_is_iv": r.is_iv,
-        "_f_stat_1st_stage": (r.f_stat_1st_stage[0] if r.is_iv and len(r.f_stat_1st_stage) == 1
-                              else None),
+        "_F_stat": None,
         "_use_mundlak": False, "_sample_split_var": None, "_sample_split_value": "all",
         "_quantile": None, "_data": None, "_weights_name": r.weights,
         "_weights_type": r.weights_type, "_collin_vars": list(r.collin_vars),
         "_model_name": r.fml, "_model_name_plot": r.fml,
         "_icovars": [c for c in r.coefnames if "::" in c] or None,     # for pf.iplot
+        **r._pyfixest_attrs(),
         "_stream_result": r,
     })
 
@@ -199,13 +190,13 @@ def etable(models: Any, **kwargs: Any) -> Any:
     >>> etable([fit1, fit2], type="df", model_stats=["N", "se_type", "r2"])
     """
     import pyfixest as pf
-    if isinstance(models, (HDFEResult, HDFEMulti)):
+    if isinstance(models, (RegressionResult, RegressionMulti)):
         models = [models]
     out = []
     for m in models:
-        if isinstance(m, HDFEMulti):
+        if isinstance(m, RegressionMulti):
             out += m.to_pyfixest()
-        elif isinstance(m, HDFEResult):
+        elif isinstance(m, RegressionResult):
             out.append(m.to_pyfixest())
         else:
             out.append(m)

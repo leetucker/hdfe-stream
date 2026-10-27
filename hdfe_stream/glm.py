@@ -3,7 +3,9 @@ fixed effects, by iteratively reweighted least squares (IRLS).
 
 Each IRLS step is a weighted least-squares fit of a working response on the
 covariates and the fixed effects -- the regression `StreamingHDFE` solves --
-with weights that change from step to step. The rows, their sort and the cell
+with weights that change from step to step. (Those steps, which do not depend
+on the family, are `core/irls.py`'s `_IRLSMixin`; the family's row pass, the
+loop and the fit statistics are here.) The rows, their sort and the cell
 structure do not change, so pass 0 runs once, and pass 1 once for the
 structure only (which cells identify the other effects, their levels, the
 connected components). A step is then:
@@ -52,57 +54,30 @@ from __future__ import annotations
 
 import time
 from typing import Any, Sequence
-from contextlib import contextmanager
-from dataclasses import dataclass
 from types import SimpleNamespace
 
-import numba as nb
 import numpy as np
 import polars as pl
 from scipy import special
 
-from ._columns import PREFIX, WCOL, vcol
-from ._types import Variables
+from .core._columns import PREFIX, vcol
+from .core._types import Variables
+from .core.families import get_family
+from .core.irls import _OFFSET, _IRLSMixin, _State
+from .core.kernels_glm import FAMILY_CODES, _nb_glm_rows
+from .core.passes import _drop_levels
+from .core.report import _warn
+from .core.utils import _norm_vars
 from .estimator import StreamingHDFE
-from .families import get_family
-from .inference import _stack
-from .kernels_base import _nb_assemble, _nb_diag
-from .kernels_glm import FAMILY_CODES, _nb_glm_rows, _nb_group_effects
-from .passes import _drop_levels
-from .report import _warn
-from .utils import _norm_vars
 
 LO, HI = f"{PREFIX}lo", f"{PREFIX}hi"      # per-level outcome range, in the separation check
-_OFFSET = "__offset__"          # the offset's variable name in the row files
 # blocks of groups the fused row pass reduces its sums over: fixed, so that the
 # deviance does not depend on the number of threads
 _ROW_BLOCKS = 256
 _MAX_HALVINGS = 30
 
 
-@dataclass
-class _State:
-    """Coefficients that give every row's linear predictor, or (`init`) the
-    starting values, which are a function of the row's outcome."""
-
-    beta: np.ndarray = None
-    fe: np.ndarray = None       # non-streamed effects, stacked as in Gamma
-    a_id: np.ndarray = None     # fe[0] effects of the identifying groups
-    a_s: np.ndarray = None      # fe[0] effects of the single-cell groups
-    init: bool = False
-
-    def toward(self, other, t):
-        """The coefficients a fraction t of the way to `other`; the linear
-        predictor is linear in them."""
-        return _State(*(a + t * (b - a) for a, b in (
-            (self.beta, other.beta), (self.fe, other.fe),
-            (self.a_id, other.a_id), (self.a_s, other.a_s))))
-
-    def zeros_like(self):
-        return _State(*(np.zeros_like(a) for a in (self.beta, self.fe, self.a_id, self.a_s)))
-
-
-class StreamingGLM(StreamingHDFE):
+class StreamingGLM(_IRLSMixin, StreamingHDFE):
     """Low-level GLM interface: column names or Polars expressions instead of
     a formula (see `fepois_stream` and `feglm_stream` for formulas). One
     dependent variable, any number of models of it.
@@ -146,9 +121,6 @@ class StreamingGLM(StreamingHDFE):
     ...                    family="poisson", offset=pl.col("log_exposure"),
     ...                    workdir="scratch").fit("data/*.parquet")
     """
-
-    cells_contiguous = True
-    cell_sums = False
 
     def __init__(self, y: Variables, x: Variables | None, fe: Sequence[str],
                  family: str = "poisson", offset: str | pl.Expr | None = None,
@@ -261,18 +233,6 @@ class StreamingGLM(StreamingHDFE):
         return [self._fit_model(f"m{mi:03d}", model, ctx)
                 for mi, model in enumerate(self.models)]
 
-    def _layout(self):
-        """Counts that fix where each cell's sums go: identifying cells as
-        pass 1 stored them, then one row per single-cell group."""
-        G = self.n_levels.get(self.g_fe, 0) if self.fe else 0
-        self.G_id = len(self.starts) - 1
-        self.G_s = G - self.G_id
-        self.M_id = int(self.starts[-1])
-        self.s_starts = np.arange(self.G_s + 1, dtype=np.int64)
-        self.codes_s = None             # filled by the first row pass
-        self._bufs = {}
-        self.ybar = float(self.means[self.vidx[self.yname]])
-
     def _fit_model(self, tag, model, ctx):
         self._log(f"IRLS ({self.family.name}): {model['fml']}")
         fit = self._irls(model)
@@ -304,15 +264,6 @@ class StreamingGLM(StreamingHDFE):
         if self.offset_name is not None:
             res.diagnostics["offset"] = self.offset_name
         return res
-
-    @contextmanager
-    def _quiet(self, on):
-        verbose = self.verbose
-        self.verbose = verbose and not on
-        try:
-            yield
-        finally:
-            self.verbose = verbose
 
     # ------------------------------------------------------------ IRLS
     def _irls(self, model):
@@ -402,148 +353,7 @@ class StreamingGLM(StreamingHDFE):
         return np.isfinite(dev_new) and (
             dev_new < dev or abs(dev_new - dev) / (0.1 + abs(dev)) < self.iwls_tol)
 
-    def _wls(self, agg, names, x0):
-        """One weighted least-squares fit of the working response: Gamma for
-        [z, x] and the assembled [z, x]' M W M [z, x]."""
-        c = agg.W.shape[0]
-        _, L = self._offsets()
-        if not L:
-            return np.zeros((0, c)), agg.W.copy(), {"solver": "none", "iterations": 0,
-                                                   "converged": True}
-        self.n = agg.n_id
-        self.diag = np.zeros(L)
-        _nb_diag(self.starts, self.codes, self.n, self.offs, self.diag)
-        gamma, info = self._solve(sums=agg.sums_id, names=names, raw_ss=agg.raw, x0=x0,
-                                  in_memory=True)
-        # Left to choose, the solver builds S for the first step and streams
-        # the cells after that. S has to be rebuilt whenever the weights
-        # change, and on the AKM panels rebuilding it cost more than streaming
-        # the cells once per CG iteration, the more so as later steps start
-        # from the previous solution and need fewer iterations (docs/examples/glm.md).
-        # AMG needs S, so with it S is rebuilt every step, and so does the GPU
-        # solve (device="cuda"), which runs only on S.
-        if self.solver == "auto":
-            self.solver = ("explicit" if (self.precond == "amg" or self.device == "cuda")
-                           and info["solver"] != "stream_cg" else "stream_cg")
-        acc = np.zeros((nb.get_num_threads(), c, c))
-        _nb_assemble(self.starts, self.codes, self.n, agg.sums_id, self.offs, gamma, acc)
-        return gamma, agg.W + acc.sum(axis=0), info
-
-    def _update(self, agg, gamma, A):
-        """The coefficients that solve one weighted least-squares step."""
-        k = A.shape[0] - 1
-        beta = np.linalg.solve(A[1:, 1:], A[1:, 0]) if k else np.zeros(0)
-        fe = np.ascontiguousarray(gamma[:, 0] - gamma[:, 1:] @ beta)
-        a_id, a_s = np.zeros(self.G_id), np.zeros(self.G_s)
-        if self.fe:
-            _nb_group_effects(self.starts, self.codes, agg.n_id, agg.sums_id, self.offs,
-                              fe, beta, a_id)
-            _nb_group_effects(self.s_starts, self.codes_s, agg.n_s, agg.sums_s, self.offs,
-                              fe, beta, a_s)
-        return _State(beta, fe, a_id, a_s)
-
-    def _select(self, agg, sel, slot):
-        """The cell sums of a subset of the working regression's columns."""
-        out = SimpleNamespace(**vars(agg))
-        c = len(sel)
-        out.W, out.raw = agg.W[np.ix_(sel, sel)], agg.raw[sel]
-        out.sums_id = self._buffer(("sums_id", c), (self.M_id, c))
-        out.sums_id[:] = agg.sums_id[:, sel]
-        out.sums_s = self._buffer(("sums_s", c), (self.G_s, c))
-        out.sums_s[:] = agg.sums_s[:, sel]
-        return out
-
-    def _buffer(self, key, shape):
-        """A cell-sized work array, made once per key and then reused:
-        memory-mapped in the run directory unless cells_in_memory. Reusing
-        (rather than reopening) matters, as reopening a mapped file for
-        writing truncates it under any map still open on it."""
-        buf = self._bufs.get(key)
-        if buf is None:
-            if self.cells_in_memory or 0 in shape:
-                buf = np.zeros(shape)
-            else:
-                name = "glm_" + "_".join(map(str, key)) + ".npy"
-                buf = np.lib.format.open_memmap(str(self.workdir / name), mode="w+",
-                                                dtype=np.float64, shape=shape)
-            self._bufs[key] = buf
-        return buf
-
-    def _release_intermediates(self):
-        self._bufs = {}
-        super()._release_intermediates()
-
     # ------------------------------------------------------------ row pass
-    def _columns(self, yj, xj):
-        cols = [*self.ccols, vcol(yj), *[vcol(j) for j in xj]]
-        if self.weights is not None:
-            cols.append(WCOL)
-        if self.offset_name is not None:
-            cols.append(vcol(self.vidx[_OFFSET]))
-        return list(dict.fromkeys(cols))
-
-    def _chunk_layout(self, starts, codes, cursor):
-        """The cells of a chunk of whole fe[0] groups, and where its groups'
-        coefficients and cells' sums are; advances `cursor` (identifying
-        cells, identifying groups, single-cell groups) past the chunk."""
-        if not self.fe:
-            return None
-        n = len(codes)
-        if self.o_fe:
-            brk = np.zeros(n, bool)
-            brk[starts[:-1]] = True
-            brk[1:] |= np.any(codes[1:] != codes[:-1], axis=1)
-            cstarts = np.append(np.flatnonzero(brk), n).astype(np.int64)
-        else:
-            cstarts = starts                        # one dimension: a cell is a group
-        gcell = np.searchsorted(cstarts, starts).astype(np.int64)
-        ncell = np.diff(gcell)
-        is_id = ncell > 1
-        cell_id = np.repeat(is_id, ncell)
-        lay = SimpleNamespace(starts=starts, cstarts=cstarts, gcell=gcell, is_id=is_id,
-                              cell_id=cell_id,
-                              Ng=np.diff(starts), c0=cursor[0], g0=cursor[1], s0=cursor[2],
-                              nc=int(cell_id.sum()), ng=int(is_id.sum()),
-                              ns=int(len(is_id) - is_id.sum()))
-        cursor[0] += lay.nc
-        cursor[1] += lay.ng
-        cursor[2] += lay.ns
-        return lay
-
-    def _chunk_data(self, ch, yj, xj):
-        y = np.ascontiguousarray(ch[vcol(yj)], dtype=np.float64)
-        X = _stack(ch, [vcol(j) for j in xj]) if xj else np.zeros((len(y), 0))
-        f = (np.ascontiguousarray(ch[WCOL], dtype=np.float64) if self.weights is not None
-             else None)
-        off = (np.ascontiguousarray(ch[vcol(self.vidx[_OFFSET])], dtype=np.float64)
-               if self.offset_name is not None else None)
-        return y, X, f, off
-
-    def _eta(self, s, y, X, off, codes, lay):
-        """Each row's linear predictor under coefficients `s`."""
-        if s.init:
-            return self.family.init_eta(y, self.ybar)
-        eta = X @ s.beta if X.shape[1] else np.zeros(len(y))
-        if lay is not None:
-            a = np.empty(len(lay.is_id))
-            a[lay.is_id] = s.a_id[lay.g0:lay.g0 + lay.ng]
-            a[~lay.is_id] = s.a_s[lay.s0:lay.s0 + lay.ns]
-            eta += np.repeat(a, lay.Ng)
-            for d in range(len(self.o_fe)):
-                eta += s.fe[self.offs[d] + codes[:, d]]
-        if off is not None:
-            eta += off
-        return eta
-
-    def _group_effects(self, state, lay):
-        """Each of the chunk's groups' fe[0] effect under `state` (zeros at
-        the start, when there are none yet)."""
-        a = np.zeros(len(lay.is_id))
-        if not state.init:
-            a[lay.is_id] = state.a_id[lay.g0:lay.g0 + lay.ng]
-            a[~lay.is_id] = state.a_s[lay.s0:lay.s0 + lay.ns]
-        return a
-
     def _row_pass_plain(self, out, state, y, X, f, off, c, first):
         """The row pass for a chunk of a model without fixed effects: no
         cells, so the moments are plain weighted sums."""
@@ -589,7 +399,7 @@ class StreamingGLM(StreamingHDFE):
         code = FAMILY_CODES[fam.name]
         empty = np.zeros(0)
         for ch, starts, codes in self._row_chunks(self._columns(yj, xj)):
-            lay = self._chunk_layout(starts, codes, cursor)
+            lay = self._cell_layout(starts, codes, cursor)
             y, X, f, off = self._chunk_data(ch, yj, xj)
             if lay is None:
                 self._row_pass_plain(out, state, y, X, f, off, c, first)
@@ -649,7 +459,7 @@ class StreamingGLM(StreamingHDFE):
         fweights = self.weights is not None and self.weights_type == "fweights"
 
         def rows(ch, starts, codes):
-            lay = self._chunk_layout(starts, codes, cursor)
+            lay = self._cell_layout(starts, codes, cursor)
             y, X, f, off = self._chunk_data(ch, yj, xk)
             eta = self._eta(p.prev, y, X, off, codes, lay)
             _, W, u = fam.irls(y, eta)
@@ -667,8 +477,3 @@ class StreamingGLM(StreamingHDFE):
     def _iid_factor(self, rss, N, K):
         """The bread alone, with pyfixest's (N - 1) / (N - K)."""
         return (N - 1) / (N - K) if N > K else np.nan
-
-    def _collinear(self, Axx, idx=None, raw=None):
-        if raw is None and idx is not None and self._raw_w is not None:
-            raw = self._raw_w[idx]
-        return super()._collinear(Axx, idx, raw)

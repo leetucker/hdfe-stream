@@ -46,11 +46,11 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from ._columns import GCODE
-from ._types import PathLike, Source
-from .report import _log
+from .core._columns import GCODE
+from .core._types import PathLike, Source
+from .core.report import _log
 
-from .results import HDFEResult
+from .core.results import HDFEResult
 
 if TYPE_CHECKING:
     import polars as pl
@@ -337,8 +337,8 @@ class _TraceMixin:
         `block` draws share each pair of solves, and the answer does not depend
         on how the draws are divided up.
         """
-        from .kernels_inverse import (_nb_group_sums, _nb_reduce_rows,
-                                      _nb_trace_moments)
+        from .core.kernels_groups import _nb_group_sums
+        from .kernels_inverse import _nb_reduce_rows, _nb_trace_moments
 
         block = self.rhs_block if block is None else int(block)
         if block < 1 or n_draws < 1:
@@ -396,7 +396,7 @@ class _TraceMixin:
         """One block of draws: two applications of the inverse, then moments."""
         import numba as nb
 
-        from .kernels_inverse import _nb_rademacher
+        from .core.kernels_groups import _nb_rademacher
 
         n_threads = nb.get_num_threads()
         # One coefficient-space Rademacher vector per draw, from the same
@@ -689,7 +689,7 @@ class _ComponentsMixin:
 
         Not supported here: models with several outcomes.
         """
-        from .kernels_inverse import _nb_group_distinct
+        from .core.kernels_groups import _nb_group_distinct
 
         if stayers not in ("own", "firm_mean", "drop", "within_match"):
             raise ValueError("stayers must be 'own', 'firm_mean', 'drop' or "
@@ -1155,8 +1155,8 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
     >>> print(lo.summary())
     """
     from .api import feols_stream
-    from .feterms import _parse_fe, _parse_fe_term
-    from .report import _warn
+    from .core.feterms import _parse_fe, _parse_fe_term
+    from .core.report import _warn
 
     if "|" not in fml:
         raise ValueError(

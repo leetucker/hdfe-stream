@@ -1,6 +1,6 @@
 """The GPU options, without a GPU.
 
-``device="cuda"`` runs the solve through `hdfe_stream.gpu`, whose array
+``device="cuda"`` runs the solve through `hdfe_stream.core.gpu`, whose array
 backend is CuPy. Here the backend is replaced by numpy and scipy, which run
 the same code, so everything but CuPy itself is exercised: the device PCG
 (zero columns, starting guesses, convergence), and how the fit, the GLM and
@@ -24,7 +24,7 @@ import pytest
 import scipy.sparse as sp
 from conftest import rel
 
-import hdfe_stream.gpu as gpu
+import hdfe_stream.core.gpu as gpu
 from hdfe_stream import StreamingHDFE, feols_stream, fepois_stream, leave_out_kss
 from hdfe_stream.simulate import simulate_akm
 
