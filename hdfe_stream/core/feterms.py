@@ -28,5 +28,7 @@ def _parse_fe_term(term):
     return "^".join(c.strip() for c in name.split("^")), slopes
 
 
-def _parse_fe(fe_str):
+def parse_fe(fe_str):
+    """The terms of a formula's fixed-effect part, ``"a + b^c + d[t]"`` ->
+    ``["a", "b^c", "d[t]"]`` (none for an empty part)."""
     return [t.strip() for t in fe_str.split("+") if t.strip()] if fe_str else []

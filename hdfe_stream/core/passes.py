@@ -14,8 +14,8 @@ from ._columns import BUCKET, GCODE, PREFIX, WCOL, check_source, tcol, vcol
 from .connected import COMPONENT, _find_components
 from .kernels_base import _nb_components, _nb_diag, _nb_rhs, _nb_run_sums, _nb_union_pairs
 from .kernels_slopes import _nb_diag_sl, _nb_rhs_sl
-from .report import _warn
-from .utils import _as_lazy, _not_nan, _row_wise, _segments, iter_group_chunks
+from .report import warn
+from .utils import as_lazy, _not_nan, _row_wise, _segments, iter_group_chunks
 
 # Shared-state contract with the other mixins
 # -------------------------------------------
@@ -64,7 +64,7 @@ class _PassesMixin:
 
     # ------------------------------------------------------------------ pass 0
     def _pass0_code(self, source, keys, extra):
-        lf = _as_lazy(source)
+        lf = as_lazy(source)
         schema = lf.collect_schema()
         check_source(schema.names())
         if self.row_id in schema:
@@ -121,7 +121,8 @@ class _PassesMixin:
 
         # One scan for counts, means, weight checks and (if the streamed
         # dimension must be chosen by cardinality) HyperLogLog counts.
-        wstats = ([pl.col(WCOL).sum().alias("wsum"), pl.col(WCOL).min().alias("wmin")]
+        wstats = ([pl.col(WCOL).sum().alias("wsum"), pl.col(WCOL).min().alias("wmin"),
+                   pl.col(WCOL).log().sum().alias("wlogsum")]
                   if self.weights is not None else [])
         tstats = [pl.col(tcol(j + 1)).mean() for j in range(len(self.slope_vars))]
         need_card = self.stream is None and not self.slopes and len(self.fe_user) > 1
@@ -158,11 +159,13 @@ class _PassesMixin:
                              + (" left after dropping singletons"
                                 if self.singletons["observations"] else ""))
         if self.singletons["observations"]:
-            _warn(f"{self.singletons['observations']:,} singleton observations dropped from "
-                  "the model (fixef_rm='none' keeps them)", self.logger)
+            warn(f"{self.singletons['observations']:,} singleton observations dropped from "
+                 "the model (fixef_rm='none' keeps them)", self.logger)
         if self.weights is not None and mom["wmin"].item() <= 0:
             raise ValueError("weights must be strictly positive")
         self.wsum = mom["wsum"].item() if self.weights is not None else float(self.n_obs)
+        # sum of log weights, for the Gaussian log-likelihood with analytic weights
+        self.wlogsum = mom["wlogsum"].item() if self.weights is not None else 0.0
         if combo:
             self.combos_ratio = min(1.0, mom["__combos"].item() / self.n_obs)
             self.collapse = self.combos_ratio < _DISTINCT_ENOUGH
@@ -173,7 +176,16 @@ class _PassesMixin:
         self.means = np.array([mom[vcol(j)].item() for j in range(m)])
         self.raw_ss = np.array([(mom[f"var{j}"].item() or 0.0) * max(self.n_obs - 1, 1)
                                 for j in range(m)])
-        P = self.n_buckets or max(1, -(-self.n_obs // self.rows_per_bucket))
+        # Each bucket is sorted in memory, so its rows set pass 0's peak: by
+        # default, about 384 MB of them at the rows' width (the design and the
+        # source columns they carry), between 500,000 and 20,000,000 rows.
+        # (An ACS logit of 3 million rows and 41 columns: one 20M-row bucket
+        # peaked at 3.3 GB, 1M-row buckets at 1.7 GB, in less time.)
+        rpb = self.rows_per_bucket
+        if rpb is None:
+            width = self.m + len(src) + len(self.keep) + 2
+            rpb = min(20_000_000, max(500_000, int(384e6 / (8 * width))))
+        P = self.n_buckets or max(1, -(-self.n_obs // rpb))
         self.n_buckets = P
 
         # Codes for non-streamed dimensions and extra cluster variables:
@@ -525,11 +537,11 @@ class _PassesMixin:
             ok, why = _row_wise(self.var_exprs[name])
             if not ok:
                 self.design_evaluated += f" ({name!r} is not row-wise: {why})"
-                _warn(f"the expression for {name!r} is not row-wise ({why}), so the "
-                      "design is evaluated before the rows are partitioned. The "
-                      "estimates are unaffected; with many covariates it costs "
-                      "memory. To avoid it, define the column in the input "
-                      "LazyFrame and name it here.", self.logger)
+                warn(f"the expression for {name!r} is not row-wise ({why}), so the "
+                     "design is evaluated before the rows are partitioned. The "
+                     "estimates are unaffected; with many covariates it costs "
+                     "memory. To avoid it, define the column in the input "
+                     "LazyFrame and name it here.", self.logger)
                 return None
         taken = set(src) | set(self.keep)
         roots = dict.fromkeys(r for name in self.var_names

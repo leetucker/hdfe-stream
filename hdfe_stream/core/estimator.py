@@ -20,17 +20,17 @@ import numba as nb
 import polars as pl
 
 from ._columns import GCODE, PREFIX, ccol
-from ._types import PathLike, Source, Variables, Vcov
+from .typing import PathLike, Source, Variables, Vcov
 from .connected import _min_degree, _parse_pair
 from .feterms import _parse_fe_term
 from .inference import _InferenceMixin
 from .passes import _PassesMixin
 from .report import _log
 from .results import HDFEMulti, HDFEResult
-from .results_base import _canon_cluster, _vcov_key
+from .results_base import _canon_cluster, vcov_key
 from .solve import _SolveMixin
 from .utils import _norm_vars, _phys_mem_gb, _safe
-from .workspace import _ACTIVE_RUNS, _MARKER, _Run, _base_dir, _dir_bytes, _remove_path
+from .workspace import _ACTIVE_RUNS, _MARKER, Run, _base_dir, _dir_bytes, _remove_path
 
 # The pipeline stages are mixed in from passes.py, solve.py and inference.py;
 # each of those files opens with the shared-state contract it takes part in.
@@ -67,9 +67,9 @@ class _StreamingBase(_PassesMixin, _SolveMixin, _InferenceMixin):
     def __init__(self, y: Variables, x: Variables | None, fe: Sequence[str],
                  workdir: PathLike | None = None, solver: str = "auto",
                  precond: str = "jacobi", keep: Sequence[str] = (),
-                 tol: float = 1e-10, maxiter: int = 5000, batch_rows: int = 2_000_000,
+                 tol: float = 1e-10, maxiter: int = 5000, batch_rows: int | None = None,
                  row_group_size: int = 500_000, n_buckets: int | None = None,
-                 rows_per_bucket: int = 20_000_000, cells_in_memory: bool = False,
+                 rows_per_bucket: int | None = None, cells_in_memory: bool = False,
                  rhs_block: int = 8, assembly: str = "auto", max_s_gb: float | None = None,
                  collin_tol: float = 1e-10, collin_tol_rel: float = 1e-6,
                  n_threads: int | None = None, scratch_mb: int = 32,
@@ -207,7 +207,14 @@ class _StreamingBase(_PassesMixin, _SolveMixin, _InferenceMixin):
         self.connected_info = {}
         self._sample_spec = None
         self.tol, self.maxiter = tol, maxiter
-        self.batch_rows, self.rgs = batch_rows, row_group_size
+        # Without fixed effects nothing groups the rows, and chunks of about 64 MB
+        # of the design (100,000 to 2,000,000 rows) keep memory to the design's
+        # width at no cost in time (3M x 40: peak 3.9 -> 2.1 GB); with fixed
+        # effects 2,000,000 rows (StreamingGLM sets its own).
+        self.batch_rows = (batch_rows if batch_rows is not None else
+                           min(2_000_000, max(100_000, int(64e6 / (8 * (self.m + 4)))))
+                           if self.no_fe else 2_000_000)
+        self.rgs = row_group_size
         self.scratch_mb = int(scratch_mb)
         self.n_buckets, self.rows_per_bucket = n_buckets, rows_per_bucket
         self.cells_in_memory = cells_in_memory
@@ -227,7 +234,7 @@ class _StreamingBase(_PassesMixin, _SolveMixin, _InferenceMixin):
 
     def _init_run(self):
         """Create this fit's run directory and the intermediate file paths."""
-        self._run = _Run(self.base_dir, self.outputs == "auto")
+        self._run = Run(self.base_dir, self.outputs == "auto")
         self.workdir = p = self._run.path
         self.disk_peak = 0
         self.slope_redundancy = None    # found once per fit by _redundant_slopes
@@ -483,7 +490,7 @@ class _StreamingBase(_PassesMixin, _SolveMixin, _InferenceMixin):
             One result, or several when there are several models.
         """
         t0 = time.time()
-        default = _vcov_key(vcov)
+        default = vcov_key(vcov)
         keys = list(dict.fromkeys(["iid", "hetero", default]))
         extra = [_canon_cluster(c) for c in ([cluster] if isinstance(cluster, str) else cluster)]
         self.boot_req = None

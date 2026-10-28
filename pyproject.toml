@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hdfe-stream"
-version = "0.5.1"
+version = "0.6.0"
 description = "Out-of-core regression with several high-dimensional fixed effects: OLS, Poisson, logit and probit, with AKM/KSS variance decompositions"
 readme = "README.md"
 license = "MIT"
@@ -32,6 +32,7 @@ dependencies = [
     "numba>=0.59",
     "pyarrow>=14.0",
     "scipy>=1.11",
+    "threadpoolctl>=3.1",       # BLAS held to one thread in numba-heavy passes
 ]
 
 [project.urls]

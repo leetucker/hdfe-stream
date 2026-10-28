@@ -23,8 +23,8 @@ import numpy as np
 import polars as pl
 from scipy import special
 
-from ._types import Vcov
 from .report import _emit
+from .typing import Vcov
 
 
 def _json_safe(x: Any) -> Any:
@@ -82,7 +82,7 @@ class RegressionResult:
     A dynamic panel GMM result, say, would add the number of panel units and
     instruments and the Hansen and Arellano-Bond tests, and would name its
     vcovs (``"onestep"``, ``"twostep"``) in `all_vcovs`, overriding
-    `with_vcov` if they need another vocabulary than `_vcov_key`'s; an
+    `with_vcov` if they need another vocabulary than `vcov_key`'s; an
     ordered or multinomial logit result would add the log-likelihood, the
     pseudo R-squared and the outcome's levels.
 
@@ -294,7 +294,7 @@ class RegressionResult:
         fit's vcov). Ask for clusterings at fit time with ``vcov=`` or
         ``cluster=``."""
         import copy
-        key = _vcov_key(vcov)
+        key = vcov_key(vcov)
         if key not in self.all_vcovs:
             raise KeyError(f"{key} was not computed; available: {list(self.all_vcovs)}. "
                            "Request it at fit time with vcov= or cluster=.")
@@ -309,7 +309,7 @@ class RegressionResult:
         the stored results are available; methods that need the data
         (recomputing the vcov, the wild bootstrap) are not, and ``predict``
         is this result's own `predict`."""
-        from .reporting import _to_pyfixest   # reporting imports this module
+        from .reporting import _to_pyfixest  # reporting imports this module
         return _to_pyfixest(self)
 
     def cleanup(self) -> None:
@@ -475,7 +475,12 @@ def _canon_cluster(var):
     return "+".join("^".join(c.strip() for c in part.split("^")) for part in var.split("+"))
 
 
-def _vcov_key(v):
+def vcov_key(v):
+    """The canonical key of a vcov specification: ``"iid"``, ``"hetero"``,
+    ``"CRV1:<var>"`` (multi-way ``"CRV1:a+b"``) or ``"CRV3:<var>"``, from
+    any of the spellings the estimators accept (``"HC1"``, ``"CRV1:var"``,
+    ``{"CRV1": "var"}``, ...); None for None. Raises ValueError for anything
+    else. The keys index `RegressionResult.all_vcovs`."""
     if v is None:
         return None
     if isinstance(v, dict):

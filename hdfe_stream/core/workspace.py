@@ -146,8 +146,13 @@ def _dir_bytes(path):
     return total
 
 
-class _Run:
-    """A run directory, shared by all results of one fit."""
+class Run:
+    """A run directory, shared by all results of one fit: a fresh directory
+    ``hdfe_run_<time>_<id>`` under `base` (`path`), with the marker file that
+    lets `cleanup()` find it if the process dies. With `auto_cleanup`, it is
+    removed when this object is garbage-collected (or at exit); `cleanup()`
+    removes it now. Creating one also sweeps empty run directories that
+    earlier processes left under `base`."""
 
     def __init__(self, base, auto_cleanup):
         base = Path(base)
@@ -161,6 +166,7 @@ class _Run:
                      if auto_cleanup else None)
 
     def cleanup(self):
+        """Remove the directory (once; safe to call again)."""
         if self._fin is not None:
             self._fin()                      # runs once; detaches itself
         else:

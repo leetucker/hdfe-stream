@@ -23,7 +23,7 @@ def _log(verbose, msg, logger=None, level=None):
         print(f"[hdfe {time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def _warn(msg, logger=None):
+def warn(msg, logger=None):
     """Warnings go to logger.warning when a logger is given (so they show up
     in the log in real time), else through the warnings module."""
     if logger is not None:

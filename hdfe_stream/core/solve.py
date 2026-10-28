@@ -13,7 +13,7 @@ from .kernels_base import (_nb_cg_direction, _nb_cg_dot, _nb_cg_step,
                            _nb_row_fill, _nb_row_nnz, _nb_row_work,
                            _nb_stream_matvec)
 from .kernels_slopes import _nb_rhs_sl, _nb_stream_matvec_sl
-from .report import _warn
+from .report import warn
 from .utils import _scatter
 
 
@@ -361,7 +361,7 @@ class _SolveMixin:
             self._log(f"  {len(fe_spanned)} variable(s) absorbed by {self.g_fe}: "
                       + ", ".join(fe_spanned))
         if not conv:
-            _warn(f"solver did not converge within maxiter={self.maxiter}", self.logger)
+            warn(f"solver did not converge within maxiter={self.maxiter}", self.logger)
         return info
 
     def _normalize(self, Gamma):

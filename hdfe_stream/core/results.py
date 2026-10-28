@@ -88,9 +88,30 @@ class HDFEResult(RegressionResult):
     deviance : float
         For a GLM, the deviance; nan for OLS.
     loglik : float
-        For a GLM, the log-likelihood; nan for OLS.
+        The log-likelihood: for a GLM, the family's; for OLS (not IV), the
+        normal one at the maximum-likelihood error variance RSS / N (with
+        analytic weights, the weighted least-squares one, which adds
+        sum(log w) / 2; frequency weights count as copies of the row).
+    loglik_null : float
+        For a GLM, the log-likelihood of the constant-only model; nan for
+        OLS.
     pseudo_r2 : float
-        For a GLM, McFadden's pseudo R-squared; nan for OLS.
+        For a GLM, McFadden's pseudo R-squared, 1 - loglik / loglik_null: it
+        credits the covariates and the fixed effects together; nan for OLS.
+    loglik_fe_null : float
+        For a GLM with fixed effects, the log-likelihood of the model with
+        the fixed effects and no covariates: the groups' means with one
+        fixed effect (and no offset), otherwise a fit of its own, made only
+        with ``within_pseudo_r2=True``; else nan.
+    pseudo_r2_within : float
+        1 - loglik / loglik_fe_null: what the covariates add beyond the fixed
+        effects (fixest's "within pseudo R2"); nan when `loglik_fe_null` is.
+    aic, bic : float
+        Akaike's and Schwarz's information criteria, -2 loglik + 2 p and
+        -2 loglik + p log(N), with p the coefficients plus the fixed effects'
+        degrees of freedom (`k_fe`), as fixest counts them. For OLS the error
+        variance is not counted, as in statsmodels (R's ``lm`` counts it,
+        adding 2 to the AIC); nan for IV.
     is_iv : bool
         Whether the model was estimated by 2SLS.
     first_stage : list of HDFEResult
@@ -139,6 +160,11 @@ class HDFEResult(RegressionResult):
     deviance: float = np.nan
     loglik: float = np.nan
     pseudo_r2: float = np.nan
+    loglik_null: float = np.nan
+    loglik_fe_null: float = np.nan
+    pseudo_r2_within: float = np.nan
+    aic: float = np.nan
+    bic: float = np.nan
     _run: object = field(default=None, repr=False, compare=False)
     _estimator: object = field(default=None, repr=False, compare=False)
     _sample: dict | None = field(default=None, repr=False, compare=False)
@@ -483,7 +509,7 @@ class HDFEResult(RegressionResult):
         -------
         polars.LazyFrame
         """
-        from .utils import _as_lazy
+        from .utils import as_lazy
 
         if type not in ("link", "response"):
             raise ValueError(f"type must be 'link' or 'response', got {type!r}")
@@ -497,7 +523,7 @@ class HDFEResult(RegressionResult):
                                  "newdata")
             frame = self._sample["source"]
         else:
-            frame = _as_lazy(newdata)
+            frame = as_lazy(newdata)
         schema = frame.collect_schema()
         check_source(schema.names())
         if name in schema:
@@ -601,6 +627,8 @@ class HDFEResult(RegressionResult):
         if self.family:
             fit = (f"deviance: {self.deviance:.8g}   log-likelihood: {self.loglik:.8g}   "
                    f"pseudo R2: {self.pseudo_r2:.6f}")
+            if not np.isnan(self.pseudo_r2_within):
+                fit += f"   within pseudo R2: {self.pseudo_r2_within:.6f}"
             irls = self.diagnostics.get("irls", {})
             if irls:
                 fit += (f"   IRLS steps: {irls['iterations']}"
@@ -616,6 +644,16 @@ class HDFEResult(RegressionResult):
                 fit = (f"FE dof: {self.k_fe:,}   {fit}   "
                        f"within R2: {self.r2_within:.6f}")
         lines.append(fit)
+        bc = self.diagnostics.get("bias_correction")
+        if bc:
+            lines.append("coefficients bias-corrected for the incidental parameters of "
+                         + " and ".join(bc["dims"])
+                         + (f" (lags: {bc['lags']} periods of {bc['time']})" if bc["lags"]
+                            else "")
+                         + "; uncorrected in diagnostics['bias_correction']")
+        if not np.isnan(self.aic):
+            lines.append(f"AIC: {self.aic:.8g}   BIC: {self.bic:.8g}"
+                         + ("" if self.family else f"   log-likelihood: {self.loglik:.8g}"))
         if self.weights:
             lines.append(f"weights: {self.weights} ({self.weights_type})")
         if self.is_iv:
@@ -652,12 +690,16 @@ class HDFEResult(RegressionResult):
         }
         if self.family:
             d.update(deviance=self.deviance, loglik=self.loglik, pseudo_r2=self.pseudo_r2,
+                     loglik_null=self.loglik_null, loglik_fe_null=self.loglik_fe_null,
+                     pseudo_r2_within=self.pseudo_r2_within,
                      irls=self.diagnostics.get("irls"),
                      separation=self.diagnostics.get("separation"))
         else:
-            d.update(rss=self.rss, rmse=self.rmse, r2=self.r2, adj_r2=self.adj_r2)
+            d.update(rss=self.rss, rmse=self.rmse, r2=self.r2, adj_r2=self.adj_r2,
+                     loglik=self.loglik)
             if self.fe_names:
                 d.update(r2_within=self.r2_within, adj_r2_within=self.adj_r2_within)
+        d.update(aic=self.aic, bic=self.bic)
         if self.is_iv:
             d["first_stage_f"] = {fs.depvar: f for fs, f
                                   in zip(self.first_stage, self.f_stat_1st_stage)}

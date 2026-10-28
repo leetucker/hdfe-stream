@@ -1,6 +1,6 @@
 """Formula front end: pyfixest syntax -> Polars expressions.
 
-Depends on pyfixest's *internal* formula modules (see `_pyfixest_formula_api`),
+Depends on pyfixest's *internal* formula modules (see `pyfixest_formula_api`),
 which is why the package pins a pyfixest range. Required for `feols_stream`;
 `StreamingHDFE` works without it.
 """
@@ -13,7 +13,7 @@ import re
 import numpy as np
 import polars as pl
 
-from .feterms import _parse_fe
+from .feterms import parse_fe
 
 
 # --------------------------------------------------------------------------
@@ -29,7 +29,10 @@ from .feterms import _parse_fe
 # "I(age ** 2)", "log(age)") translated through a small AST compiler.
 # --------------------------------------------------------------------------
 
-def _pyfixest_formula_api():
+def pyfixest_formula_api():
+    """pyfixest's formula parser and model-matrix builder, ``(Formula,
+    create_model_matrix)``, with an ImportError that says what to install
+    when pyfixest is missing or its internal API has moved."""
     try:
         from pyfixest.estimation.formula.model_matrix import create_model_matrix
         from pyfixest.estimation.formula.parse import Formula
@@ -98,7 +101,9 @@ def _ast_to_expr(node, numeric=True):
                      "as a column in the input LazyFrame.")
 
 
-def _numeric_expr(src):
+def numeric_expr(src):
+    """A numeric Python expression over column names (``"log(wage)"``,
+    ``"age ** 2"``, ``"I(educ > 12)"``) as a Float64 Polars expression."""
     return _ast_to_expr(ast.parse(src, mode="eval")).cast(pl.Float64)
 
 
@@ -120,8 +125,9 @@ def _split_components(name):
     return [p.replace("\x00", "::") for p in parts]
 
 
-def _categorical_vars(rhs, schema):
-    """Variables that need level discovery: first argument of C()/i(), a
+def categorical_vars(rhs, schema):
+    """The variables of a right-hand side whose levels must be found before
+    `compile_design` can code them: the first argument of C()/i(), a
     non-numeric second argument of i(), and non-numeric columns."""
     import formulaic
     cats = set()
@@ -155,15 +161,20 @@ def _categorical_vars(rhs, schema):
     return cats
 
 
-def _compile_design(depvar, rhs, schema, levels, intercept=False):
-    """Return (depvar expr, [(coefname, expr), ...]) for one model.
+def compile_design(depvar, rhs, schema, levels, intercept=False):
+    """One model's outcome and design as Polars expressions:
+    ``((depvar, expr), [(coefname, expr), ...])``, with pyfixest's column
+    names and coding.
 
+    `rhs` is the formula's right-hand side without fixed effects, `schema`
+    the source's (a Polars schema), and `levels` maps each variable that
+    `categorical_vars` lists to its sorted distinct values in the data.
     `intercept`: keep the model matrix's constant, named "Intercept" as in
     pyfixest. Only a model without fixed effects has one; the formula can
     still remove it ("y ~ x - 1").
     """
     import formulaic
-    Formula, create_model_matrix = _pyfixest_formula_api()
+    Formula, create_model_matrix = pyfixest_formula_api()
     needed = {v for v in formulaic.Formula(rhs).required_variables if v in schema}
     missing = {v for v in formulaic.Formula(rhs).required_variables
                if v not in schema and v not in ("i", "C", "I", "np", *_FUNCS)}
@@ -201,7 +212,7 @@ def _compile_design(depvar, rhs, schema, levels, intercept=False):
             v, lv = c.split("::", 1)
             if v in lvl_lookup and lv in lvl_lookup[v]:
                 return (pl.col(v) == pl.lit(lvl_lookup[v][lv])).cast(pl.Float64)
-        return _numeric_expr(c)
+        return numeric_expr(c)
 
     cols = []
     for nm in names:
@@ -213,22 +224,22 @@ def _compile_design(depvar, rhs, schema, levels, intercept=False):
             e = component(c)
             expr = e if expr is None else expr * e
         cols.append((nm, expr))
-    return (depvar, _numeric_expr(depvar)), cols
+    return (depvar, numeric_expr(depvar)), cols
 
 
 def _plan_formula(fml, lf):
     """Expand a pyfixest formula into groups of models that share a set of
     fixed effects (and therefore one pass 0/1 and one solve)."""
-    Formula, _ = _pyfixest_formula_api()
+    Formula, _ = pyfixest_formula_api()
     schema = lf.collect_schema()
     specs = Formula.parse(fml)
 
     # level discovery for all categorical variables (one streaming pass each)
     cats = set()
     for s in specs:
-        cats |= _categorical_vars(s.second_stage.split("~", 1)[1], schema)
+        cats |= categorical_vars(s.second_stage.split("~", 1)[1], schema)
         if s.first_stage is not None:
-            cats |= _categorical_vars(s.first_stage.split("~", 1)[1], schema)
+            cats |= categorical_vars(s.first_stage.split("~", 1)[1], schema)
     levels = {}
     for v in sorted(cats):
         u = lf.select(pl.col(v).drop_nulls().unique().sort()).collect(engine="streaming")
@@ -237,8 +248,8 @@ def _plan_formula(fml, lf):
     groups = {}
     for s in specs:
         dep, rhs = (t.strip() for t in s.second_stage.split("~", 1))
-        fe = tuple(_parse_fe(s.fixed_effects))
-        (dname, dexpr), cols = _compile_design(dep, rhs, schema, levels, intercept=not fe)
+        fe = tuple(parse_fe(s.fixed_effects))
+        (dname, dexpr), cols = compile_design(dep, rhs, schema, levels, intercept=not fe)
         g = groups.setdefault(fe, {"y": {}, "x": {}, "models": []})
         g["y"][dname] = dexpr
         model = {"fml": s.formula, "y": dname, "x": [nm for nm, _ in cols]}
@@ -248,8 +259,8 @@ def _plan_formula(fml, lf):
             # instrument set Z; the endogenous columns come from compiling the
             # left-hand side as a right-hand side
             endog, fs_rhs = (t.strip() for t in s.first_stage.split("~", 1))
-            _, fs_cols = _compile_design(dep, fs_rhs, schema, levels, intercept=not fe)
-            _, en_cols = _compile_design(dep, endog, schema, levels)
+            _, fs_cols = compile_design(dep, fs_rhs, schema, levels, intercept=not fe)
+            _, en_cols = compile_design(dep, endog, schema, levels)
             model["iv"] = {"endog": [nm for nm, _ in en_cols], "z": [nm for nm, _ in fs_cols]}
             missing = [e for e in model["iv"]["endog"] if e not in model["x"]]
             if missing:

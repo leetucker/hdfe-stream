@@ -14,21 +14,49 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ._columns import GCODE, WCOL, kcol, tcol, vcol
-from .kernels_base import (_nb_assemble, _nb_crv3_finish, _nb_crv3_groups,
-                           _nb_crv3_scatter, _nb_pass2, _nb_residualize_rows)
+from .kernels_base import (
+    _nb_assemble,
+    _nb_crv3_finish,
+    _nb_crv3_groups,
+    _nb_crv3_scatter,
+    _nb_pass2,
+    _nb_residualize_rows,
+    _nb_stack,
+)
 from .kernels_slopes import _nb_pass2_sl, _nb_residualize_rows_sl
-from .report import _warn
+from .report import warn
 from .results import HDFEResult
 from .utils import _phys_mem_gb, _safe, _scatter, _tbl_to_np, iter_group_chunks
 
 
+def _readonly(a):
+    """`a` as a C-contiguous float64 array, read-only (a view if need be):
+    Arrow's zero-copy columns are read-only, and numba types read-only and
+    writable arrays apart, so `_nb_stack`'s list holds one kind."""
+    a = np.ascontiguousarray(a, dtype=np.float64)
+    if a.flags.writeable:
+        a = a.view()
+        a.flags.writeable = False
+    return a
+
+
 def _stack(chunk, columns):
     """The named columns of a chunk as one C-ordered float64 array, built in a
-    single allocation (np.column_stack followed by astype would make two)."""
-    out = np.empty((len(chunk[columns[0]]), len(columns)))
-    for j, c in enumerate(columns):
-        out[:, j] = chunk[c]
+    single allocation (np.column_stack followed by astype would make two) by
+    a blocked parallel copy (`_nb_stack`)."""
+    n = len(chunk[columns[0]])
+    out = np.empty((n, len(columns)))
+    if n * len(columns) < 65_536:
+        for j, c in enumerate(columns):
+            out[:, j] = chunk[c]
+    else:
+        _nb_stack(nb.typed.List([_readonly(chunk[c]) for c in columns]), out)
     return out
+
+
+def _criteria(ll, p, N):
+    """AIC and BIC of a log-likelihood with `p` parameters and `N` observations."""
+    return -2 * ll + 2 * p, -2 * ll + p * np.log(N)
 
 
 def _ratio(num, den):
@@ -497,6 +525,8 @@ class _InferenceMixin:
             # n x k buffer is reused for each weighting in turn.
             h = zt if ols else zt @ Pi_c
             del zt
+            if getattr(r, "after", None) is not None:
+                r.after(h)                  # a subclass's own sums over the scores
             buf = np.empty_like(h)
             if weighted:
                 sw = np.sqrt(w)
@@ -605,9 +635,10 @@ class _InferenceMixin:
         return rss, tss_w, ssy, acc_B, acc_hc, meat, jack, paths, boot
 
     # ------------------------------------------------------------ estimation
-    def _estimate(self, tag, model, A, gamma, ctx):
+    def _estimate(self, tag, model, A, gamma, ctx, beta=None):
         """OLS or 2SLS for one model from the assembled V' M_D V, then its
-        row pass and variance estimates."""
+        row pass and variance estimates. With `beta`, the coefficients are
+        those (not solved for), as after a bias correction."""
         fml, yname = model["fml"], model["y"]
         yj = self.vidx[yname]
         xj = [self.vidx[x] for x in model["x"]]
@@ -642,16 +673,18 @@ class _InferenceMixin:
         else:
             zk, Pi = xk, np.eye(k)
             bread_asm = A[np.ix_(xk, xk)]
-            beta = np.linalg.solve(bread_asm, A[xk, yj]) if k else np.zeros(0)
+            if beta is None:
+                beta = np.linalg.solve(bread_asm, A[xk, yj]) if k else np.zeros(0)
         if dropped:
-            _warn(f"{fml}: {len(dropped)} variables dropped due to "
-                  f"multicollinearity: {dropped}", self.logger)
+            warn(f"{fml}: {len(dropped)} variables dropped due to "
+                 f"multicollinearity: {dropped}", self.logger)
         Axy = A[xk, yj]
         rss_asm = A[yj, yj] - 2 * beta @ Axy + beta @ A[np.ix_(xk, xk)] @ beta if k else A[yj, yj]
 
         self._log(f"pass 2: {fml}")
         rss, tss_w, ssy, B, meat_hc, meat, jack, paths, boot = self._pass2(
             tag, yname, gamma, yj, xk, beta, zk, Pi, bread_asm)
+        self._last_bread = B                # X~' W X~, for a subclass's corrections
         N, k_fe, nested = self.N, ctx["k_fe"], ctx["nested"]
         # Small-sample factors follow pyfixest's ssc defaults: iid
         # (N-1)/(N-K); hetero N/(N-K); CRV1 G/(G-1)*(N-1)/(N-Kc), with the
@@ -667,6 +700,9 @@ class _InferenceMixin:
         vc = {"iid": (self._iid_factor(rss, N, K) * Binv, N - K),
               "hetero": (_ratio(N, N - K) * Binv @ meat_hc @ Binv, N - K)}
         n_clusters, adjs = {}, {}
+        # each vcov's small-sample factor (for OLS's iid, that and the error
+        # variance), for a caller that wants other conventions
+        factors = {"iid": self._iid_factor(rss, N, K), "hetero": _ratio(N, N - K)}
         for req, terms in self.cluster_reqs.items():
             Gs = [self.clusters[t]["G"] for t, _, single in terms if single]
             Gm = min(Gs)
@@ -676,10 +712,12 @@ class _InferenceMixin:
             adj = _ratio(Gm, Gm - 1) * _ratio(N - 1, N - Kc)
             Vc = sum(sign * adj * (Binv @ meat[t] @ Binv) for t, sign, _ in terms)
             vc[f"CRV1:{req}"] = (Vc, Gm - 1)
+            factors[f"CRV1:{req}"] = adj
             if req in self.crv3_reqs:
                 # the jackknife takes the same small-sample factor, as in pyfixest
                 (t, _, _), = terms
                 vc[f"CRV3:{req}"] = (adj * jack[t] if k else np.zeros((0, 0)), Gm - 1)
+                factors[f"CRV3:{req}"] = adj
             n_clusters[req] = Gs
             adjs[req] = adj
         V, dft = vc[ctx["default"]]
@@ -698,8 +736,8 @@ class _InferenceMixin:
                          "AG": boot["AG"][present].copy(), "sG": boot["sG"][present].copy(),
                          "adj": adjs[self.boot_req], "df": min(n_clusters[self.boot_req]) - 1}
         if np.any(np.diag(V) < 0):
-            _warn(f"{fml}: the {ctx['default']} vcov has negative variances "
-                  "(possible with multi-way clustering)", self.logger)
+            warn(f"{fml}: the {ctx['default']} vcov has negative variances "
+                 "(possible with multi-way clustering)", self.logger)
 
         if iv:
             # one first-stage OLS per endogenous variable (same vcov type), and
@@ -721,6 +759,15 @@ class _InferenceMixin:
         # there is no within R2 (pyfixest reports none either).
         k_fe_r2 = sum(self.fe_params.values()) - len(self.fe) + 1 if self.fe else 0
         r2 = 1 - rss / ssy if ssy > 0 and not iv else np.nan
+        # the normal log-likelihood at the ML error variance (not for IV), and
+        # AIC/BIC counting the coefficients and the fixed effects' dof (a GLM
+        # replaces all three with its family's)
+        ll = aic = bic = np.nan
+        if not iv and rss > 0:
+            ll = -0.5 * N * (np.log(2 * np.pi * rss / N) + 1)
+            if self.weights is not None and self.weights_type != "fweights":
+                ll += 0.5 * self.wlogsum
+            aic, bic = _criteria(ll, k + k_fe, N)
         r2w = 1 - rss / tss_w if tss_w > 0 and not iv and self.fe else np.nan
         diag = {"rss_assembled": float(rss_asm), "rss_rows": float(rss),
                 "bread_rel_diff": (float(np.abs(bread_asm - B).max() / np.abs(B).max()) if k
@@ -732,12 +779,14 @@ class _InferenceMixin:
                 "stream": self.stream_choice, "singletons": dict(self.singletons),
                 "connected": dict(self.connected_info), "fe_params": dict(self.fe_params),
                 "slope_redundancy": getattr(self, "slope_redundancy", None) or [],
+                "vcov_factors": {key: float(f) for key, f in factors.items()},
                 "seconds_total": round(time.time() - ctx["t0"], 2)}
         return HDFEResult(
             fml=fml, depvar=yname, coefnames=names, fe_names=self.fe, beta=beta, vcov=V,
             vcov_type=ctx["default"], df_t=dft, n_obs=N, n_levels=dict(self.n_levels),
             n_identifying=self.n_identifying, n_components=self.n_components, k_fe=k_fe,
             rss=float(rss), r2_within=float(r2w), solver_info=dict(ctx["info"]), paths=paths,
+            loglik=float(ll), aic=float(aic), bic=float(bic),
             collin_vars=dropped, diagnostics=diag, all_vcovs=vc, r2=float(r2),
             adj_r2=float(1 - (1 - r2) * _ratio(N - 1, N - k - k_fe_r2)),
             adj_r2_within=float(1 - (1 - r2w) * _ratio(N - k_fe_r2, N - k - k_fe_r2)),

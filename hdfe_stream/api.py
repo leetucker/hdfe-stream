@@ -7,15 +7,15 @@ from typing import Any, Sequence
 
 import polars as pl
 
-from .core._types import PathLike, Source, Vcov
+from .core.typing import PathLike, Source, Vcov
 
 from .estimator import StreamingHDFE
 from .glm import StreamingGLM
 from .core.report import _log
-from .core.formula import _plan_formula, _pyfixest_formula_api
+from .core.formula import _plan_formula, pyfixest_formula_api
 from .core.results import HDFEMulti, HDFEResult
-from .core.results_base import _vcov_key
-from .core.utils import _as_lazy
+from .core.results_base import vcov_key
+from .core.utils import as_lazy
 
 
 def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,
@@ -110,7 +110,7 @@ def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options, bootclus
     """Plan the formula, fit each estimator that `estimators(fe, group)`
     makes for each set of fixed effects, and return the results in the
     formula's order."""
-    lf = _as_lazy(data)
+    lf = as_lazy(data)
     _log(options.get("verbose", True), f"planning {fml!r} (formula expansion, level discovery)",
          options.get("logger"), options.get("log_level"))
     groups = _plan_formula(fml, lf)
@@ -127,7 +127,7 @@ def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options, bootclus
             for r in results:
                 r.cleanup()
         raise
-    Formula, _ = _pyfixest_formula_api()
+    Formula, _ = pyfixest_formula_api()
     order = {s.formula: i for i, s in enumerate(Formula.parse(fml))}
     results.sort(key=lambda r: order.get(r.fml, len(order)))
     return results[0] if len(results) == 1 else HDFEMulti(results)
@@ -224,9 +224,10 @@ def feglm_stream(fml: str, data: Source, family: str, workdir: PathLike | None =
     Frequency weights give exactly the fit of the data with each row repeated
     that many times.
 
-    No correction is made for the incidental parameter problem: with fixed
-    effects estimated from few observations each, the coefficients are
-    biased, as in pyfixest and fixest.
+    With fixed effects estimated from few observations each, the
+    coefficients have an incidental-parameter bias; ``bias_correction=True``
+    (an option of `StreamingGLM`) corrects it as R's alpaca does, which
+    pyfixest and fixest do not.
     """
     if str(family).lower() not in ("logit", "probit"):
         raise ValueError(f"family must be 'logit' or 'probit', got {family!r}"
@@ -239,7 +240,7 @@ def feglm_stream(fml: str, data: Source, family: str, workdir: PathLike | None =
 
 
 def _fit_glm(fml, data, family, workdir, vcov, cluster, fe_dof, options):
-    key = _vcov_key(vcov)
+    key = vcov_key(vcov)
     if key is not None and key.startswith("CRV3:"):
         raise ValueError("CRV3 standard errors are not available for GLMs; use CRV1")
 

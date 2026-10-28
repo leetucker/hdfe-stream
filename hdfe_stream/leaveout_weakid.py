@@ -53,7 +53,8 @@ import numpy as np
 
 from .core._columns import GCODE, vcol
 from .core.kernels_groups import _nb_group_sums, _nb_rademacher
-from .core.report import _log, _warn
+from .core.report import _log
+from .core.report import warn as _warn  # (`warn` is an option below)
 from .kernels_inverse import _nb_reduce_rows
 from .kernels_se import _nb_readout
 from .leaveout_se import COMPONENTS

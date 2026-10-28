@@ -26,8 +26,8 @@ import numpy as np
 import polars as pl
 
 from ._columns import PREFIX, check_source
-from ._types import Source
-from .feterms import _parse_fe, _parse_fe_term
+from .typing import Source
+from .feterms import parse_fe, _parse_fe_term
 from .kernels_base import _nb_union_pairs
 from .kernels_graph import (_nb_add_into, _nb_articulation_points, _nb_bfs_components,
                             _nb_count_into, _nb_dense_labels, _nb_hash_lookup,
@@ -35,7 +35,7 @@ from .kernels_graph import (_nb_add_into, _nb_articulation_points, _nb_bfs_compo
                             _nb_pairs_degree, _nb_pairs_fill, _nb_peel, _nb_relabel,
                             _nb_union_keys)
 from .report import _log
-from .utils import _as_lazy, _not_nan
+from .utils import as_lazy, _not_nan
 
 _CODE = (f"{PREFIX}cc0", f"{PREFIX}cc1")     # level codes (or hashes) of the two dimensions
 COMPONENT, IN_LARGEST = "component", "in_largest"
@@ -97,7 +97,7 @@ class ConnectedComponents:
     def _data(self, data):
         """`data` as a LazyFrame, or the data the components were found in."""
         if data is not None:
-            return _as_lazy(data)
+            return as_lazy(data)
         if self._source is None:
             raise ValueError("these components hold no reference to the data they were "
                              "found in; pass the data")
@@ -325,7 +325,7 @@ def connected_components(data: Source, fe: str | Sequence[str], *,
     k = _min_degree(min_degree)
     if rank_by != "rows" and rank_by not in dims:
         raise ValueError(f"rank_by must be 'rows' or one of {list(dims)}, got {rank_by!r}")
-    lf = _as_lazy(data)
+    lf = as_lazy(data)
     schema = lf.collect_schema()
     check_source(schema.names())
     missing = [c for d in dims for c in fe_cols[d] if c not in schema]
@@ -345,7 +345,7 @@ def _parse_pair(fe):
         if "~" in fe or "|" in fe:
             raise ValueError(f"fe={fe!r}: pass only the fixed effects, e.g. "
                              "'worker_id + firm_id'")
-        terms = _parse_fe(fe)
+        terms = parse_fe(fe)
     else:
         terms = list(fe)
     if len(terms) != 2:

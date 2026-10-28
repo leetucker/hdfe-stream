@@ -4,6 +4,7 @@ Parquet iteration in whole fe[0] groups, and segment/scatter primitives.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 from pathlib import Path
@@ -15,7 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ._columns import GCODE
-from ._types import PathLike, Source
+from .typing import PathLike, Source
 
 
 def _phys_mem_gb():
@@ -165,7 +166,31 @@ def _function_name(spec):
     return None
 
 
-def _as_lazy(source: Source) -> pl.LazyFrame:
+_THREADPOOLS = None
+
+
+def single_blas(on: bool = True):
+    """A context in which BLAS uses one thread (a no-op context when `on` is
+    false), for passes whose heavy work is in numba's parallel kernels.
+
+    The two thread pools contend otherwise: OpenBLAS's threads spin-wait for
+    a while after each call, holding the cores numba's threads need, and the
+    more often the two alternate (the smaller the chunks), the worse it gets.
+    On an IRLS fit of 3 million rows and 40 columns, one BLAS thread was
+    faster at every chunk size and let 182,000-row chunks run as fast as
+    2-million-row ones (9.5 s against 19.2 s with all threads). Products with
+    up to about a hundred columns gain nothing from BLAS threads; wider ones
+    do, so callers turn this on by width."""
+    global _THREADPOOLS
+    if not on:
+        return contextlib.nullcontext()
+    if _THREADPOOLS is None:
+        from threadpoolctl import ThreadpoolController
+        _THREADPOOLS = ThreadpoolController()
+    return _THREADPOOLS.limit(limits=1, user_api="blas")
+
+
+def as_lazy(source: Source) -> pl.LazyFrame:
     """The source as a LazyFrame: a LazyFrame as is, a DataFrame as its lazy
     view (no copy), anything else as a Parquet path or glob to scan."""
     if isinstance(source, pl.LazyFrame):
