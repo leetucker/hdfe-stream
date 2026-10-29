@@ -1,11 +1,53 @@
 # Changelog
 
-## Unreleased: 0.6.0
+## 0.6.0
 
 A supported API for packages built on `hdfe_stream.core` (logit-stream is
 the first), and a row store for them. Nothing changes for code that imports
 from `hdfe_stream` itself, and no estimate changes.
 
+- **IV diagnostics** on 2SLS results (`HDFEResult.iv_diag`, and in
+  `summary()`), under the model's vcov, with ivreg2's conventions:
+  Kleibergen-Paap rk LM underidentification and rk Wald weak-identification
+  F (Anderson's LM and Cragg-Donald's F under iid errors),
+  Sanderson-Windmeijer conditional F statistics, first-stage partial and
+  Shea partial R^2, Montiel Olea and Pflueger's effective F with its
+  critical value (one endogenous regressor), the Anderson-Rubin test and
+  (one endogenous regressor) confidence set, the endogeneity C statistic
+  (ivreg2's `endog()`), and Hansen's J (Sargan's statistic under iid
+  errors). The robust and clustered ones need the
+  instruments' and first stages' scores, which pass 2 now also accumulates
+  for IV models; the rest come from the cross-products. The algebra is
+  **`hdfe_stream.core.ivtests`**, from sums, for any estimator built on the
+  core.
+- **Log-likelihoods and information criteria.** Results have `aic` and
+  `bic` (the coefficients plus the fixed effects' degrees of freedom, as
+  fixest counts them), OLS results the normal `loglik` (with analytic
+  weights, sum(log w) / 2 added, as statsmodels' WLS), GLM results
+  `loglik_null` (constant only), and GLMs with fixed effects
+  `loglik_fe_null` and `pseudo_r2_within` (fixest's within pseudo R2: what
+  the covariates add beyond the fixed effects). With one fixed effect and no
+  offset the fixed-effects-only model is the groups' means, computed in the
+  first row pass; otherwise it is a fit of its own, made with
+  `within_pseudo_r2=True`.
+- **Incidental-parameter bias correction** for logit and probit with one or
+  two fixed effects (`bias_correction=True`, or `{"time": ..., "lags": L}`
+  for predetermined regressors): the analytic correction of Fernández-Val
+  and Weidner (2016), as R's alpaca computes it (`biasCorr`), matching it to
+  1e-7 with the same standard errors; the fixed effects are then
+  re-estimated with the corrected coefficients held (from the first fit's,
+  or from zero if that fails, as it can when the correction is large, in
+  very short panels). Checks the family, the
+  number of fixed effects, and with lags one row per unit and period and an
+  orderable period; warns for very short panels, gaps and units no longer
+  than the window. Not for Poisson (no such bias with one or two fixed
+  effects), nor three-way models.
+- **GLMs rescale analytic weights to average 1** over the estimation sample
+  (Stata's convention for maximum likelihood): before, the iid vcov and the
+  log-likelihood depended on the weights' scale (weights x 10: iid standard
+  errors / sqrt(10)). Coefficients and robust/clustered vcovs are unchanged;
+  `fepois` iid standard errors with analytic weights now differ from
+  pyfixest's, which uses the weights as given.
 - **Stable names in `hdfe_stream.core`**, listed in its docstring and pinned
   by a test: they change only in a minor release, with a changelog entry.
   Nine helpers lose their leading underscore on the way: `core.formula`'s
@@ -20,20 +62,21 @@ from `hdfe_stream` itself, and no estimate changes.
   `iter_batches`), level tables (`factorize`), frames of whole groups,
   sorted in buckets when the groups are not consecutive (`iter_groups`), and
   Polars queries on the CPU or the GPU engine with fallback
-  (`PolarsEngine`). It is logit-stream's pass 0, moved here; hdfe-stream's
-  own estimators do not use it. `BlockStore(binary=mask)` stores the
+  (`PolarsEngine`). hdfe-stream's own estimators do not use it, but it is
+  available for other estimators. `BlockStore(binary=mask)` stores the
   design's 0/1 columns as one byte each and puts X back together, float64,
   as each block is read (`iterate(raw=True)` yields them apart, for a
   consumer that puts X together elsewhere, as on a GPU).
+- **`iter_groups` sorts within groups by `sort_by`** on its in-order path
+  too (a file whose groups are consecutive but whose rows within a group
+  are not in `sort_by` order), as its docstring said.
 - **Results record each vcov's small-sample factor**
   (`diagnostics["vcov_factors"]`, by vcov key), for a caller that converts
   to other conventions (logit-stream's multinomial logit with several
   fixed effects, fitted by `fepois_stream`).
 - **Faster row reads.** Stacking a chunk's columns into the row-major
   design (`_stack`, every pass of every model) is a blocked parallel copy:
-  0.04 s instead of 0.47 s for 2 million rows of 39 columns. An ACS logit of
-  3 million rows without fixed effects went from 16.7 s to 11.4 s from this
-  alone.
+  0.04 s instead of 0.47 s for 2 million rows of 39 columns.
 - **GLMs (IRLS): BLAS on one thread, smaller chunks.** OpenBLAS's threads and
   numba's contended in the row passes, the more the smaller the chunks; up
   to 128 columns the passes now hold BLAS to one thread
@@ -41,6 +84,14 @@ from `hdfe_stream` itself, and no estimate changes.
   at every chunk size. GLMs then default to chunks of about 64 MB of the
   design (`batch_rows=None`, between 100,000 and 2,000,000 rows; linear
   models keep 2,000,000). Estimates are unchanged to rounding.
+- **GLMs without fixed effects: a fused, parallel row pass.** Their IRLS
+  row pass was NumPy on one thread, so it gained nothing from more
+  cores; it is now one numba sweep like the fixed-effects path's
+  (`core.kernels_glm._nb_glm_rows_plain`, sharing that kernel's per-row
+  family code), each block of rows forming its own cross-products up to 128
+  columns. An ACS logit of 3 million rows and 39 coefficients: 9.5 s ->
+  6.0 s on 8 threads, each IRLS step 1.1 s -> 0.6 s. Estimates are unchanged to
+  rounding, and do not depend on the number of threads.
 - **Buckets sized by the rows' width.** Pass 0 sorts each bucket in memory;
   `rows_per_bucket` now defaults to about 384 MB of rows at their width
   (500,000 to 20,000,000 rows) instead of 20,000,000 rows. An ACS logit of 3
@@ -48,34 +99,6 @@ from `hdfe_stream` itself, and no estimate changes.
   1.7 GB, slightly faster. The sort itself is unchanged.
 - Linear models without fixed effects also default to 64 MB chunks: on 3
   million rows of 40 columns, peak memory 3.9 GB -> 2.1 GB at the same time.
-- **Log-likelihoods and information criteria.** Results have `aic` and
-  `bic` (the coefficients plus the fixed effects' degrees of freedom, as
-  fixest counts them), OLS results the normal `loglik` (with analytic
-  weights, sum(log w) / 2 added, as statsmodels' WLS), GLM results
-  `loglik_null` (constant only), and GLMs with fixed effects
-  `loglik_fe_null` and `pseudo_r2_within` (fixest's within pseudo R2: what
-  the covariates add beyond the fixed effects). With one fixed effect and no
-  offset the fixed-effects-only model is the groups' means, computed in the
-  first row pass; otherwise it is a fit of its own, made with
-  `within_pseudo_r2=True`.
-- **GLMs rescale analytic weights to average 1** over the estimation sample
-  (Stata's convention for maximum likelihood): before, the iid vcov and the
-  log-likelihood depended on the weights' scale (weights x 10: iid standard
-  errors / sqrt(10)). Coefficients and robust/clustered vcovs are unchanged;
-  `fepois` iid standard errors with analytic weights now differ from
-  pyfixest's, which uses the weights as given.
-- **Incidental-parameter bias correction** for logit and probit with one or
-  two fixed effects (`bias_correction=True`, or `{"time": ..., "lags": L}`
-  for predetermined regressors): the analytic correction of Fernández-Val
-  and Weidner (2016), as R's alpaca computes it (`biasCorr`), matching it to
-  1e-7 with the same standard errors; the fixed effects are then
-  re-estimated with the corrected coefficients held (from the first fit's,
-  or from zero if that fails, as it can when the correction is large, in
-  very short panels). Checks the family, the
-  number of fixed effects, and with lags one row per unit and period and an
-  orderable period; warns for very short panels, gaps and units no longer
-  than the window. Not for Poisson (no such bias with one or two fixed
-  effects), nor three-way models.
 
 ## 0.5.1
 

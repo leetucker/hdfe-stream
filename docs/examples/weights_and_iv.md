@@ -57,6 +57,32 @@ statistic on the excluded instruments computed under the same vcov as the
 model: the usual weak-instrument diagnostic. It is 33,476 here, against a
 conventional rule of thumb of 10. Weights and IV combine.
 
+`iv.iv_diag` holds the identification and overidentification tests, under the
+same vcov and with ivreg2's conventions, and `iv.summary()` prints them:
+
+- `kp_lm`: Kleibergen and Paap's rk LM test of underidentification (rejecting
+  means the model is identified); Anderson's LM under iid errors;
+- `kp_wald`: the rk Wald statistic and its `F`, the weak-identification
+  statistic (Cragg and Donald's F under iid errors), with ivreg2's
+  small-sample factor;
+- `sanderson_windmeijer`: a conditional F for each endogenous regressor (with
+  one, it is the first-stage F with that factor);
+- `partial_r2`: each endogenous regressor's first-stage partial R² and Shea's
+  partial R²;
+- `effective_f`: with one endogenous regressor, Montiel Olea and Pflueger's
+  effective F, robust to heteroskedasticity and clustering, with the
+  critical value that bounds 2SLS's worst-case bias at 10% of OLS's;
+- `anderson_rubin`: the Anderson–Rubin test that the endogenous regressors'
+  coefficients are zero, and with one of them its 95% confidence set. Both
+  stay valid however weak the instruments are;
+- `endogeneity`: the C statistic for treating the endogenous regressors as
+  exogenous, as ivreg2's `endog()` (a robust Durbin–Wu–Hausman test);
+- `overid`: Hansen's J test of the overidentifying restrictions (Sargan's
+  under iid errors), or None when the model is exactly identified.
+
+The algebra is `hdfe_stream.core.ivtests`, which works from sums, so other
+estimators built on hdfe-stream's core (dpd-stream's GMM) use the same code.
+
 :::{dropdown} The full script: `examples/weights_and_iv.py`
 ```{literalinclude} ../../examples/weights_and_iv.py
 :language: python

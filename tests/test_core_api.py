@@ -139,6 +139,19 @@ def test_iter_groups_yields_whole_groups(tmp_path, shuffled):
     assert not (tmp_path / "group_buckets").exists()
 
 
+def test_iter_groups_sorts_within_consecutive_groups(tmp_path):
+    """Groups already consecutive but their rows out of `sort_by`'s order
+    (a panel's periods shuffled): sorted within each group, the groups in
+    the file's order."""
+    df = pl.DataFrame({"g": [5, 5, 5, 1, 1, 3], "t": [3, 1, 2, 2, 1, 1]})
+    df.write_parquet(tmp_path / "s.parquet")
+    frames = list(iter_groups(PolarsEngine(), tmp_path / "s.parquet", ["g"], rows=4,
+                              workdir=tmp_path, n_groups=3, sort_by=["g", "t"]))
+    out = pl.concat(frames)
+    assert out["g"].to_list() == [5, 5, 5, 1, 1, 3]
+    assert out["t"].to_list() == [1, 2, 3, 1, 2, 1]
+
+
 def test_iter_groups_checks_nested_groupings(tmp_path):
     """Panels in consecutive rows but their sets interleaved: sorted, not
     taken in order."""

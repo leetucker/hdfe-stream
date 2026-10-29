@@ -58,13 +58,12 @@ from types import SimpleNamespace
 
 import numpy as np
 import polars as pl
-from scipy import special
 
 from .core._columns import PREFIX, vcol
 from .core.typing import Variables
 from .core.families import get_family
 from .core.irls import _OFFSET, _IRLSMixin, _State
-from .core.kernels_glm import FAMILY_CODES, _nb_glm_rows
+from .core.kernels_glm import FAMILY_CODES, _nb_glm_rows, _nb_glm_rows_plain
 from .core.passes import _drop_levels
 from .core.report import warn
 from .core.inference import _criteria
@@ -541,27 +540,28 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
     # ------------------------------------------------------------ row pass
     def _row_pass_plain(self, out, state, y, X, f, off, c, first):
         """The row pass for a chunk of a model without fixed effects: no
-        cells, so the moments are plain weighted sums."""
-        fam = self.family
-        eta = self._eta(state, y, X, off, None, None)
-        mu, W, u = fam.irls(y, eta)
-        dev, ll = fam.deviance(y, eta, mu), fam.loglik(y, eta, mu)
-        out.dev += float(dev.sum() if f is None else dev @ f)
-        out.ll += float(ll.sum() if f is None else ll @ f)
-        if first:
-            out.sy += float(y.sum() if f is None else y @ f)
-            out.sw += float(len(y) if f is None else f.sum())
-            if fam.name == "poisson":
-                lg = special.gammaln(y + 1.0)
-                out.slg += float(lg.sum() if f is None else lg @ f)
-        w = W if f is None else W * f
+        cells, so the moments are plain weighted sums, in one parallel sweep
+        (`_nb_glm_rows_plain`). Up to _SINGLE_BLAS_MAX_COLS columns, each
+        block of rows forms its own cross-products on its thread; beyond,
+        one BLAS product on all threads forms them."""
+        empty = np.zeros(0)
+        blockwise = c <= _SINGLE_BLAS_MAX_COLS
         V = np.empty((len(y), c))
-        V[:, 0] = eta + u if off is None else eta + u - off
-        V[:, 1:] = X
-        out.sv += w @ V
-        out.wsum += w.sum()
-        V *= np.sqrt(w)[:, None]
-        out.W += V.T @ V
+        Wb = np.empty((_ROW_BLOCKS if blockwise else 0, c, c))
+        parts = np.empty((_ROW_BLOCKS, 6 + c))
+        _nb_glm_rows_plain(FAMILY_CODES[self.family.name], bool(state.init), float(self.ybar),
+                           y, X, empty if f is None else f, empty if off is None else off,
+                           empty if state.init else state.beta, V, Wb, parts)
+        p = parts.sum(axis=0)
+        out.dev += float(p[0])
+        out.ll += float(p[1])
+        if first:
+            out.sy += float(p[2])
+            out.sw += float(p[3])
+            out.slg += float(p[4])
+        out.wsum += float(p[5])
+        out.sv += p[6:]
+        out.W += Wb.sum(axis=0) if blockwise else V.T @ V
 
     def _row_pass(self, state, yj, xj, slot, first=False):
         """Read the rows once at coefficients `state`: the deviance and

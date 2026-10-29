@@ -96,6 +96,41 @@ def _log_ndtr(a):
     return log_lhs + np.log(rhs)
 
 
+@nb.njit(cache=True, inline="always")
+def _row_terms(family, yi, eta):
+    """One row's IRLS weight W, working-response update u (z = eta + u),
+    deviance, log-likelihood and, for Poisson, log(y!), as families.py
+    computes them."""
+    lg = 0.0
+    if family == POISSON:
+        mu = np.exp(eta)
+        Wi = mu
+        u = yi / mu - 1.0 if mu > 0.0 else 0.0
+        xlogy = yi * np.log(yi) if yi != 0.0 else 0.0
+        dev = 2.0 * (xlogy - yi * eta - yi + mu)
+        lg = math.lgamma(yi + 1.0)
+        ll = yi * eta - mu - lg
+    elif family == LOGIT:
+        p = _expit(eta)
+        q = _expit(-eta)
+        Wi = p * q
+        resid = q if yi > 0.0 else -p
+        u = resid / Wi if Wi > 0.0 else 0.0
+        dev = -2.0 * (_log_expit(eta) if yi > 0.0 else _log_expit(-eta))
+        ll = -0.5 * dev
+    else:
+        p = _ndtr(eta)
+        q = _ndtr(-eta)
+        pdf = np.exp(-0.5 * eta * eta) * _INV_SQRT_2PI
+        var = p * q
+        Wi = pdf * pdf / var if var > 0.0 else 0.0
+        resid = q if yi > 0.0 else -p
+        u = resid / pdf if Wi > 0.0 and pdf > 0.0 else 0.0
+        dev = -2.0 * (_log_ndtr(eta) if yi > 0.0 else _log_ndtr(-eta))
+        ll = -0.5 * dev
+    return Wi, u, dev, ll, lg
+
+
 @nb.njit(parallel=True, cache=True)
 def _nb_glm_rows(family, init, ybar, starts, gcell, cstarts, y, X, f, off, codes,
                  offs, beta, fe, a, V, w, nc, sc, parts):
@@ -148,33 +183,9 @@ def _nb_glm_rows(family, init, ybar, starts, gcell, cstarts, y, X, f, off, codes
                             eta += fe[offs[d] + codes[i, d]]
                         if offset:
                             eta += off[i]
+                    Wi, u, dev, ll, lg = _row_terms(family, yi, eta)
                     if family == POISSON:
-                        mu = np.exp(eta)
-                        Wi = mu
-                        u = yi / mu - 1.0 if mu > 0.0 else 0.0
-                        xlogy = yi * np.log(yi) if yi != 0.0 else 0.0
-                        dev = 2.0 * (xlogy - yi * eta - yi + mu)
-                        lg = math.lgamma(yi + 1.0)
-                        ll = yi * eta - mu - lg
                         parts[b, 4] += fi * lg
-                    elif family == LOGIT:
-                        p = _expit(eta)
-                        q = _expit(-eta)
-                        Wi = p * q
-                        resid = q if yi > 0.0 else -p
-                        u = resid / Wi if Wi > 0.0 else 0.0
-                        dev = -2.0 * (_log_expit(eta) if yi > 0.0 else _log_expit(-eta))
-                        ll = -0.5 * dev
-                    else:
-                        p = _ndtr(eta)
-                        q = _ndtr(-eta)
-                        pdf = np.exp(-0.5 * eta * eta) * _INV_SQRT_2PI
-                        var = p * q
-                        Wi = pdf * pdf / var if var > 0.0 else 0.0
-                        resid = q if yi > 0.0 else -p
-                        u = resid / pdf if Wi > 0.0 and pdf > 0.0 else 0.0
-                        dev = -2.0 * (_log_ndtr(eta) if yi > 0.0 else _log_ndtr(-eta))
-                        ll = -0.5 * dev
                     parts[b, 0] += fi * dev
                     parts[b, 1] += fi * ll
                     parts[b, 2] += fi * yi
@@ -198,3 +209,68 @@ def _nb_glm_rows(family, init, ybar, starts, gcell, cstarts, y, X, f, off, codes
                     r = np.sqrt(w[i])
                     for j in range(m):
                         V[i, j] = r * (V[i, j] - sc[c, j] / tw) if tw > 0.0 else 0.0
+
+
+@nb.njit(parallel=True, cache=True)
+def _nb_glm_rows_plain(family, init, ybar, y, X, f, off, beta, V, Wb, parts):
+    """`_nb_glm_rows` for a model without fixed effects, where the rows are
+    not grouped: one sweep of each row gives its linear predictor (beta and
+    the offset), the family's terms, and V[i] = sqrt(w) v of v = [z, x],
+    z = eta + u less the offset, w = W f. With `Wb` of one matrix per block,
+    block b also forms its cross-products V_b'V_b in Wb[b] (a BLAS call on
+    its own thread); with none (many columns) the caller forms V'V with
+    one BLAS product on all threads.
+
+    With `init` the linear predictor is the family's starting value; f, off
+    and (with `init`) beta may be empty. The rows are cut into the fixed
+    blocks of `parts`, so the sums do not depend on the number of threads:
+
+        0 deviance   1 log-likelihood   2 f y   3 f   4 f log(y!) (Poisson)
+        5 sum w   6.. sum w v, per column of v
+    """
+    nblk = parts.shape[0]
+    n = len(y)
+    k = X.shape[1]
+    weighted = f.shape[0] > 0
+    offset = off.shape[0] > 0
+    cross = Wb.shape[0] > 0
+    for b in nb.prange(nblk):
+        for j in range(parts.shape[1]):
+            parts[b, j] = 0.0
+        lo = b * n // nblk
+        hi = (b + 1) * n // nblk
+        for i in range(lo, hi):
+            yi = y[i]
+            fi = f[i] if weighted else 1.0
+            if init:
+                eta = np.log(0.5 * (yi + ybar)) if family == POISSON else 0.0
+            else:
+                eta = 0.0
+                for j in range(k):
+                    eta += X[i, j] * beta[j]
+                if offset:
+                    eta += off[i]
+            Wi, u, dev, ll, lg = _row_terms(family, yi, eta)
+            parts[b, 0] += fi * dev
+            parts[b, 1] += fi * ll
+            parts[b, 2] += fi * yi
+            parts[b, 3] += fi
+            parts[b, 4] += fi * lg
+            wi = Wi * fi
+            z = eta + u
+            if offset:
+                z -= off[i]
+            parts[b, 5] += wi
+            parts[b, 6] += wi * z
+            for j in range(k):
+                parts[b, 7 + j] += wi * X[i, j]
+            r = np.sqrt(wi)
+            V[i, 0] = r * z
+            for j in range(k):
+                V[i, j + 1] = r * X[i, j]
+        if cross:
+            if hi > lo:
+                Vb = V[lo:hi]
+                Wb[b] = np.dot(Vb.T, Vb)
+            else:
+                Wb[b] = 0.0

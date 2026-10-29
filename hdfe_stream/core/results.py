@@ -118,6 +118,23 @@ class HDFEResult(RegressionResult):
         For IV, the first-stage regressions.
     f_stat_1st_stage : list of float
         For IV, the Wald F of the excluded instruments, under the same vcov.
+    iv_diag : dict or None
+        For IV, the identification and overidentification tests under the
+        same vcov, with ivreg2's conventions (`hdfe_stream.core.ivtests`):
+        ``kp_lm`` (Kleibergen-Paap rk LM underidentification test; Anderson's
+        LM under iid), ``kp_wald`` (the rk Wald statistic and its ``F``, the
+        weak-identification F; Cragg-Donald's under iid),
+        ``sanderson_windmeijer`` (one conditional F per endogenous regressor),
+        ``partial_r2`` (each endogenous regressor's first-stage partial R^2
+        and Shea's partial R^2), ``effective_f`` (Montiel Olea and
+        Pflueger's effective F and its 2SLS critical value for a 10% worst-case
+        bias; one endogenous regressor only, else None), ``anderson_rubin``
+        (the weak-instrument-robust test that the endogenous regressors'
+        coefficients are zero, and with one of them its 95% confidence set),
+        ``endogeneity`` (the C statistic for treating them as exogenous, as
+        ivreg2's ``endog()``) and ``overid`` (Hansen's J, or Sargan's
+        statistic under iid; None when exactly identified). Each test has its
+        statistic, df and p.
     collin_vars : list of str
         Covariates dropped as collinear.
     weights : str or None
@@ -154,6 +171,7 @@ class HDFEResult(RegressionResult):
     is_iv: bool = False
     first_stage: list = field(default_factory=list)
     f_stat_1st_stage: list = field(default_factory=list)
+    iv_diag: dict | None = None
     # GLMs (fepois_stream, feglm_stream): the family, and fit statistics in
     # place of the least-squares ones (rss, r2 and rmse are then nan)
     family: str | None = None
@@ -660,6 +678,7 @@ class HDFEResult(RegressionResult):
             lines.append("first-stage F (excluded instruments, same vcov): "
                          + ", ".join(f"{fs.depvar}: {f:.4g}"
                                      for fs, f in zip(self.first_stage, self.f_stat_1st_stage)))
+            lines += _iv_diag_lines(self.iv_diag)
         if self.collin_vars:
             lines.append(f"dropped as collinear: {self.collin_vars}")
         lines.append(f"solver: {self.solver_info}")
@@ -703,6 +722,7 @@ class HDFEResult(RegressionResult):
         if self.is_iv:
             d["first_stage_f"] = {fs.depvar: f for fs, f
                                   in zip(self.first_stage, self.f_stat_1st_stage)}
+            d["iv_diag"] = self.iv_diag
         return d
 
     def _pyfixest_attrs(self) -> dict:
@@ -743,6 +763,51 @@ class HDFEMulti(RegressionMulti):
         are the same; only a stepwise change in the fixed effects (or, for
         GLMs, in the outcome) changes it. Every frame uses the same `row_id`."""
         return {f: r.sample(check) for f, r in self.all_fitted_models.items()}
+
+
+def _iv_diag_lines(d):
+    """The summary block of `HDFEResult.iv_diag`."""
+    if not d:
+        return []
+    iid = d["vcov"] == "iid"
+    lm, wd = d["kp_lm"], d["kp_wald"]
+    out = [(f"underidentification: {'Anderson' if iid else 'Kleibergen-Paap rk'} LM "
+            f"chi2({lm['df']}) = {lm['statistic']:.4g}, p = {lm['p']:.4g}"),
+           (f"weak identification: {'Cragg-Donald' if iid else 'Kleibergen-Paap rk'} Wald F "
+            f"= {wd['F']:.4g}")]
+    sw = d["sanderson_windmeijer"]
+    if len(sw) > 1:
+        out.append("  Sanderson-Windmeijer F: " + ", ".join(
+            f"{e['variable']}: F({e['df']}, {e['df2']}) = {e['F']:.4g}" for e in sw))
+    ef = d.get("effective_f")
+    if ef:
+        out.append(f"  effective F (Montiel Olea-Pflueger) = {ef['F']:.4g}; 2SLS critical value "
+                   f"(10% worst-case bias, 5% size) {ef['critical_value']:.4g}")
+    pr = d.get("partial_r2") or {}
+    if pr:
+        out.append("  partial R2 / Shea partial R2: " + ", ".join(
+            f"{k}: {v['partial']:.4g} / {v['shea']:.4g}" for k, v in pr.items()))
+    ar = d.get("anderson_rubin")
+    if ar:
+        line = (f"weak-instrument-robust: Anderson-Rubin chi2({ar['df']}) = "
+                f"{ar['statistic']:.4g}, p = {ar['p']:.4g} (H0: endogenous coefficients = 0)")
+        cs = ar.get("confidence_set")
+        if cs is not None:
+            ivs = cs["intervals"]
+            line += (f"; {cs['level']:.0%} set: "
+                     + (" U ".join(f"[{lo:.4g}, {hi:.4g}]" for lo, hi in ivs) if ivs
+                        else "empty"))
+        out.append(line)
+    en = d.get("endogeneity")
+    if en and en["df"] > 0:
+        out.append(f"endogeneity (C statistic, {', '.join(en['tested'])}): chi2({en['df']}) = "
+                   f"{en['statistic']:.4g}, p = {en['p']:.4g}")
+    o = d.get("overid")
+    if o:
+        name = "Sargan" if o["test"] == "sargan" else "Hansen J"
+        out.append(f"overidentification: {name} chi2({o['df']}) = {o['statistic']:.4g}, "
+                   f"p = {o['p']:.4g}")
+    return out
 
 
 def _at_least(tstar, t):

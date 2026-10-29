@@ -20,6 +20,9 @@ Stable names
     core.results_base  RegressionResult, RegressionMulti, vcov_key
     core.reporting     etable
     core.multcomp      bonferroni, holm
+    core.ivtests       kp_rk, identification, iid_omegas, weak_f, hansen_j,
+                       sargan, partial_r2, effective_f, anderson_rubin,
+                       c_statistic
 
     The hooks a `RegressionResult` subclass implements (its docstring) are
     stable too.
@@ -67,4 +70,5 @@ Results and export
     reporting.py       pyfixest views, `etable`
     wildboot.py        the wild cluster bootstrap
     multcomp.py        multiple-testing corrections
+    ivtests.py         IV identification and overidentification tests from sums
 """

@@ -343,7 +343,16 @@ def iter_groups(engine: PolarsEngine, path, unit: Sequence[str], rows: int, work
             yield carry
 
     if in_order:
-        yield from frames(iter_batches(path, rows))
+        # each group's rows are consecutive; put them in `sort_by`'s order
+        # within the group (the groups stay in the file's order)
+        rest = [c for c in sort_by if c not in unit]
+        if not rest:
+            yield from frames(iter_batches(path, rows))
+            return
+        run = "__store_run"
+        for f in frames(iter_batches(path, rows)):
+            yield (f.with_columns(starts.cum_sum().alias(run))
+                   .sort([run, *rest], maintain_order=True).drop(run))
         return
     n_obs = pq.ParquetFile(path).metadata.num_rows
     P = max(1, -(-n_obs // max(rows * 8, 1_000_000)))
