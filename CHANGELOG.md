@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.1
+
+Fix a minor performance regression introduced in 0.6.0 based on a fixed cost to
+the first fit in every process. No estimate changes.
+
+- **The blocked copy that stacks a chunk's columns is used only where it
+  pays.** 0.6.0's `_stack` carried the columns to its numba kernel in a
+  `numba.typed.List`, whose internals numba compiles in each process (the
+  compiled code is not cached): about 0.2 s, on the first fit with a chunk of
+  65,536 elements or more, whatever the width of the design. It bought nothing
+  on AKM fits with few covariates: the copy saves time only with many columns.
+  The blocked copy is now used once the time it would have saved adds up to
+  the compile (a width-dependent estimate per element), so a narrow design,
+  as the AKM regression's three columns, never pays for it, and a wide one
+  does within its first chunks. Narrow fits in a new process are about 0.2 s
+  faster; wide ones are unchanged.
+
 ## 0.6.0
 
 A supported API for packages built on `hdfe_stream.core` (logit-stream is

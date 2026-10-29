@@ -40,17 +40,38 @@ def _readonly(a):
     return a
 
 
+# `_stack` writes a chunk's columns into one row-major array. Column by column
+# that touches every row's cache line once per column; the blocked parallel
+# copy (`_nb_stack`) touches it once. What that saves per element, measured on
+# a 16-thread machine, grows with the width: nothing for one column, 0.3 ns
+# for two, up to 4 ns from 16 columns (a 39-column, 2-million-row chunk: 0.44 s
+# down to 0.04 s). Its cost is the typed list that carries the columns, which
+# numba compiles in every process (the compiled code is not cached): about
+# 0.2 s. So the copy is used once the saving it would have made adds up to
+# that, as a narrow design (AKM's three columns: about 0.1 s over 42 million
+# rows) never does and a wide one does in its first chunks.
+_SAVED_NS = ((16, 4.0), (8, 2.5), (4, 1.0), (3, 0.6), (2, 0.3))   # (from width, ns/element)
+_LIST_COMPILE_S = 0.2
+_missed_saving = 0.0
+_use_blocked = False
+
+
 def _stack(chunk, columns):
     """The named columns of a chunk as one C-ordered float64 array, built in a
-    single allocation (np.column_stack followed by astype would make two) by
-    a blocked parallel copy (`_nb_stack`)."""
-    n = len(chunk[columns[0]])
-    out = np.empty((n, len(columns)))
-    if n * len(columns) < 65_536:
+    single allocation (np.column_stack followed by astype would make two),
+    by a blocked parallel copy (`_nb_stack`) where that pays (see above)."""
+    global _missed_saving, _use_blocked
+    n, k = len(chunk[columns[0]]), len(columns)
+    out = np.empty((n, k))
+    if not _use_blocked:
+        ns = next((v for width, v in _SAVED_NS if k >= width), 0.0)
+        _missed_saving += n * k * ns * 1e-9
+        _use_blocked = _missed_saving >= _LIST_COMPILE_S
+    if _use_blocked and n * k >= 65_536:
+        _nb_stack(nb.typed.List([_readonly(chunk[c]) for c in columns]), out)
+    else:
         for j, c in enumerate(columns):
             out[:, j] = chunk[c]
-    else:
-        _nb_stack(nb.typed.List([_readonly(chunk[c]) for c in columns]), out)
     return out
 
 
