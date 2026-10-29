@@ -88,15 +88,53 @@ class HDFEResult(RegressionResult):
     deviance : float
         For a GLM, the deviance; nan for OLS.
     loglik : float
-        For a GLM, the log-likelihood; nan for OLS.
+        The log-likelihood: for a GLM, the family's; for OLS (not IV), the
+        normal one at the maximum-likelihood error variance RSS / N (with
+        analytic weights, the weighted least-squares one, which adds
+        sum(log w) / 2; frequency weights count as copies of the row).
+    loglik_null : float
+        For a GLM, the log-likelihood of the constant-only model; nan for
+        OLS.
     pseudo_r2 : float
-        For a GLM, McFadden's pseudo R-squared; nan for OLS.
+        For a GLM, McFadden's pseudo R-squared, 1 - loglik / loglik_null: it
+        credits the covariates and the fixed effects together; nan for OLS.
+    loglik_fe_null : float
+        For a GLM with fixed effects, the log-likelihood of the model with
+        the fixed effects and no covariates: the groups' means with one
+        fixed effect (and no offset), otherwise a fit of its own, made only
+        with ``within_pseudo_r2=True``; else nan.
+    pseudo_r2_within : float
+        1 - loglik / loglik_fe_null: what the covariates add beyond the fixed
+        effects (fixest's "within pseudo R2"); nan when `loglik_fe_null` is.
+    aic, bic : float
+        Akaike's and Schwarz's information criteria, -2 loglik + 2 p and
+        -2 loglik + p log(N), with p the coefficients plus the fixed effects'
+        degrees of freedom (`k_fe`), as fixest counts them. For OLS the error
+        variance is not counted, as in statsmodels (R's ``lm`` counts it,
+        adding 2 to the AIC); nan for IV.
     is_iv : bool
         Whether the model was estimated by 2SLS.
     first_stage : list of HDFEResult
         For IV, the first-stage regressions.
     f_stat_1st_stage : list of float
         For IV, the Wald F of the excluded instruments, under the same vcov.
+    iv_diag : dict or None
+        For IV, the identification and overidentification tests under the
+        same vcov, with ivreg2's conventions (`hdfe_stream.core.ivtests`):
+        ``kp_lm`` (Kleibergen-Paap rk LM underidentification test; Anderson's
+        LM under iid), ``kp_wald`` (the rk Wald statistic and its ``F``, the
+        weak-identification F; Cragg-Donald's under iid),
+        ``sanderson_windmeijer`` (one conditional F per endogenous regressor),
+        ``partial_r2`` (each endogenous regressor's first-stage partial R^2
+        and Shea's partial R^2), ``effective_f`` (Montiel Olea and
+        Pflueger's effective F and its 2SLS critical value for a 10% worst-case
+        bias; one endogenous regressor only, else None), ``anderson_rubin``
+        (the weak-instrument-robust test that the endogenous regressors'
+        coefficients are zero, and with one of them its 95% confidence set),
+        ``endogeneity`` (the C statistic for treating them as exogenous, as
+        ivreg2's ``endog()``) and ``overid`` (Hansen's J, or Sargan's
+        statistic under iid; None when exactly identified). Each test has its
+        statistic, df and p.
     collin_vars : list of str
         Covariates dropped as collinear.
     weights : str or None
@@ -133,12 +171,18 @@ class HDFEResult(RegressionResult):
     is_iv: bool = False
     first_stage: list = field(default_factory=list)
     f_stat_1st_stage: list = field(default_factory=list)
+    iv_diag: dict | None = None
     # GLMs (fepois_stream, feglm_stream): the family, and fit statistics in
     # place of the least-squares ones (rss, r2 and rmse are then nan)
     family: str | None = None
     deviance: float = np.nan
     loglik: float = np.nan
     pseudo_r2: float = np.nan
+    loglik_null: float = np.nan
+    loglik_fe_null: float = np.nan
+    pseudo_r2_within: float = np.nan
+    aic: float = np.nan
+    bic: float = np.nan
     _run: object = field(default=None, repr=False, compare=False)
     _estimator: object = field(default=None, repr=False, compare=False)
     _sample: dict | None = field(default=None, repr=False, compare=False)
@@ -483,7 +527,7 @@ class HDFEResult(RegressionResult):
         -------
         polars.LazyFrame
         """
-        from .utils import _as_lazy
+        from .utils import as_lazy
 
         if type not in ("link", "response"):
             raise ValueError(f"type must be 'link' or 'response', got {type!r}")
@@ -497,7 +541,7 @@ class HDFEResult(RegressionResult):
                                  "newdata")
             frame = self._sample["source"]
         else:
-            frame = _as_lazy(newdata)
+            frame = as_lazy(newdata)
         schema = frame.collect_schema()
         check_source(schema.names())
         if name in schema:
@@ -601,6 +645,8 @@ class HDFEResult(RegressionResult):
         if self.family:
             fit = (f"deviance: {self.deviance:.8g}   log-likelihood: {self.loglik:.8g}   "
                    f"pseudo R2: {self.pseudo_r2:.6f}")
+            if not np.isnan(self.pseudo_r2_within):
+                fit += f"   within pseudo R2: {self.pseudo_r2_within:.6f}"
             irls = self.diagnostics.get("irls", {})
             if irls:
                 fit += (f"   IRLS steps: {irls['iterations']}"
@@ -616,12 +662,23 @@ class HDFEResult(RegressionResult):
                 fit = (f"FE dof: {self.k_fe:,}   {fit}   "
                        f"within R2: {self.r2_within:.6f}")
         lines.append(fit)
+        bc = self.diagnostics.get("bias_correction")
+        if bc:
+            lines.append("coefficients bias-corrected for the incidental parameters of "
+                         + " and ".join(bc["dims"])
+                         + (f" (lags: {bc['lags']} periods of {bc['time']})" if bc["lags"]
+                            else "")
+                         + "; uncorrected in diagnostics['bias_correction']")
+        if not np.isnan(self.aic):
+            lines.append(f"AIC: {self.aic:.8g}   BIC: {self.bic:.8g}"
+                         + ("" if self.family else f"   log-likelihood: {self.loglik:.8g}"))
         if self.weights:
             lines.append(f"weights: {self.weights} ({self.weights_type})")
         if self.is_iv:
             lines.append("first-stage F (excluded instruments, same vcov): "
                          + ", ".join(f"{fs.depvar}: {f:.4g}"
                                      for fs, f in zip(self.first_stage, self.f_stat_1st_stage)))
+            lines += _iv_diag_lines(self.iv_diag)
         if self.collin_vars:
             lines.append(f"dropped as collinear: {self.collin_vars}")
         lines.append(f"solver: {self.solver_info}")
@@ -652,15 +709,20 @@ class HDFEResult(RegressionResult):
         }
         if self.family:
             d.update(deviance=self.deviance, loglik=self.loglik, pseudo_r2=self.pseudo_r2,
+                     loglik_null=self.loglik_null, loglik_fe_null=self.loglik_fe_null,
+                     pseudo_r2_within=self.pseudo_r2_within,
                      irls=self.diagnostics.get("irls"),
                      separation=self.diagnostics.get("separation"))
         else:
-            d.update(rss=self.rss, rmse=self.rmse, r2=self.r2, adj_r2=self.adj_r2)
+            d.update(rss=self.rss, rmse=self.rmse, r2=self.r2, adj_r2=self.adj_r2,
+                     loglik=self.loglik)
             if self.fe_names:
                 d.update(r2_within=self.r2_within, adj_r2_within=self.adj_r2_within)
+        d.update(aic=self.aic, bic=self.bic)
         if self.is_iv:
             d["first_stage_f"] = {fs.depvar: f for fs, f
                                   in zip(self.first_stage, self.f_stat_1st_stage)}
+            d["iv_diag"] = self.iv_diag
         return d
 
     def _pyfixest_attrs(self) -> dict:
@@ -701,6 +763,51 @@ class HDFEMulti(RegressionMulti):
         are the same; only a stepwise change in the fixed effects (or, for
         GLMs, in the outcome) changes it. Every frame uses the same `row_id`."""
         return {f: r.sample(check) for f, r in self.all_fitted_models.items()}
+
+
+def _iv_diag_lines(d):
+    """The summary block of `HDFEResult.iv_diag`."""
+    if not d:
+        return []
+    iid = d["vcov"] == "iid"
+    lm, wd = d["kp_lm"], d["kp_wald"]
+    out = [(f"underidentification: {'Anderson' if iid else 'Kleibergen-Paap rk'} LM "
+            f"chi2({lm['df']}) = {lm['statistic']:.4g}, p = {lm['p']:.4g}"),
+           (f"weak identification: {'Cragg-Donald' if iid else 'Kleibergen-Paap rk'} Wald F "
+            f"= {wd['F']:.4g}")]
+    sw = d["sanderson_windmeijer"]
+    if len(sw) > 1:
+        out.append("  Sanderson-Windmeijer F: " + ", ".join(
+            f"{e['variable']}: F({e['df']}, {e['df2']}) = {e['F']:.4g}" for e in sw))
+    ef = d.get("effective_f")
+    if ef:
+        out.append(f"  effective F (Montiel Olea-Pflueger) = {ef['F']:.4g}; 2SLS critical value "
+                   f"(10% worst-case bias, 5% size) {ef['critical_value']:.4g}")
+    pr = d.get("partial_r2") or {}
+    if pr:
+        out.append("  partial R2 / Shea partial R2: " + ", ".join(
+            f"{k}: {v['partial']:.4g} / {v['shea']:.4g}" for k, v in pr.items()))
+    ar = d.get("anderson_rubin")
+    if ar:
+        line = (f"weak-instrument-robust: Anderson-Rubin chi2({ar['df']}) = "
+                f"{ar['statistic']:.4g}, p = {ar['p']:.4g} (H0: endogenous coefficients = 0)")
+        cs = ar.get("confidence_set")
+        if cs is not None:
+            ivs = cs["intervals"]
+            line += (f"; {cs['level']:.0%} set: "
+                     + (" U ".join(f"[{lo:.4g}, {hi:.4g}]" for lo, hi in ivs) if ivs
+                        else "empty"))
+        out.append(line)
+    en = d.get("endogeneity")
+    if en and en["df"] > 0:
+        out.append(f"endogeneity (C statistic, {', '.join(en['tested'])}): chi2({en['df']}) = "
+                   f"{en['statistic']:.4g}, p = {en['p']:.4g}")
+    o = d.get("overid")
+    if o:
+        name = "Sargan" if o["test"] == "sargan" else "Hansen J"
+        out.append(f"overidentification: {name} chi2({o['df']}) = {o['statistic']:.4g}, "
+                   f"p = {o['p']:.4g}")
+    return out
 
 
 def _at_least(tstar, t):

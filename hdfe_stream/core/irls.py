@@ -70,6 +70,9 @@ class _IRLSMixin:
     # rather than from pass 1 (see passes.py)
     cells_contiguous = True
     cell_sums = False
+    # the factor the weights are read with: the estimator may rescale them
+    # (StreamingGLM: analytic weights to average 1)
+    _wscale = 1.0
 
     # ------------------------------------------------------------ layout
     def _layout(self):
@@ -122,9 +125,15 @@ class _IRLSMixin:
         return gamma, agg.W + acc.sum(axis=0), info
 
     def _update(self, agg, gamma, A):
-        """The coefficients that solve one weighted least-squares step."""
+        """The coefficients that solve one weighted least-squares step; with
+        ``_fixed_beta`` set, the fixed effects that solve it with those
+        slopes held (an offset X beta, as alpaca's `feglmOffset`)."""
         k = A.shape[0] - 1
-        beta = np.linalg.solve(A[1:, 1:], A[1:, 0]) if k else np.zeros(0)
+        fixed = getattr(self, "_fixed_beta", None)
+        if fixed is not None:
+            beta = np.asarray(fixed, dtype=np.float64)
+        else:
+            beta = np.linalg.solve(A[1:, 1:], A[1:, 0]) if k else np.zeros(0)
         fe = np.ascontiguousarray(gamma[:, 0] - gamma[:, 1:] @ beta)
         a_id, a_s = np.zeros(self.G_id), np.zeros(self.G_s)
         if self.fe:
@@ -205,8 +214,8 @@ class _IRLSMixin:
     def _chunk_data(self, ch, yj, xj):
         y = np.ascontiguousarray(ch[vcol(yj)], dtype=np.float64)
         X = _stack(ch, [vcol(j) for j in xj]) if xj else np.zeros((len(y), 0))
-        f = (np.ascontiguousarray(ch[WCOL], dtype=np.float64) if self.weights is not None
-             else None)
+        f = (np.ascontiguousarray(ch[WCOL], dtype=np.float64) * self._wscale
+             if self.weights is not None else None)
         off = (np.ascontiguousarray(ch[vcol(self.vidx[_OFFSET])], dtype=np.float64)
                if self.offset_name is not None else None)
         return y, X, f, off

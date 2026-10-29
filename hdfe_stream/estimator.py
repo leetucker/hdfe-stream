@@ -163,12 +163,20 @@ class StreamingHDFE(_StreamingBase, _InverseMixin, _LeaveOutMixin, _TraceMixin,
     rhs_block : int, default 8
         Variables solved at a time; bounds solver memory at about
         6 x (total non-streamed levels) x rhs_block doubles.
-    batch_rows : int, default 2_000_000
+    batch_rows : int, optional
         Rows per chunk when streaming Parquet, and per slice of whole groups
-        of the streamed dimension when building the cell table.
-    rows_per_bucket : int, default 20_000_000
+        of the streamed dimension when building the cell table. Default:
+        chunks of about 64 MB of the design, between 100,000 and 2,000,000
+        rows, for GLMs (`StreamingGLM`) and for linear models without fixed
+        effects, which keeps memory proportional to the design's width
+        rather than to a row count; 2,000,000 rows for linear models with
+        fixed effects.
+    rows_per_bucket : int, optional
         Target rows per bucket: rows are hash-partitioned by the streamed
-        dimension into buckets so the sort is bucket-sized.
+        dimension into buckets so the sort is bucket-sized. Each bucket is
+        sorted in memory, which sets pass 0's peak; the default is about
+        384 MB of rows at their width (the design and the source columns),
+        between 500,000 and 20,000,000 rows.
     n_buckets : int, optional
         The number of buckets, instead of `rows_per_bucket`.
     row_group_size : int, default 500_000

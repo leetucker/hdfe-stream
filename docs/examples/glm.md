@@ -124,17 +124,27 @@ takes within 5% of the time `auto` takes; at 5,000,000, it takes 12% less. With 
 | `iwls_maxiter` | `25` | the most IRLS steps; a fit that reaches it warns, and `diagnostics["irls"]["converged"]` is False |
 | `separation_check` | `True` | drop fixed-effect levels whose effect would be infinite; see below |
 | `weights`, `weights_type` | none | analytic or frequency weights, multiplying each row's log-likelihood |
+| `bias_correction` | none | logit and probit: correct the coefficients for the fixed effects' incidental-parameter bias; see below |
+| `within_pseudo_r2` | `False` | also fit the fixed-effects-only model when it is not free (two or more fixed effects, or an offset) |
 
 Everything else (`vcov`, `cluster`, `fe_dof`, `solver`, `batch_rows`,
-`workdir`, ...) is as in `feols_stream`. `assembly` does not apply. The
+`workdir`, ...) is as in `feols_stream`, except that GLMs read chunks of
+about 64 MB of the design unless `batch_rows` is given, with BLAS on one
+thread up to 128 columns (faster, and smaller chunks then cost nothing). `assembly` does not apply. The
 outcome must be nonnegative for Poisson, and 0 or 1 for logit and probit.
 
 ## Results
 
 The result is the same [`HDFEResult`](../reference/results.md) as for OLS, with:
 
-- `family`, `deviance`, `loglik`, and `pseudo_r2` (McFadden's, one minus the
-  ratio of the log-likelihood to the constant-only model's);
+- `family`, `deviance`, `loglik`, `loglik_null` (the constant-only model's),
+  `pseudo_r2` (McFadden's, one minus their ratio), and `aic` and `bic`
+  (counting the fixed effects' degrees of freedom, as fixest);
+- with fixed effects, `loglik_fe_null` and `pseudo_r2_within`: the model with
+  the fixed effects and no covariates, and what the covariates add beyond it
+  (fixest's within pseudo R²). With one fixed effect and no offset it is the
+  groups' means, computed in the first pass; otherwise it is a fit of its
+  own, made with `within_pseudo_r2=True`;
 - `rss`, `r2`, `r2_within` and `rmse` set to nan;
 - p-values and confidence intervals from the normal distribution, as in
   pyfixest (`tidy()`, `to_pyfixest()`);
@@ -182,6 +192,50 @@ Correia, Guimarães and Zylkin) makes some coefficients diverge. The symptom is
 a fit that does not converge, or coefficients and standard errors that are
 very large.
 
+## Incidental-parameter bias
+
+With fixed effects estimated from few observations each, such as worker
+effects in a panel of a few years, logit and probit coefficients are biased,
+by O(1/T) in the rows per level. The example shows it: the true coefficient
+is 0.3, firm and year effects estimate 0.32, and adding worker effects (about
+eight rows each) gives 0.36. pyfixest and fixest leave this alone.
+
+`bias_correction=True` applies the analytic correction of Fernández-Val and
+Weidner (2016), computed as R's alpaca computes it (`biasCorr`; the tests
+match it to 1e-7). On the example's data with worker and year effects, it
+moves the coefficient from 0.358 to 0.315.
+
+```python
+fit = feglm_stream("promoted ~ x | worker_id + year", data, "logit",
+                   bias_correction=True)
+fit.coef()                                       # corrected
+fit.diagnostics["bias_correction"]               # uncorrected, the bias, ...
+```
+
+- **Which fixed effects:** one or two, all of them. For strictly exogenous
+  regressors the two terms have the same form, so nothing says which is the
+  unit and which the period.
+- **Predetermined regressors** (a lagged outcome, a regressor that responds
+  to past shocks) add a term from the scores' correlation over time within
+  each unit: `bias_correction={"time": "year", "lags": 2}` names the period
+  effect and the window L, and the other fixed effect is the unit. Each unit
+  and period must then have at most one row, the period must be numeric or a
+  date, and the unit is made the streamed dimension, so its rows arrive in
+  period order. Lags count observed periods: a warning reports units with
+  gaps, and units with no more periods than L.
+- **After the correction**, the fixed effects are re-estimated with the
+  corrected coefficients held (one more IRLS fit, from where the first
+  ended), and the variances, residuals, fixed effects and predictions are
+  those of that fit, as in alpaca. The fit statistics (deviance,
+  log-likelihood, AIC) remain the maximum-likelihood fit's.
+- **Checks:** logit or probit; one or two fixed effects; with lags, the
+  period among them, and one column. A warning when the median rows per
+  level of a corrected effect is below five: the correction is first-order
+  and unreliable for very short panels.
+- **Not for Poisson:** with one or two fixed effects and strictly exogenous
+  regressors its coefficients have no such bias. The three-way (gravity)
+  case, where they do (Weidner and Zylkin 2021), is not implemented.
+
 ## Differences from pyfixest
 
 **Logit and probit separation.** pyfixest drops levels whose outcome is all 0,
@@ -209,6 +263,17 @@ the data with each row repeated, which is what the tests check.
 `fepois` and fixest. Analytic weights give the same coefficients as frequency
 weights with the same values; only N and the small-sample factors differ.
 
+**Analytic weights are rescaled to average 1** over the estimation sample, as
+Stata does for maximum-likelihood estimators. A GLM has no dispersion to
+absorb their scale, so otherwise the iid vcov, the log-likelihood and the bias
+correction would change when every weight is multiplied by a constant
+(survey weights summing to a population would give iid standard errors far
+too small). The coefficients and the robust and clustered vcovs do not
+depend on the scale. pyfixest's `fepois` uses the weights as given, so its
+iid standard errors differ from these by the square root of the average
+weight; with the weights rescaled first, the two agree (the tests check
+both).
+
 **Convergence.** The stopping rule uses the weighted deviance; pyfixest's
 `fepois` uses the unweighted one. pyfixest's `feglm` halves a step that raises
 the deviance, and this package does the same for all three families, except
@@ -229,12 +294,8 @@ digits of the coefficients.
   logit or probit either.)
 - **IV, varying slopes, leave-out (KSS) variance components.** These are linear
   models only.
-- **Incidental parameter bias.** With fixed effects estimated from few
-  observations each, such as worker effects in a panel of a few years, logit and
-  probit coefficients are biased away from zero. Neither pyfixest nor this
-  package corrects for it. The example above shows it: the true coefficient is
-  0.3, firm and year effects estimate 0.32, and adding worker effects (about
-  eight rows each) gives 0.36.
+- **Bias correction with three or more fixed effects,** or for Poisson (see
+  above).
 
 :::{dropdown} The full script: `examples/glm.py`
 ```{literalinclude} ../../examples/glm.py

@@ -55,6 +55,16 @@ class _Family:
         (Poisson) sum w log(y!)."""
         raise NotImplementedError
 
+    def loglik_means(self, y, f, starts):
+        """The log-likelihood (Poisson: less sum w log(y!)) of fitting each
+        group of rows (`starts`, sorted) its weighted mean outcome: the model
+        with one fixed effect and nothing else, for all three families (for
+        probit too, since each group's one parameter sets its one mean)."""
+        fy = y if f is None else y * f
+        sw = np.diff(starts).astype(float) if f is None else np.add.reduceat(f, starts[:-1])
+        sy = np.add.reduceat(fy, starts[:-1])
+        return float(self._means_ll(sy, sw).sum())
+
 
 class Poisson(_Family):
     name, method = "poisson", "fepois"
@@ -88,6 +98,10 @@ class Poisson(_Family):
         ybar = sy / sw
         return sy * np.log(ybar) - sw * ybar - slg
 
+    @staticmethod
+    def _means_ll(sy, sw):
+        return special.xlogy(sy, sy / sw) - sy
+
 
 class _Binary(_Family):
 
@@ -116,6 +130,11 @@ class _Binary(_Family):
         p = sy / sw
         return sy * np.log(p) + (sw - sy) * np.log1p(-p)
 
+    @staticmethod
+    def _means_ll(sy, sw):
+        p = sy / sw
+        return special.xlogy(sy, p) + special.xlogy(sw - sy, 1 - p)
+
 
 class Logit(_Binary):
     name, method = "logit", "feglm-logit"
@@ -134,6 +153,14 @@ class Logit(_Binary):
         u = np.where(W > 0, resid / np.where(W > 0, W, 1.0), 0.0)
         return p, W, u
 
+    def bias_terms(self, y, eta):
+        """Per row, for the incidental-parameter bias correction (alpaca's
+        `biasCorr`): the score in eta, y - mu; the Fisher weight mu'(eta);
+        and the derivative of mu'(eta), mu'(1 - 2 mu)."""
+        p, q = special.expit(eta), special.expit(-eta)
+        d = p * q
+        return np.where(y > 0, q, -p), d, d * (q - p)
+
 
 class Probit(_Binary):
     name, method = "probit", "feglm-probit"
@@ -144,6 +171,16 @@ class Probit(_Binary):
 
     def mu(self, eta):
         return special.ndtr(eta)
+
+    def bias_terms(self, y, eta):
+        """As `Logit.bias_terms`, each times phi / (Phi (1 - Phi)), as alpaca
+        does for a non-canonical link: the score h (y - Phi), the Fisher
+        weight h phi, and h times phi'(eta) = -eta phi."""
+        p, q = special.ndtr(eta), special.ndtr(-eta)
+        pdf = np.exp(-0.5 * eta * eta) / _SQRT_2PI
+        V = p * q
+        h = np.where(V > 0, pdf / np.where(V > 0, V, 1.0), 0.0)
+        return h * np.where(y > 0, q, -p), h * pdf, h * (-eta * pdf)
 
     def irls(self, y, eta):
         p, q = special.ndtr(eta), special.ndtr(-eta)

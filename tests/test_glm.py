@@ -131,10 +131,30 @@ def test_fepois_matches_pyfixest(glm_panel, fml, vcov):
 
 @pytest.mark.parametrize("vcov", VCOVS[:3], ids=VCOV_IDS[:3])
 def test_fepois_aweights_match_pyfixest(glm_panel, vcov):
+    """Analytic weights are rescaled to average 1 (Stata's convention for
+    maximum likelihood), so the fit is pyfixest's with the weights so
+    rescaled; pyfixest uses them as given, which changes only its iid vcov
+    (the robust ones do not depend on the weights' scale)."""
     path, pdf = glm_panel
     fml = "yp ~ x1 + x2 | worker_id + firm_id"
     with fit("poisson", fml, path, vcov=vcov, weights="wa") as res:
-        assert_agrees(res, pf_glm("poisson", fml, pdf, vcov=vcov, weights="wa"))
+        # the average over the estimation sample (separated levels dropped)
+        mean = res.resid().collect()["weights"].mean()
+        norm = pdf.assign(wa=pdf["wa"] / mean)
+        assert_agrees(res, pf_glm("poisson", fml, norm, vcov=vcov, weights="wa"))
+        if vcov != "iid":
+            raw = pf_glm("poisson", fml, pdf, vcov=vcov, weights="wa")
+            assert rel(res.se, raw.se().to_numpy()) < TOL_SE
+
+
+def test_aweights_scale_does_not_matter(glm_panel):
+    """Multiplying analytic weights by a constant changes nothing."""
+    path, pdf = glm_panel
+    fml = "yp ~ x1 + x2 | worker_id + firm_id"
+    with fit("poisson", fml, path, weights="wa") as a, \
+            fit("poisson", fml, pl.from_pandas(pdf.assign(wa=10 * pdf["wa"])),
+                weights="wa") as b:
+        assert rel(a.se, b.se) < 1e-9 and abs(a.loglik - b.loglik) < 1e-6 * abs(a.loglik)
 
 
 @pytest.mark.parametrize("vcov", VCOVS[:4], ids=VCOV_IDS[:4])

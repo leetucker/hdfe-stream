@@ -47,10 +47,9 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from .core._columns import GCODE
-from .core._types import PathLike, Source
 from .core.report import _log
-
 from .core.results import HDFEResult
+from .core.typing import PathLike, Source
 
 if TYPE_CHECKING:
     import polars as pl
@@ -1155,14 +1154,14 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
     >>> print(lo.summary())
     """
     from .api import feols_stream
-    from .core.feterms import _parse_fe, _parse_fe_term
-    from .core.report import _warn
+    from .core.feterms import _parse_fe_term, parse_fe
+    from .core.report import warn
 
     if "|" not in fml:
         raise ValueError(
             f"{fml!r} has no fixed effects; leave-out estimation needs at least "
             "two dimensions, as in 'y ~ x | worker_id + firm_id'")
-    dimensions = [_parse_fe_term(term)[0] for term in _parse_fe(fml.split("|")[1])]
+    dimensions = [_parse_fe_term(term)[0] for term in parse_fe(fml.split("|")[1])]
     if len(dimensions) < 2:
         raise ValueError(
             f"{fml!r} has one fixed effect; leave-out estimation needs at least "
@@ -1210,10 +1209,10 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
         before, after = pruning["levels_before"], pruning["levels_after"]
         dropped = 1.0 - after[psi] / max(before[psi], 1)
         if dropped > 0.2:
-            _warn(f"leave-one-out pruning removed {dropped:.0%} of {psi}; "
-                  "the components below describe the surviving set, which is "
-                  "the sample the leave-out parameters are identified on, not "
-                  "the panel you supplied", logger)
+            warn(f"leave-one-out pruning removed {dropped:.0%} of {psi}; "
+                 "the components below describe the surviving set, which is "
+                 "the sample the leave-out parameters are identified on, not "
+                 "the panel you supplied", logger)
         pruning = {"fe": [alpha, psi], **pruning}
     components.pruning = pruning
     components.fit = fit

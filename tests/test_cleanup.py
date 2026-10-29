@@ -258,7 +258,7 @@ def test_a_new_fit_removes_empty_run_directories(rich, workdir):
 def test_a_run_directory_left_empty_by_rmtree_is_removed(workdir, monkeypatch):
     """If deleting the tree empties the directory but cannot remove it, the
     empty directory is removed afterwards."""
-    run = workspace._Run(workdir, auto_cleanup=False)
+    run = workspace.Run(workdir, auto_cleanup=False)
     (run.path / "models").mkdir()
     real = workspace.shutil.rmtree
 

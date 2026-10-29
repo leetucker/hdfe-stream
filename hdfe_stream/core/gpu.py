@@ -43,6 +43,8 @@ def cuda_backend():
 
 
 def check_polars_gpu():
+    """Raise ImportError, saying what to install, unless the cudf-polars
+    GPU engine is importable (``polars_engine="gpu"``)."""
     if importlib.util.find_spec("cudf_polars") is None:
         raise ImportError("polars_engine='gpu' needs the cudf-polars package for your CUDA "
                           "version, e.g. `pip install cudf-polars-cu13`, and an NVIDIA GPU")

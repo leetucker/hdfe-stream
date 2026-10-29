@@ -1,8 +1,36 @@
 """The estimation machinery that hdfe_stream's estimators share, and that
 other estimators built on the same streaming passes can import.
 
-Everything here is internal: names keep their leading underscores, and none
-of it is a supported public API. Import public names from `hdfe_stream`.
+Stable names
+    The names below are the supported API for packages built on this layer
+    (logit-stream is one). They change only in a minor release (0.x -> 0.y),
+    with the change in the changelog; tests/test_core_api.py pins them.
+
+    core.typing        PathLike, Source, Vcov, Variables
+    core.formula       compile_design, categorical_vars, numeric_expr,
+                       pyfixest_formula_api
+    core.feterms       parse_fe
+    core.report        warn
+    core.utils         as_lazy, single_blas
+    core.workspace     Run, cleanup
+    core.gpu           check_polars_gpu, cuda_backend
+    core.store         BlockStore, Block, PolarsEngine, block_rows,
+                       factorize, not_missing, write_sample, iter_batches,
+                       iter_groups
+    core.results_base  RegressionResult, RegressionMulti, vcov_key
+    core.reporting     etable
+    core.multcomp      bonferroni, holm
+    core.ivtests       kp_rk, identification, iid_omegas, weak_f, hansen_j,
+                       sargan, partial_r2, effective_f, anderson_rubin,
+                       c_statistic
+
+    The hooks a `RegressionResult` subclass implements (its docstring) are
+    stable too.
+
+    Everything else -- names with a leading underscore, and the engine
+    modules (estimator, passes, solve, inference, irls, the kernels) -- is
+    internal and can change in any release. Import the estimators' public
+    names from `hdfe_stream`.
 
 Layering: no module in this package imports from `hdfe_stream` outside
 `core` at import time (tests/test_layering.py checks it). The only upward
@@ -11,9 +39,11 @@ reach the leave-out (KSS) estimators in the parent package.
 
 Infrastructure
     _columns.py        names of the columns the estimator adds to the rows
-    _types.py          type aliases of the public signatures
+    typing.py          type aliases of the public signatures
     report.py          logging / printing
     utils.py           small shared helpers; Parquet iteration in whole groups
+    store.py           a block store of rows, for estimators that read every
+                       row in each iteration (dense Newton)
     workspace.py       run directories, `cleanup()`
     gpu.py             the CuPy solve and the Polars GPU engine check
 Input side
@@ -40,4 +70,5 @@ Results and export
     reporting.py       pyfixest views, `etable`
     wildboot.py        the wild cluster bootstrap
     multcomp.py        multiple-testing corrections
+    ivtests.py         IV identification and overidentification tests from sums
 """

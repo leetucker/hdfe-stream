@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import numpy as np
 import numba as nb
-
-
+import numpy as np
 
 # --------------------------------------------------------------------------
 # numba kernels
@@ -18,6 +16,37 @@ import numba as nb
 # thread; anything scattered into level-sized vectors uses per-thread
 # accumulators so threads never write to the same memory.
 # --------------------------------------------------------------------------
+
+@nb.njit(parallel=True, cache=True)
+def _nb_stack(cols, out):
+    """out[:, j] = cols[j] (a typed list of 1-D float64 arrays), in blocks
+    of rows that stay in cache, the blocks in parallel. Writing whole columns
+    into a C-ordered array instead touches every row's cache line once per
+    column: on a 2-million-row, 39-column chunk that took 0.47 s, this 0.04 s."""
+    n, k = out.shape
+    nblk = (n + 4095) // 4096
+    for b in nb.prange(nblk):
+        r0 = b * 4096
+        r1 = min(n, r0 + 4096)
+        for j in range(k):
+            a = cols[j]
+            for i in range(r0, r1):
+                out[i, j] = a[i]
+
+
+@nb.njit(parallel=True, cache=True)
+def _nb_unpack(Xd, dcols, Xb, bcols, out):
+    """out[:, dcols] = Xd and out[:, bcols] = Xb (uint8), row by row, rows
+    in parallel: a design stored with its 0/1 columns as bytes, put back
+    together in one pass over out."""
+    n = out.shape[0]
+    kd, kb = len(dcols), len(bcols)
+    for i in nb.prange(n):
+        for j in range(kd):
+            out[i, dcols[j]] = Xd[i, j]
+        for j in range(kb):
+            out[i, bcols[j]] = Xb[i, j]
+
 
 @nb.njit(cache=True)
 def _nb_rhs(starts, codes, n, sums, offs, b):

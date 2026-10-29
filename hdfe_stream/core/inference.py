@@ -14,21 +14,49 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ._columns import GCODE, WCOL, kcol, tcol, vcol
-from .kernels_base import (_nb_assemble, _nb_crv3_finish, _nb_crv3_groups,
-                           _nb_crv3_scatter, _nb_pass2, _nb_residualize_rows)
+from .kernels_base import (
+    _nb_assemble,
+    _nb_crv3_finish,
+    _nb_crv3_groups,
+    _nb_crv3_scatter,
+    _nb_pass2,
+    _nb_residualize_rows,
+    _nb_stack,
+)
 from .kernels_slopes import _nb_pass2_sl, _nb_residualize_rows_sl
-from .report import _warn
+from .report import warn
 from .results import HDFEResult
 from .utils import _phys_mem_gb, _safe, _scatter, _tbl_to_np, iter_group_chunks
 
 
+def _readonly(a):
+    """`a` as a C-contiguous float64 array, read-only (a view if need be):
+    Arrow's zero-copy columns are read-only, and numba types read-only and
+    writable arrays apart, so `_nb_stack`'s list holds one kind."""
+    a = np.ascontiguousarray(a, dtype=np.float64)
+    if a.flags.writeable:
+        a = a.view()
+        a.flags.writeable = False
+    return a
+
+
 def _stack(chunk, columns):
     """The named columns of a chunk as one C-ordered float64 array, built in a
-    single allocation (np.column_stack followed by astype would make two)."""
-    out = np.empty((len(chunk[columns[0]]), len(columns)))
-    for j, c in enumerate(columns):
-        out[:, j] = chunk[c]
+    single allocation (np.column_stack followed by astype would make two) by
+    a blocked parallel copy (`_nb_stack`)."""
+    n = len(chunk[columns[0]])
+    out = np.empty((n, len(columns)))
+    if n * len(columns) < 65_536:
+        for j, c in enumerate(columns):
+            out[:, j] = chunk[c]
+    else:
+        _nb_stack(nb.typed.List([_readonly(chunk[c]) for c in columns]), out)
     return out
+
+
+def _criteria(ll, p, N):
+    """AIC and BIC of a log-likelihood with `p` parameters and `N` observations."""
+    return -2 * ll + 2 * p, -2 * ll + p * np.log(N)
 
 
 def _ratio(num, den):
@@ -381,7 +409,7 @@ class _InferenceMixin:
         """Scale of the iid vcov, times (X~' W X~)^-1: the residual variance."""
         return _ratio(rss, N - K)
 
-    def _pass2(self, tag, ycol_name, gamma, yj, xk, beta, zk, Pi, bread):
+    def _pass2(self, tag, ycol_name, gamma, yj, xk, beta, zk, Pi, bread, ivd=None):
         """Row pass for one model: fe[0] effects, residuals, moments, meats;
         writes the residual file and one FE file per dimension.
 
@@ -389,6 +417,8 @@ class _InferenceMixin:
         columns and first-stage coefficients, so the scores use Pi' z~
         (for OLS, zk = xk and Pi = I). bread: the assembled X~' W X~, which
         the CRV3 downdate needs before the pass rather than after it.
+        ivd: for an IV model, the plan of its diagnostics' scores (see
+        `_iv_plan`), whose meats this pass accumulates into it.
         """
         mdir = self.workdir / "models" / tag
         mdir.mkdir(parents=True, exist_ok=True)
@@ -398,8 +428,12 @@ class _InferenceMixin:
         off, _ = self._offsets()
         k, q, nt = len(xk), len(zk), nb.get_num_threads()
         L = gamma.shape[0]
+        # an IV model's diagnostics also need the endogenous regressors
+        # residualized: they ride along with the instruments
+        zka = list(zk) + (list(ivd["dcols"]) if ivd else [])
+        qa = len(zka)
         gam_x = np.ascontiguousarray(gamma[:, xk]) if k else np.zeros((L, 0))
-        gam_z = np.ascontiguousarray(gamma[:, zk]) if q else np.zeros((L, 0))
+        gam_z = np.ascontiguousarray(gamma[:, zka]) if qa else np.zeros((L, 0))
         gam_y0 = np.ascontiguousarray(gamma[:, yj])
         gam_y = gam_y0 - gam_x @ beta                  # FEs of the y-equation
         beta_c = np.ascontiguousarray(beta, dtype=np.float64)
@@ -461,7 +495,7 @@ class _InferenceMixin:
         tcols = [tcol(j + 1) for j in range(len(self.slope_vars))]
         cols = list(dict.fromkeys([GCODE, *self.ccols, *ccodes, *src, *self.keep, *tcols,
                                    *([WCOL] if self.weights is not None else []), vcol(yj),
-                                   *[vcol(j) for j in xk], *[vcol(j) for j in zk],
+                                   *[vcol(j) for j in xk], *[vcol(j) for j in zka],
                                    *rows.cols]))
         g_cols = self.fe_cols[self.g_fe] if self.fe else []
         yc = float(self.means[yj])
@@ -471,11 +505,11 @@ class _InferenceMixin:
             y, w = r.y, r.w
             n = len(y)
             X = _stack(ch, [vcol(j) for j in xk]) if k else np.zeros((n, 0))
-            Z = X if ols else (_stack(ch, [vcol(j) for j in zk]) if q else np.zeros((n, 0)))
+            Z = X if ols else (_stack(ch, [vcol(j) for j in zka]) if qa else np.zeros((n, 0)))
             G = len(starts) - 1
             e = np.empty(n)
-            zt = np.empty((n, q))
-            sg = np.empty((G if need_seg else 0, q))
+            zt = np.empty((n, qa))
+            sg = np.empty((G if need_seg else 0, qa))
             if tcols:
                 T = self._slope_matrix(ch)
                 g_coef = np.empty((G, self.p))
@@ -490,6 +524,10 @@ class _InferenceMixin:
                           yc, not self.no_fe, g_eff, e, zt, sg, acc_s)
                 g_row = None
             Ng = np.diff(starts)
+            if ivd is not None:
+                self._iv_accumulate(ivd, ch, starts, zt, e, w, r.fw)
+                zt = zt[:, :q]
+                sg = sg[:, :q]
 
             # The k x k sums, as BLAS products over the chunk rather than k x k
             # scalar updates per row, which fall out of cache once k is in the
@@ -497,6 +535,8 @@ class _InferenceMixin:
             # n x k buffer is reused for each weighting in turn.
             h = zt if ols else zt @ Pi_c
             del zt
+            if getattr(r, "after", None) is not None:
+                r.after(h)                  # a subclass's own sums over the scores
             buf = np.empty_like(h)
             if weighted:
                 sw = np.sqrt(w)
@@ -604,10 +644,174 @@ class _InferenceMixin:
             jack[t] = c3["acc"].sum(axis=0)
         return rss, tss_w, ssy, acc_B, acc_hc, meat, jack, paths, boot
 
+    # ------------------------------------------------------------ IV diagnostics
+    def _iv_plan(self, fml, names, znames, zk, xk, yj, A, ctx):
+        """The sums an IV model's diagnostics (`core.ivtests`) need, from the
+        assembled cross-products, and which meats pass 2 accumulates for
+        them: none for an iid vcov, the heteroskedastic one, or the cluster
+        terms of the default vcov. The included exogenous regressors (those
+        that are also instruments) are partialled out of the excluded
+        instruments Z1 and of the endogenous regressors Y and the outcome y
+        (the reduced form, for the Anderson-Rubin test) by Gz and Gy. The
+        endogeneity test needs the OLS coefficients, b_ols, and where each
+        regressor is among the residualized columns (xpos)."""
+        exog = [x for x in names if x in znames]
+        endog = [x for x in names if x not in znames]
+        x2 = [i for i, z in enumerate(znames) if z in exog]
+        z1 = [i for i, z in enumerate(znames) if z not in exog]
+        ycols = [self.vidx[x] for x in endog]
+        dcols = ycols + [yj]                      # Y, then y
+        zj = np.asarray(zk, dtype=np.int64)
+        a2, a1 = zj[x2], zj[z1]
+        iX2 = np.linalg.pinv(A[np.ix_(a2, a2)]) if len(a2) else np.zeros((0, 0))
+        Gz = iX2 @ A[np.ix_(a2, a1)]
+        Gy = iX2 @ A[np.ix_(a2, dcols)]
+        ZZ = A[np.ix_(a1, a1)] - A[np.ix_(a1, a2)] @ Gz
+        ZY = A[np.ix_(a1, dcols)] - A[np.ix_(a1, a2)] @ Gy
+        YY = A[np.ix_(dcols, dcols)] - A[np.ix_(a2, dcols)].T @ Gy
+        q, L1, Ke = len(zk), len(z1), len(endog)
+        b_ols = np.linalg.pinv(A[np.ix_(xk, xk)]) @ A[xk, yj]
+        xpos = [znames.index(x) if x in exog else q + endog.index(x) for x in names]
+        m = 2 * q + L1 * Ke + L1 * (Ke + 1) + Ke
+        default = ctx["default"]
+        terms = []
+        if default.startswith(("CRV1:", "CRV3:")):
+            terms = [t for t, _, _ in self.cluster_reqs[default.split(":", 1)[1]]]
+        scores = {}
+        for t in terms:
+            spec = self.clusters[t]
+            if spec["kind"] in ("fe", "extra"):
+                need = spec["G"] * m * 8 / 1e9
+                if need > 0.25 * _phys_mem_gb():
+                    warn(f"{fml}: the IV diagnostics by {t!r} need {need:.1f} GB of cluster "
+                         "sums; not computed", self.logger)
+                    return None
+                scores[t] = np.zeros((spec["G"], m))
+        return {"ycols": ycols, "dcols": dcols, "x2": x2, "z1": z1, "Gz": Gz, "Gy": Gy,
+                "Pi1": np.linalg.pinv(ZZ) @ ZY, "ZZ": ZZ, "ZY": ZY, "YY": YY, "endog": endog,
+                "exog": exog, "b_ols": b_ols, "xpos": xpos,
+                "hetero": default == "hetero", "terms": terms, "scores": scores,
+                "meat": {t: np.zeros((m, m)) for t in terms}, "acc_hc": np.zeros((m, m))}
+
+    def _iv_accumulate(self, ivd, ch, starts, zt, e, w, fw):
+        """Pass 2's part for the IV diagnostics, one chunk: each row's scores
+        w [e z~, vec(z1~ y~'), vec(z1~ [v vy]'), e_ols z~, e_ols x~_endog]: the
+        instruments' moments at the 2SLS residuals; the first stage's at Y
+        and at its residuals V, with the reduced form's residual vy; and the
+        instruments' and the endogenous regressors' moments at the OLS
+        residuals. Summed into the meats of `_iv_plan`. `zt` holds the
+        residualized instruments, then the endogenous regressors and y."""
+        if not (ivd["hetero"] or ivd["terms"]):
+            return
+        Ke = len(ivd["endog"])
+        q = zt.shape[1] - Ke - 1
+        Z, D = zt[:, :q], zt[:, q:]
+        X2 = Z[:, ivd["x2"]]
+        Z1 = Z[:, ivd["z1"]] - X2 @ ivd["Gz"]
+        Ya = D - X2 @ ivd["Gy"]
+        Va = Ya - Z1 @ ivd["Pi1"]
+        n = len(e)
+        U = (Ya[:, :Ke, None] * Z1[:, None, :]).reshape(n, -1)
+        V = (Va[:, :, None] * Z1[:, None, :]).reshape(n, -1)
+        e_ols = D[:, Ke] - np.hstack([Z, D[:, :Ke]])[:, ivd["xpos"]] @ ivd["b_ols"]
+        we, wo = (w * e)[:, None], (w * e_ols)[:, None]
+        s = np.hstack([Z * we, U * w[:, None], V * w[:, None], Z * wo, D[:, :Ke] * wo])
+        if ivd["hetero"]:
+            # frequency weights: each row stands for fw identical ones
+            sh = s if fw is None else s / np.sqrt(fw)[:, None]
+            ivd["acc_hc"] += sh.T @ sh
+        for t in ivd["terms"]:
+            spec = self.clusters[t]
+            if spec["kind"] == "seg":
+                sg = np.add.reduceat(s, starts[:-1], axis=0)
+                ivd["meat"][t] += sg.T @ sg
+            elif spec["kind"] == "segsub":
+                local = np.repeat(np.arange(len(starts) - 1, dtype=np.int64), np.diff(starts))
+                key = local * spec["xL"] + ch[spec["code"]].astype(np.int64)
+                uk, inv = np.unique(key, return_inverse=True)
+                S = _scatter(inv, s, len(uk))
+                ivd["meat"][t] += S.T @ S
+            else:
+                sc = ivd["scores"][t]
+                sc += _scatter(ch[spec["code"]].astype(np.int64), s, sc.shape[0])
+
+    def _iv_diag(self, ivd, A, beta, V, names, xk, zk, yj, rss, ctx, n_clusters):
+        """The IV diagnostics under the default vcov (`core.ivtests`):
+        Kleibergen-Paap (Anderson / Cragg-Donald under iid) and
+        Sanderson-Windmeijer identification tests, partial and Shea partial
+        R^2, the effective F (one endogenous regressor), the Anderson-Rubin
+        test and confidence set, the endogeneity (C) test, and Hansen's J
+        (Sargan's statistic under iid) when overidentified. The F statistics
+        count the fixed effects' dof as partialled out (ivreg2's sdofminus),
+        less those nested in the clusters."""
+        from .ivtests import (
+            anderson_rubin,
+            c_statistic,
+            hansen_j,
+            identification,
+            iid_omegas,
+            sargan,
+        )
+        N, default = self.N, ctx["default"]
+        q, k = len(zk), len(xk)
+        Ke, L1 = len(ivd["endog"]), len(ivd["z1"])
+        m1, ma = L1 * Ke, L1 * (Ke + 1)
+        ZX, Zy = A[np.ix_(zk, xk)], A[zk, yj]
+        fz = list(zk) + list(ivd["ycols"])          # the instruments, and Y as exogenous
+        ZXf, Zyf = A[np.ix_(fz, xk)], A[fz, yj]
+        G, dof_extra = None, ctx["k_fe"]
+        if default == "iid":
+            OUa, OVa = iid_omegas(ivd["ZZ"], ivd["ZY"], ivd["YY"], N)
+            OU = OUa[:m1, :m1]
+            over = ("sargan", *sargan(A[np.ix_(zk, zk)], Zy - ZX @ beta, rss, N, k))
+            b = ivd["b_ols"]
+            rss_ols = A[yj, yj] - 2 * b @ A[xk, yj] + b @ A[np.ix_(xk, xk)] @ b
+            Sf = rss_ols / N * A[np.ix_(fz, fz)]
+        else:
+            if default == "hetero":
+                Om = ivd["acc_hc"]
+            else:
+                req = default.split(":", 1)[1]
+                Om = np.zeros_like(ivd["acc_hc"])
+                for t, sign, _ in self.cluster_reqs[req]:
+                    M = ivd["meat"][t]
+                    if t in ivd["scores"]:
+                        M = M + ivd["scores"][t].T @ ivd["scores"][t]
+                    Om += sign * M
+                G = min(n_clusters[req])
+                nest = list(dict.fromkeys(d for t, _, _ in self.cluster_reqs[req]
+                                          for d in ctx["nested"][t]))
+                dof_extra = (self._k_fe(ctx["fe_dof"], nest)
+                             - sum(self.fe_params[d] for d in nest) + len(nest))
+            Om = (Om + Om.T) / 2
+            OU = Om[q:q + m1, q:q + m1]
+            o = q + m1
+            OVa = Om[o:o + ma, o:o + ma]
+            Sf = Om[o + ma:, o + ma:]
+            over = ("hansen_j", *hansen_j(ZX, Zy, Om[:q, :q]))
+        f = {"n_obs": N, "n_inst": q, "n_clusters": G, "dof_extra": dof_extra}
+        out = identification(ivd["ZZ"], ivd["ZY"][:, :Ke], ivd["YY"][:Ke, :Ke], OU,
+                             OVa[:m1, :m1], endog=ivd["endog"], exog=ivd["exog"], sw="2sls",
+                             **f)
+        out["vcov"] = default
+        name, stat, df, p = over
+        out["overid"] = ({"test": name, "statistic": stat, "df": df, "p": p} if df > 0
+                         else None)
+        ctr = scl = None
+        if Ke == 1:
+            i = names.index(ivd["endog"][0])
+            ctr, scl = float(beta[i]), float(np.sqrt(max(V[i, i], 0.0)))
+        out["anderson_rubin"] = anderson_rubin(ivd["ZZ"], ivd["ZY"], OVa, center=ctr,
+                                               scale=scl, **f)
+        C, dfc, pc = c_statistic(ZXf, Zyf, (Sf + Sf.T) / 2, range(q, q + Ke))
+        out["endogeneity"] = {"statistic": C, "df": dfc, "p": pc, "tested": ivd["endog"]}
+        return out
+
     # ------------------------------------------------------------ estimation
-    def _estimate(self, tag, model, A, gamma, ctx):
+    def _estimate(self, tag, model, A, gamma, ctx, beta=None):
         """OLS or 2SLS for one model from the assembled V' M_D V, then its
-        row pass and variance estimates."""
+        row pass and variance estimates. With `beta`, the coefficients are
+        those (not solved for), as after a bias correction."""
         fml, yname = model["fml"], model["y"]
         yj = self.vidx[yname]
         xj = [self.vidx[x] for x in model["x"]]
@@ -634,24 +838,28 @@ class _InferenceMixin:
             if len(zk) < k:
                 raise ValueError(f"{fml}: under-identified ({len(zk)} instruments for "
                                  f"{k} regressors after dropping collinear columns)")
+            ivd = self._iv_plan(fml, names, znames, zk, xk, yj, A, ctx)
             Azz, Azx, Azy = A[np.ix_(zk, zk)], A[np.ix_(zk, xk)], A[zk, yj]
             Pi = np.linalg.solve(Azz, Azx)             # first-stage coefficients
             XhXh = Azx.T @ Pi
             beta = np.linalg.solve(XhXh, Pi.T @ Azy)
             bread_asm = XhXh
         else:
+            ivd = None
             zk, Pi = xk, np.eye(k)
             bread_asm = A[np.ix_(xk, xk)]
-            beta = np.linalg.solve(bread_asm, A[xk, yj]) if k else np.zeros(0)
+            if beta is None:
+                beta = np.linalg.solve(bread_asm, A[xk, yj]) if k else np.zeros(0)
         if dropped:
-            _warn(f"{fml}: {len(dropped)} variables dropped due to "
-                  f"multicollinearity: {dropped}", self.logger)
+            warn(f"{fml}: {len(dropped)} variables dropped due to "
+                 f"multicollinearity: {dropped}", self.logger)
         Axy = A[xk, yj]
         rss_asm = A[yj, yj] - 2 * beta @ Axy + beta @ A[np.ix_(xk, xk)] @ beta if k else A[yj, yj]
 
         self._log(f"pass 2: {fml}")
         rss, tss_w, ssy, B, meat_hc, meat, jack, paths, boot = self._pass2(
-            tag, yname, gamma, yj, xk, beta, zk, Pi, bread_asm)
+            tag, yname, gamma, yj, xk, beta, zk, Pi, bread_asm, ivd=ivd)
+        self._last_bread = B                # X~' W X~, for a subclass's corrections
         N, k_fe, nested = self.N, ctx["k_fe"], ctx["nested"]
         # Small-sample factors follow pyfixest's ssc defaults: iid
         # (N-1)/(N-K); hetero N/(N-K); CRV1 G/(G-1)*(N-1)/(N-Kc), with the
@@ -667,6 +875,9 @@ class _InferenceMixin:
         vc = {"iid": (self._iid_factor(rss, N, K) * Binv, N - K),
               "hetero": (_ratio(N, N - K) * Binv @ meat_hc @ Binv, N - K)}
         n_clusters, adjs = {}, {}
+        # each vcov's small-sample factor (for OLS's iid, that and the error
+        # variance), for a caller that wants other conventions
+        factors = {"iid": self._iid_factor(rss, N, K), "hetero": _ratio(N, N - K)}
         for req, terms in self.cluster_reqs.items():
             Gs = [self.clusters[t]["G"] for t, _, single in terms if single]
             Gm = min(Gs)
@@ -676,10 +887,12 @@ class _InferenceMixin:
             adj = _ratio(Gm, Gm - 1) * _ratio(N - 1, N - Kc)
             Vc = sum(sign * adj * (Binv @ meat[t] @ Binv) for t, sign, _ in terms)
             vc[f"CRV1:{req}"] = (Vc, Gm - 1)
+            factors[f"CRV1:{req}"] = adj
             if req in self.crv3_reqs:
                 # the jackknife takes the same small-sample factor, as in pyfixest
                 (t, _, _), = terms
                 vc[f"CRV3:{req}"] = (adj * jack[t] if k else np.zeros((0, 0)), Gm - 1)
+                factors[f"CRV3:{req}"] = adj
             n_clusters[req] = Gs
             adjs[req] = adj
         V, dft = vc[ctx["default"]]
@@ -698,8 +911,8 @@ class _InferenceMixin:
                          "AG": boot["AG"][present].copy(), "sG": boot["sG"][present].copy(),
                          "adj": adjs[self.boot_req], "df": min(n_clusters[self.boot_req]) - 1}
         if np.any(np.diag(V) < 0):
-            _warn(f"{fml}: the {ctx['default']} vcov has negative variances "
-                  "(possible with multi-way clustering)", self.logger)
+            warn(f"{fml}: the {ctx['default']} vcov has negative variances "
+                 "(possible with multi-way clustering)", self.logger)
 
         if iv:
             # one first-stage OLS per endogenous variable (same vcov type), and
@@ -716,11 +929,28 @@ class _InferenceMixin:
                 Vs = fs.vcov[np.ix_(idx, idx)]
                 f_stats.append(float(b @ np.linalg.solve(Vs, b) / len(idx)) if idx else np.nan)
 
+        iv_diag = None
+        if ivd is not None:
+            try:
+                iv_diag = self._iv_diag(ivd, A, beta, V, names, xk, zk, yj, rss, ctx,
+                                        n_clusters)
+            except (np.linalg.LinAlgError, ValueError) as err:
+                warn(f"{fml}: IV diagnostics not computed: {err}", self.logger)
+
         # goodness of fit, with pyfixest's definitions (not reported for IV)
         # Without fixed effects the constant is one of the k coefficients, and
         # there is no within R2 (pyfixest reports none either).
         k_fe_r2 = sum(self.fe_params.values()) - len(self.fe) + 1 if self.fe else 0
         r2 = 1 - rss / ssy if ssy > 0 and not iv else np.nan
+        # the normal log-likelihood at the ML error variance (not for IV), and
+        # AIC/BIC counting the coefficients and the fixed effects' dof (a GLM
+        # replaces all three with its family's)
+        ll = aic = bic = np.nan
+        if not iv and rss > 0:
+            ll = -0.5 * N * (np.log(2 * np.pi * rss / N) + 1)
+            if self.weights is not None and self.weights_type != "fweights":
+                ll += 0.5 * self.wlogsum
+            aic, bic = _criteria(ll, k + k_fe, N)
         r2w = 1 - rss / tss_w if tss_w > 0 and not iv and self.fe else np.nan
         diag = {"rss_assembled": float(rss_asm), "rss_rows": float(rss),
                 "bread_rel_diff": (float(np.abs(bread_asm - B).max() / np.abs(B).max()) if k
@@ -732,17 +962,19 @@ class _InferenceMixin:
                 "stream": self.stream_choice, "singletons": dict(self.singletons),
                 "connected": dict(self.connected_info), "fe_params": dict(self.fe_params),
                 "slope_redundancy": getattr(self, "slope_redundancy", None) or [],
+                "vcov_factors": {key: float(f) for key, f in factors.items()},
                 "seconds_total": round(time.time() - ctx["t0"], 2)}
         return HDFEResult(
             fml=fml, depvar=yname, coefnames=names, fe_names=self.fe, beta=beta, vcov=V,
             vcov_type=ctx["default"], df_t=dft, n_obs=N, n_levels=dict(self.n_levels),
             n_identifying=self.n_identifying, n_components=self.n_components, k_fe=k_fe,
             rss=float(rss), r2_within=float(r2w), solver_info=dict(ctx["info"]), paths=paths,
+            loglik=float(ll), aic=float(aic), bic=float(bic),
             collin_vars=dropped, diagnostics=diag, all_vcovs=vc, r2=float(r2),
             adj_r2=float(1 - (1 - r2) * _ratio(N - 1, N - k - k_fe_r2)),
             adj_r2_within=float(1 - (1 - r2w) * _ratio(N - k_fe_r2, N - k - k_fe_r2)),
             rmse=float(np.sqrt(rss / N)) if not iv else np.nan, is_iv=bool(iv), first_stage=first_stage,
-            f_stat_1st_stage=f_stats,
+            f_stat_1st_stage=f_stats, iv_diag=iv_diag,
             n_clusters=n_clusters,
             weights=self.weights_name, weights_type=self.weights_type, _run=self._run,
             _estimator=self, _sample=self._sample_spec, _boot=boot_data)
