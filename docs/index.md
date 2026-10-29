@@ -121,7 +121,7 @@ used.
 Probably not for this. hdfe_stream has experimental GPU options (`device="cuda"`
 for the solve, `polars_engine="gpu"` for the Polars queries), but on an NVIDIA
 H100 their gains were modest throughout and appeared only at large sizes:
-about 10% at 5 million workers with both options on, and no consistent gain
+about 4% at 5 million workers with both options on, and no consistent gain
 below that. A GPU-oriented library such as
 [xhdfe](https://github.com/reisportela/xhdfe-xfe) is the better choice if GPU
 performance is the priority: its CUDA backend took 24 s at 5 million workers,

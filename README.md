@@ -188,8 +188,8 @@ Every configuration agrees on the coefficients to within 2e-9.
 | fixest (R) | 152 s | 9.1 GB | — |
 | FixedEffectModels.jl (Julia) | 79 s | 9.5 GB | — |
 | hdfe_stream (`explicit`, its default) | 22 s | 3.9 GB | 2.6 GB |
-| hdfe_stream (`stream_cg`) | 22 s | 3.9 GB | 2.6 GB |
-| **hdfe_stream (`stream_cg`, low memory)** | **25 s** | **3.6 GB** | 2.7 GB |
+| hdfe_stream (`stream_cg`) | 22 s | 3.8 GB | 2.6 GB |
+| **hdfe_stream (`stream_cg`, low memory)** | **24 s** | **3.7 GB** | 2.7 GB |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/akm_memory.dark.svg">
@@ -206,7 +206,7 @@ decomposition, with how each was measured.
 
 Probably not for this. hdfe_stream's GPU options are experimental, and on an
 NVIDIA H100 their gains were modest throughout and appeared only at large
-sizes: about 10% at 5 million workers with both options on, and no consistent
+sizes: about 4% at 5 million workers with both options on, and no consistent
 gain below that. A GPU-oriented library such as
 [xhdfe](https://github.com/reisportela/xhdfe-xfe) is the better choice if GPU
 performance is the priority: its CUDA backend took 24 s at 5 million workers,

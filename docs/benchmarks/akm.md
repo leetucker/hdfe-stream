@@ -60,24 +60,24 @@ At 5 million workers:
 | fixest (R) | 152 s | 9.1 GB | — |
 | FixedEffectModels.jl (Julia) | 79 s | 9.5 GB | — |
 | hdfe_stream (`explicit`, its default) | 22 s | 3.9 GB | 2.6 GB |
-| hdfe_stream (`stream_cg`) | 22 s | 3.9 GB | 2.6 GB |
-| **hdfe_stream (`stream_cg`, low memory)** | **25 s** | **3.6 GB** | 2.7 GB |
+| hdfe_stream (`stream_cg`) | 22 s | 3.8 GB | 2.6 GB |
+| **hdfe_stream (`stream_cg`, low memory)** | **24 s** | **3.7 GB** | 2.7 GB |
 
 ## Reading the figures
 
 **Memory is the point.** At 5 million workers pyfixest and xhdfe peak at
 19–27 GB: pyfixest's LSMR run needed 27.0 GB of this machine's 30.8 GB. fixest
 and FixedEffectModels.jl are leaner, at 9.1 and 9.5 GB. hdfe_stream peaks at
-3.9 GB with its defaults and 3.6 GB with the batch and
+3.9 GB with its defaults and 3.7 GB with the batch and
 bucket sizes turned down ("low memory": `rows_per_bucket=250_000`,
 `batch_rows=200_000`), for about 10% more time and the same answer. What it
 spends instead is disk: about 61 bytes per row, 2.6 GB at 42.5 million rows,
 freed when the fit finishes. The in-memory libraries' peak grows in proportion
 to the data. hdfe_stream's low-memory setting grows far more slowly: 0.8 GB at
-25,000 workers, 1.4 GB at a million, 3.6 GB at five million.
+25,000 workers, 1.4 GB at a million, 3.7 GB at five million.
 
 **It is not slower for it.** From 400,000 workers up, hdfe_stream is the
-fastest configuration measured: 2.6 s against xhdfe's 3.4 s there, and at 5
+fastest configuration measured: 2.5 s against xhdfe's 3.4 s there, and at 5
 million workers 22 s against 74 s for pyfixest (LSMR; 919 s with MAP), 79 s for
 xhdfe and FixedEffectModels.jl, and 152 s for fixest. Below that the in-memory
 libraries are faster, by a second or less: at 100,000 workers fixest takes
@@ -97,7 +97,7 @@ data that floor dominates: at 25,000 workers fixest peaks at 0.31 GB, xhdfe at
 the Julia runtime and compiled code). fixest stays the leanest up to 400,000
 workers, at 1.0 GB against hdfe_stream's 1.8 GB (1.1 GB in the low-memory
 setting) and 2.5 GB for xhdfe; at a million workers fixest,
-FixedEffectModels.jl and hdfe_stream's defaults all need about 2.4–2.5 GB, and
+FixedEffectModels.jl and hdfe_stream's defaults all need about 2.3–2.5 GB, and
 from there hdfe_stream pulls away. On small panels, then, an in-memory library
 is the lighter and quicker choice.
 
@@ -108,9 +108,9 @@ alternating projections struggles with. If you are comparing, compare against
 LSMR.
 
 **hdfe_stream's `within` solver** is measured but no longer drawn; its rows
-are in akm.csv. It is no faster than the default at any size here (1.17 s
-against 1.14 s at 25,000 workers, 50 s against 22 s at 5 million), and uses
-more memory at scale: 15.1 GB at 5 million workers, where `stream_cg` and
+are in akm.csv. It is no faster than the default at any size here (1.18 s
+against 1.15 s at 25,000 workers, 49 s against 22 s at 5 million), and uses
+more memory at scale: 15.3 GB at 5 million workers, where `stream_cg` and
 `explicit` stay near 4 GB.
 
 ## Trading memory for time
@@ -126,10 +126,10 @@ python benchmarks/akm_benchmark.py --memory-sweep 1000000
 
 | `rows_per_bucket` | `batch_rows` | wall time | peak memory | peak disk |
 |---:|---:|---:|---:|---:|
-| 20,000,000 (default) | 2,000,000 | 4.9 s | 2,312 MB | 512 MB |
-| 1,000,000 | 500,000 | 4.9 s | 1,446 MB | 520 MB |
-| 250,000 | 200,000 | 5.3 s | 1,313 MB | 526 MB |
-| 100,000 | 100,000 | 5.7 s | 1,445 MB | 524 MB |
+| 20,000,000 (default) | 2,000,000 | 4.9 s | 2,411 MB | 512 MB |
+| 1,000,000 | 500,000 | 4.9 s | 1,532 MB | 518 MB |
+| 250,000 | 200,000 | 5.3 s | 1,457 MB | 526 MB |
+| 100,000 | 100,000 | 5.7 s | 1,521 MB | 524 MB |
 
 Most of the saving comes from the first step down, at no cost in time; the
 second saves a little more for 8% more time, and below that the peak rises

@@ -73,12 +73,14 @@ Measured on an AWS EC2 `c8id.4xlarge` instance: an Intel Xeon 6975P-C with 16
 vCPUs and 30.8 GB of RAM, Linux, and the instance's local NVMe drive for the
 data and work directories, so that disk traffic is not network traffic. Python
 3.14.8, polars 2.0.0, numpy 2.5.3, numba 0.68.0, scipy 1.18.1, pyfixest 0.60.0,
-xhdfe 2.28.1 (CPU backend) and hdfe_stream 0.4.0; R 4.5.3 with fixest 0.14.2,
-and Julia 1.13.2 with FixedEffectModels.jl 2.1.0. All five benchmarks ran one
-after the other on 2026-10-16 and 17, as a single job on a spot instance;
-fixest and FixedEffectModels.jl were added on 2026-10-19, measured on the same
-instance type set up the same way, with the same Python environment, in a
-second job that ran only them.
+xhdfe 2.28.1 (CPU backend) and hdfe_stream 0.6.1; R 4.5.3 with fixest 0.14.2,
+and Julia 1.13.2 with FixedEffectModels.jl 2.1.0. The other libraries'
+rows were measured on 2026-10-16 and 17, all five benchmarks one after the
+other as a single job on a spot instance (fixest and FixedEffectModels.jl
+followed on 2026-10-19, in a second job). hdfe_stream's were measured again on
+2026-10-29, on the release 0.6.1, on the same instance type set up the same
+way, with the same Python environment, in a third job that ran only
+hdfe_stream's configurations.
 The benchmarks run in a service limited to 96% of the machine's memory, with no
 swap; a process that reaches the limit is killed, and one that asks for a
 single block larger than the machine can back is refused it, so "out of memory"

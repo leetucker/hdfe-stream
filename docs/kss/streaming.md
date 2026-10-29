@@ -83,4 +83,4 @@ identification](inference.md) has the details.
 the chunk they are working on. `scratch_mb` (default 32) bounds that, shrinking
 the chunk below `batch_rows` as needed; it changes memory only, never the
 answer. At 5 million workers (42.5 million rows) the whole decomposition peaked
-at 4.7 GB, against xhdfe's 20 GB; see the [KSS benchmarks](../benchmarks/kss.md).
+at 4.6 GB, against xhdfe's 20 GB; see the [KSS benchmarks](../benchmarks/kss.md).

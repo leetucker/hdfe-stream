@@ -4,7 +4,7 @@
  "memory_gb": 30.8,
  "platform": "Linux-7.0.0-1014-aws-x86_64-with-glibc2.39",
  "python": "3.14.8",
- "hdfe-stream": "0.4.0",
+ "hdfe-stream": "0.6.1",
  "pyfixest": "0.60.0",
  "xhdfe": "2.28.1.20260929",
  "polars": "2.0.0",
@@ -16,15 +16,16 @@
  "fixest": "0.14.2",
  "julia": "1.13.2",
  "FixedEffectModels.jl": "2.1.0",
- "measured": "2026-10-19",
+ "measured": "2026-10-29",
  "ec2": {
-  "run": "2026-10-19T0328Z_c8id.4xlarge_spot_external-503",
+  "run": "2026-10-29T1230Z_c8id.4xlarge_spot_hdfe-only_v0.6.1",
   "instance_type": "c8id.4xlarge",
   "market": "spot",
   "region": "us-east-2",
   "az": "us-east-2c",
   "memory_max": "96% of memory (systemd MemoryMax)",
-  "data_disk": "local NVMe (/dev/nvme0n1)",
-  "baseline": "2026-10-19T0257Z_c8id.4xlarge_spot_external"
+  "data_disk": "local NVMe (/dev/nvme1n1)",
+  "baseline": "2026-10-29T0514Z_c8id.4xlarge_spot_hdfe-only_v0.6.0",
+  "baseline_measured": "2026-10-19"
  }
 }

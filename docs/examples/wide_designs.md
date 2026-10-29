@@ -5,7 +5,7 @@ start. hdfe_stream never does: it holds one bucket or one batch of rows at a
 time, so its memory grows with the number of covariates times the batch, not
 times the data. On the 8.5-million-row benchmark panel, 167 age indicators ran
 pyfixest, xhdfe and fixest out of memory on a 30.8 GB machine and took 24.1 GB
-in FixedEffectModels.jl, while hdfe_stream finished in 5.3 GB (see
+in FixedEffectModels.jl, while hdfe_stream finished in 5.4 GB (see
 [many covariates](../benchmarks/covariates.md)).
 
 Three things matter for a wide design.

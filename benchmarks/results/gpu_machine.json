@@ -4,7 +4,7 @@
  "memory_gb": 249.7,
  "platform": "Linux-7.0.0-1014-aws-x86_64-with-glibc2.39",
  "python": "3.14.8",
- "hdfe-stream": "0.5.0",
+ "hdfe-stream": "0.6.1",
  "pyfixest": "0.60.0",
  "xhdfe": "2.28.1.20260929",
  "polars": "1.39.3",
@@ -12,12 +12,12 @@
  "numba": "0.68.0",
  "scipy": "1.18.1",
  "pandas": "3.0.6",
- "measured": "2026-10-19",
+ "measured": "2026-10-29",
  "gpus": [
   {
    "name": "NVIDIA H100 80GB HBM3",
    "memory_mib": "81559",
-   "driver": "595.91.07",
+   "driver": "595.112.07",
    "compute_capability": "9.0"
   }
  ],
@@ -25,15 +25,16 @@
  "cupy-cuda12x": null,
  "cudf-polars-cu13": "26.6.0",
  "cudf-polars-cu12": null,
- "torch": "2.14.1",
+ "torch": "2.15.0",
  "ec2": {
-  "run": "2026-10-19T1341Z_p5.4xlarge_spot_gpu_xhdfe-gpu",
+  "run": "2026-10-29T1230Z_p5.4xlarge_spot_gpu_hdfe-only_v0.6.1",
   "instance_type": "p5.4xlarge",
   "market": "spot",
   "region": "us-east-2",
   "az": "us-east-2b",
   "memory_max": "29600M (systemd MemoryMax)",
-  "data_disk": "local NVMe (/opt/dlami/nvme, mounted by the image)"
+  "data_disk": "local NVMe (/opt/dlami/nvme, mounted by the image)",
+  "baseline": "2026-10-29T0514Z_p5.4xlarge_spot_gpu_hdfe-only_v0.6.0"
  },
  "xhdfe_cuda_patch": "cub::Max() -> cuda::maximum<>{} in src/fe_absorption_cuda.cu, for CUDA 13"
 }
