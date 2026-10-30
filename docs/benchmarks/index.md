@@ -1,13 +1,17 @@
 # Benchmarks
 
-Five benchmarks compare hdfe_stream with in-memory libraries on the simulated
-AKM panel that ships with the package. Three vary the height of the data, at
+Eight benchmarks compare hdfe_stream with in-memory libraries. Five use the
+simulated AKM panel that ships with the package. Three vary the height of the data, at
 five sizes from 25,000 to 5,000,000 workers (212,000 to 42.5 million rows); the
 number of firms is always workers / 15, so the number of workers is the only
 thing that changes along their x axis. The other two hold the data at 1,000,000
 workers (8.5 million rows) and vary its width: the number of covariates, from 8
 to 503. A sixth, on a machine of its own, measures hdfe_stream's experimental
-GPU options and the other libraries' GPU paths.
+GPU options and the other libraries' GPU paths. A seventh and an eighth leave
+fixed effects behind: [OLS, IV, logit and probit](regression.md), with zero or
+one fixed effect, on simulated rows from 100,000 to 20 million, against
+scikit-learn, polars-ols, polars-ds, statsmodels, linearmodels, glum, pyfixest
+and R; and the same models on a GPU.
 
 | benchmark | job | compared with |
 |---|---|---|
@@ -16,7 +20,9 @@ GPU options and the other libraries' GPU paths.
 | [Poisson and logit](glm.md) | a count and a binary outcome on `age_squared + age_cubed \| worker_id + firm_id + year`, clustered by worker | pyfixest's `fepois` and `feglm` (LSMR demeaner) |
 | [Poisson and logit, many covariates](glm_covariates.md) | the same two outcomes on `i(age_bin) \| worker_id + firm_id`, clustered by worker | pyfixest's `fepois` and `feglm` (LSMR demeaner) |
 | [KSS](kss.md) | the leave-out variance decomposition of `log_earn ~ age_squared + age_cubed \| worker_id + firm_id`, with and without standard errors | xhdfe |
+| [OLS, IV, logit and probit](regression.md) | OLS, 2SLS, logit and probit on 10 covariates, with no fixed effects and with one, on simulated rows (100,000 to 20 million) | scikit-learn, polars-ols, polars-ds, statsmodels, linearmodels, glum, pyfixest, fixest and `lm`/`glm` (R), NumPy |
 | [CPU and GPU](gpu.md) | the AKM regression on a machine with an NVIDIA H100, with hdfe_stream's experimental GPU options | pyfixest (LSMR, on PyTorch on the GPU), xhdfe (CUDA backend), each also on the CPU |
+| [CPU and GPU, plain regressions](gpu.md#plain-regressions-ols-iv-and-logit) | the OLS, 2SLS and logit models above, with no fixed effects, on the same H100 machine | cuML, CuPy, polars-ols, polars-ds |
 
 In brief: hdfe_stream uses a fraction of the memory at scale, and is not slower
 for it. At 5 million workers the AKM regression took 22 s and 3.9 GB, against
@@ -24,6 +30,13 @@ for it. At 5 million workers the AKM regression took 22 s and 3.9 GB, against
 9.5 GB for FixedEffectModels.jl, and 152 s and 9.1 GB for fixest. On
 small data the in-memory libraries use less memory, since an hdfe_stream process
 costs about 0.8 GB before it has done anything.
+
+On plain regressions, without the fixed-effects structure it was built for, it
+is not the fastest, but not far behind and far lighter: at 20 million rows OLS
+took 6.5 s and 2.5 GB, against 5.4 s and 7.5 GB for scikit-learn, 8.5 s and
+5.7 GB for polars-ols, 9.1 s and 15.7 GB for pyfixest, and 2.9 s and 7.8 GB for
+fixest. A logit took 9.4 s and 2.4 GB, against 12.8 s and 7.7 GB for
+statsmodels, 15.9 s and 20.6 GB for pyfixest, and 4.2 s and 5.5 GB for glum.
 
 ## How it is measured
 
@@ -63,7 +76,10 @@ it is timed.
 xhdfe is compared on its CPU backend, which is its default; no GPU was
 involved, except in the [CPU and GPU](gpu.md) benchmark, which has its own
 machine. The GLM benchmarks compare with pyfixest alone, since xhdfe fits
-linear models only. pytwoway was also considered for KSS, but version 0.3.21
+linear models only. The [regression benchmarks](regression.md) also say what
+each library returns: some give coefficients only, and some cannot absorb a
+fixed effect or fit 2SLS, so that their row includes the demeaning or the two
+stages. They time out at 30 minutes, not three hours. pytwoway was also considered for KSS, but version 0.3.21
 needs numpy < 2 and an older scipy, so it cannot run alongside hdfe_stream's
 dependencies and is not included.
 
@@ -81,6 +97,12 @@ followed on 2026-10-19, in a second job). hdfe_stream's were measured again on
 2026-10-29, on the release 0.6.1, on the same instance type set up the same
 way, with the same Python environment, in a third job that ran only
 hdfe_stream's configurations.
+The [regression benchmarks](regression.md) were measured on 2026-10-30 on the
+same instance type, in one job on a spot instance, with
+hdfe_stream 0.7.0, scikit-learn 1.9.1, polars-ols 0.3.5, polars-ds 0.13.0,
+statsmodels 0.15.0, linearmodels 7.1 and glum 3.4.1, and the rest as above; their
+versions are in
+[benchmarks/results/general_machine.json](https://github.com/leetucker/hdfe-stream/blob/main/benchmarks/results/general_machine.json).
 The benchmarks run in a service limited to 96% of the machine's memory, with no
 swap; a process that reaches the limit is killed, and one that asks for a
 single block larger than the machine can back is refused it, so "out of memory"
@@ -106,6 +128,10 @@ python benchmarks/kss_benchmark.py
 python benchmarks/covariates_benchmark.py   # or list bin widths in months: 12 3
 python benchmarks/glm_benchmark.py          # sizes, as for akm_benchmark.py
 python benchmarks/glm_covariates_benchmark.py
+python benchmarks/ols_benchmark.py          # OLS, with 0 and 1 fixed effects; sizes are rows
+python benchmarks/iv_benchmark.py
+python benchmarks/binary_benchmark.py       # logit and probit
+python benchmarks/general_gpu_benchmark.py  # with an NVIDIA GPU, and cuML in its own environment
 python benchmarks/plot_benchmarks.py        # redraw docs/figures/ from the CSVs
 ```
 
@@ -146,5 +172,6 @@ covariates
 glm
 glm_covariates
 kss
+regression
 gpu
 ```

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hdfe-stream"
-version = "0.6.2"
+version = "0.7.0"
 description = "Out-of-core regression with several high-dimensional fixed effects: OLS, Poisson, logit and probit, with AKM/KSS variance decompositions"
 readme = "README.md"
 license = "MIT"
@@ -56,6 +56,13 @@ all = ["hdfe-stream[within,amg,formula]"]
 benchmark = [
     "hdfe-stream[formula]",
     "matplotlib>=3.7",
+    # the OLS, IV, logit and probit benchmarks' competitors
+    "scikit-learn",
+    "polars-ols",
+    "polars-ds",
+    "statsmodels",
+    "linearmodels",
+    "glum",
 ]
 # docs/: the documentation site, built with Sphinx (see docs/conf.py)
 docs = [

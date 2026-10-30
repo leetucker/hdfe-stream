@@ -48,7 +48,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DATA_DIR = HERE / "data"
-RESULTS_DIR = HERE / "results"
+# HDFE_BENCH_RESULTS redirects the CSVs and machine.json, for trial runs that
+# should not touch the published results
+RESULTS_DIR = Path(os.environ.get("HDFE_BENCH_RESULTS") or HERE / "results")
 EXTERNAL_DIR = HERE / "external"
 
 # the simulated panel has firms = workers / 15 at every size (simulate_akm's
@@ -162,6 +164,66 @@ def glm_data_path(n_workers):
     return path
 
 
+GENERAL_CHUNK = 1_000_000
+
+
+def general_data_path(n_rows, n_covariates=10):
+    """The simulated data of the OLS, IV and binary-outcome benchmarks, for
+    `n_rows` rows and `n_covariates` covariates, generated once and cached.
+
+    No panel structure, unlike the AKM data: independent rows, written a
+    million at a time, so that the generator never holds more than that.
+
+        x0 .. x{k-1}  standard normal; x0 also loads on the group effect
+        g             one of n_rows / 20 groups (the fixed effect), effect a_g ~ N(0, 1)
+        z1, z2        instruments, standard normal
+        d             endogenous: 0.6 z1 + 0.4 z2 + 0.5 u + v + 0.3 a_g
+        y             sum_j b_j x_j + a_g + e                       (OLS)
+        yiv           d + sum_j b_j x_j + a_g + u                   (IV; d is correlated with u)
+        yb            Bernoulli(logistic(0.4 sum_j b_j x_j - 0.2))  (logit and probit)
+
+    with b_j running from 0.5 to -0.5 over the covariates.
+    """
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    path = DATA_DIR / f"general_{n_rows}_{n_covariates}.parquet"
+    if path.exists():
+        return path
+    k = n_covariates
+    groups = max(n_rows // 20, 1)
+    beta = np.linspace(0.5, -0.5, k)
+    effects = np.random.default_rng(20261030).standard_normal(groups)
+    partial = path.with_name(path.name + ".part")
+    writer = None
+    for chunk, start in enumerate(range(0, n_rows, GENERAL_CHUNK)):
+        n = min(GENERAL_CHUNK, n_rows - start)
+        rng = np.random.default_rng([20261030, chunk])
+        g = rng.integers(0, groups, n)
+        X = rng.standard_normal((n, k))
+        X[:, 0] += 0.5 * effects[g]
+        z = rng.standard_normal((n, 2))
+        u, v, e = rng.standard_normal((3, n))
+        d = 0.6 * z[:, 0] + 0.4 * z[:, 1] + 0.5 * u + v + 0.3 * effects[g]
+        index = X @ beta
+        columns = {f"x{j}": X[:, j] for j in range(k)}
+        columns.update(g=g, z1=z[:, 0], z2=z[:, 1], d=d,
+                       y=index + effects[g] + e,
+                       yiv=d + index + effects[g] + u,
+                       yb=(rng.random(n) < 1 / (1 + np.exp(-(0.4 * index - 0.2)))
+                           ).astype(float))
+        table = pa.table(columns)
+        if writer is None:
+            writer = pq.ParquetWriter(partial, table.schema)
+        writer.write_table(table)
+    writer.close()
+    partial.rename(path)
+    print(f"  simulated {n_rows:,} rows -> {path.name}", flush=True)
+    return path
+
+
 def panel_shape(path):
     import polars as pl
 
@@ -234,6 +296,8 @@ EXTERNAL = {
     # kind -> (language, executable, its environment variable, script)
     "fixest": ("R", "Rscript", "HDFE_BENCH_RSCRIPT", "fixest.R"),
     "fem": ("Julia", "julia", "HDFE_BENCH_JULIA", "fixedeffectmodels.jl"),
+    # the OLS, IV and binary-outcome benchmarks: fixest, and base R's lm and glm
+    "regr": ("R", "Rscript", "HDFE_BENCH_RSCRIPT", "regression.R"),
 }
 
 
@@ -429,6 +493,8 @@ def machine_info():
             "platform": platform.platform(), "python": platform.python_version(),
             **{name: version(name) for name in
                ("hdfe-stream", "pyfixest", "xhdfe", "polars", "numpy", "numba",
+                "scikit-learn", "polars-ols", "polars-ds", "statsmodels", "linearmodels",
+                "glum",
                 "scipy", "pandas")},
             **external_versions(),
             "measured": time.strftime("%Y-%m-%d")}

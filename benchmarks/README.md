@@ -1,7 +1,8 @@
 # Benchmarks
 
 Five benchmarks compare hdfe_stream with in-memory libraries on the simulated
-AKM panel that ships with the package. Three vary the height of the data, at
+AKM panel that ships with the package (three more, on simulated rows with no
+panel structure, are below the table). Three vary the height of the data, at
 five sizes from 25,000 to 5,000,000 workers; the number of firms is always
 workers / 15, so the number of workers is the only thing that changes along
 their x axis. The other two hold the data at 1,000,000 workers (8.5 million
@@ -15,6 +16,29 @@ rows) and vary its width: the number of covariates, from 8 to 503.
 | `glm_benchmark.py` | Poisson and logit regressions of a count and a binary outcome on `age_squared + age_cubed \| worker_id + firm_id + year`, clustered by worker | pyfixest's `fepois` and `feglm` (LSMR demeaner) |
 | `glm_covariates_benchmark.py` | the same two outcomes on `i(age_bin) \| worker_id + firm_id`, clustered by worker, with the covariates benchmark's age bins | pyfixest's `fepois` and `feglm` (LSMR demeaner) |
 
+The OLS, IV, logit and probit benchmarks leave fixed effects behind. They run
+on `_harness.general_data_path`, n rows with 10 covariates, one group variable
+(n / 20 groups) as the fixed effect, an endogenous regressor with two
+instruments, and continuous and binary outcomes; their x axis is the number of
+rows, from 100,000 to 20 million.
+
+| script | job | compared with |
+|---|---|---|
+| `ols_benchmark.py` | OLS with 10 covariates, with no fixed effects and with one | scikit-learn, polars-ols, polars-ds, statsmodels, pyfixest, linearmodels, fixest and `lm` (R), NumPy |
+| `iv_benchmark.py` | 2SLS, one endogenous regressor and two instruments, with no fixed effects and with one | linearmodels, pyfixest, fixest (R), polars-ols (two stages by hand), NumPy |
+| `binary_benchmark.py` | logit and probit, no fixed effects | statsmodels, pyfixest, fixest and `glm` (R), scikit-learn, glum, polars-ds (logit only for the last three) |
+
+Each library is asked for the classical standard errors where it offers them.
+scikit-learn, glum and polars-ds's `logistic_reg` return coefficients only, and
+a library with no absorbing option or no 2SLS is given the data demeaned in
+Polars or pandas, or runs the two stages by hand, and that is in its time.
+`_regression.py` holds the runners they share. Results go to `results/ols.csv`,
+`results/iv.csv` and `results/binary.csv`, keyed on (`n_rows`, configuration);
+their `task`, `fixed_effects` and `se_*` columns say what was fitted and which
+standard errors were reported, and `results/general_machine.json` records the
+versions. Trial runs can be kept out of `results/` with the
+`HDFE_BENCH_RESULTS` environment variable (a directory).
+
 ```bash
 pip install -e ".[benchmark]"
 python benchmarks/akm_benchmark.py          # all sizes; or list sizes: 25000 100000
@@ -22,6 +46,9 @@ python benchmarks/kss_benchmark.py
 python benchmarks/covariates_benchmark.py   # or list bin widths in months: 12 3
 python benchmarks/glm_benchmark.py          # sizes, as for akm_benchmark.py
 python benchmarks/glm_covariates_benchmark.py
+python benchmarks/ols_benchmark.py          # sizes are rows: 100000 1000000
+python benchmarks/iv_benchmark.py
+python benchmarks/binary_benchmark.py
 python benchmarks/plot_benchmarks.py        # redraw docs/figures/ from the CSVs
 ```
 
@@ -58,6 +85,17 @@ GPU code with `cuobjdump` and `nvdisasm`, which some CUDA installs leave out
 (`pip install nvidia-cuda-cuobjdump nvidia-cuda-nvdisasm` at the toolkit's
 version provides them, with `CUOBJDUMP` pointing at the first). The published
 GPU results used that change, as `results/gpu_machine.json` records.
+
+`general_gpu_benchmark.py` does the same for OLS, 2SLS and logit with no fixed
+effects, on the data of the benchmarks above: hdfe_stream on the CPU, with
+`polars_engine="gpu"`, and for logit with `device="cuda"`; the fastest CPU
+library for each model; cuML's `LinearRegression` and `LogisticRegression`;
+and the normal equations, 2SLS and Newton's method in CuPy. cuML runs in a
+virtual environment of its own (`HDFE_BENCH_CUML_PYTHON`, or
+`/opt/bench/cuml-venv/bin/python`), with NumPy below 2.4, which dropped
+`row_stack`, still used by cuML 26.06; its configurations are skipped without
+it. Results go to `results/general_gpu.csv` and
+`results/general_gpu_machine.json`.
 
 On a machine without a GPU the benchmark says so and measures nothing.
 Results go to `results/gpu.csv`, with the GPU and package versions in

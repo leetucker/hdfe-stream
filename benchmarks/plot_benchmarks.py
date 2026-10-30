@@ -122,13 +122,89 @@ SERIES = {
         "feglm_stream logit (sized to the design)": ("violet", "X", "-",
                                                      "hdfe_stream (sized to the design)"),
     },
+    # general regression: a library has one color; the second panel's series
+    # share the first's legend entry, and what does less work than the rest
+    # (a floor of the normal equations, a by-hand fit) is dashed
+    "ols": {
+        "hdfe_stream": ("magenta", "v", "-"),
+        "scikit-learn": ("green", "h", "-"),
+        "polars-ols": ("aqua", "D", "-"),
+        "polars-ds": ("yellow", "^", "-"),
+        "statsmodels": ("blue", "o", "-"),
+        "pyfixest": ("orange", "s", "-"),
+        "fixest (R)": ("red", "p", "-"),
+        "lm (R)": ("red", "h", "--"),
+        "NumPy normal equations": ("violet", "X", "--"),
+        "hdfe_stream (1 FE)": ("magenta", "v", "-", "hdfe_stream"),
+        "pyfixest (1 FE)": ("orange", "s", "-", "pyfixest"),
+        "fixest (R, 1 FE)": ("red", "p", "-", "fixest (R)"),
+        "linearmodels AbsorbingLS (1 FE)": ("violet", "P", "-", "linearmodels"),
+        "polars-ols (demeaned, 1 FE)": ("aqua", "D", "-", "polars-ols"),
+    },
+    "iv": {
+        "hdfe_stream": ("magenta", "v", "-"),
+        "linearmodels IV2SLS": ("violet", "P", "-", "linearmodels"),
+        "pyfixest": ("orange", "s", "-"),
+        "fixest (R)": ("red", "p", "-"),
+        "polars-ols (two stages)": ("aqua", "D", "--", "polars-ols (two stages)"),
+        "NumPy normal equations": ("violet", "X", "--"),
+        "hdfe_stream (1 FE)": ("magenta", "v", "-", "hdfe_stream"),
+        "pyfixest (1 FE)": ("orange", "s", "-", "pyfixest"),
+        "fixest (R, 1 FE)": ("red", "p", "-", "fixest (R)"),
+        "linearmodels IV2SLS (demeaned, 1 FE)": ("violet", "P", "-", "linearmodels"),
+        "polars-ols (two stages, demeaned, 1 FE)": ("aqua", "D", "--",
+                                                    "polars-ols (two stages)"),
+    },
+    "binary": {
+        "hdfe_stream logit": ("magenta", "v", "-", "hdfe_stream"),
+        "statsmodels logit": ("blue", "o", "-", "statsmodels"),
+        "pyfixest logit": ("orange", "s", "-", "pyfixest"),
+        "fixest logit (R)": ("red", "p", "-", "fixest (R)"),
+        "glm logit (R)": ("red", "h", "--", "glm (R)"),
+        "scikit-learn logit": ("green", "h", "-", "scikit-learn"),
+        "glum logit": ("aqua", "D", "-", "glum"),
+        "polars-ds logit": ("yellow", "^", "-", "polars-ds"),
+        "hdfe_stream probit": ("magenta", "v", "-", "hdfe_stream"),
+        "statsmodels probit": ("blue", "o", "-", "statsmodels"),
+        "pyfixest probit": ("orange", "s", "-", "pyfixest"),
+        "fixest probit (R)": ("red", "p", "-", "fixest (R)"),
+        "glm probit (R)": ("red", "h", "--", "glm (R)"),
+    },
+    # each model on the CPU and, dashed, on the GPU; what the other libraries
+    # have for it, on the same machine, share a legend entry
+    "general_gpu": {
+        "hdfe_stream OLS (CPU)": ("magenta", "v", "-", "hdfe_stream (CPU)"),
+        "hdfe_stream IV (CPU)": ("magenta", "v", "-", "hdfe_stream (CPU)"),
+        "hdfe_stream logit (CPU)": ("magenta", "v", "-", "hdfe_stream (CPU)"),
+        "hdfe_stream OLS (GPU Polars)": ("violet", "P", "--", "hdfe_stream (GPU Polars)"),
+        "hdfe_stream IV (GPU Polars)": ("violet", "P", "--", "hdfe_stream (GPU Polars)"),
+        "hdfe_stream logit (GPU Polars)": ("violet", "P", "--", "hdfe_stream (GPU Polars)"),
+        "hdfe_stream logit (GPU IRLS)": ("magenta", "^", "--", "hdfe_stream (GPU IRLS)"),
+        "hdfe_stream logit (GPU IRLS + GPU Polars)": ("violet", "X", "--",
+                                                      "hdfe_stream (GPU IRLS + GPU Polars)"),
+        "polars-ols (CPU)": ("aqua", "D", "-", "polars-ols, polars-ds (CPU)"),
+        "polars-ols two stages (CPU)": ("aqua", "D", "-", "polars-ols, polars-ds (CPU)"),
+        "polars-ds logit (CPU)": ("aqua", "D", "-", "polars-ols, polars-ds (CPU)"),
+        "cuML OLS": ("green", "h", "--", "cuML"),
+        "cuML logit": ("green", "h", "--", "cuML"),
+        "CuPy normal equations (OLS)": ("blue", "o", "--", "CuPy, by hand"),
+        "CuPy 2SLS": ("blue", "o", "--", "CuPy, by hand"),
+        "CuPy Newton logit": ("blue", "o", "--", "CuPy, by hand"),
+    },
 }
 
 # benchmarks drawn as side-by-side panels: (panel title, value of `family`)
 PANELS = {
     "glm": [("Poisson", "poisson"), ("Logit", "logit")],
     "glm_covariates": [("Poisson", "poisson"), ("Logit", "logit")],
+    "ols": [("No fixed effects", "0"), ("One fixed effect", "1")],
+    "iv": [("No fixed effects", "0"), ("One fixed effect", "1")],
+    "binary": [("Logit", "logit"), ("Probit", "probit")],
+    "general_gpu": [("OLS", "ols"), ("Two-stage least squares", "iv"), ("Logit", "logit")],
 }
+# the column that tells the panels apart, where it is not `family`
+PANEL_COLUMN = {"ols": "fixed_effects", "iv": "fixed_effects", "binary": "task",
+                "general_gpu": "task"}
 
 METRICS = {
     "time": ("wall_s", "Wall time (seconds)", 1.0),
@@ -137,7 +213,10 @@ METRICS = {
     "gpu_memory": ("peak_gpu_memory_mb", "Peak GPU memory (GB)", 1e-3),
 }
 # the figures of each benchmark; the others have time, memory and disk
-FIGURES_OF = {"gpu": ("time", "memory", "gpu_memory")}
+FIGURES_OF = {"gpu": ("time", "memory", "gpu_memory"),
+              "ols": ("time", "memory"), "iv": ("time", "memory"),
+              "binary": ("time", "memory"),
+              "general_gpu": ("time", "memory", "gpu_memory")}
 
 TITLES = {
     "akm": "AKM regression",
@@ -146,6 +225,10 @@ TITLES = {
     "glm": "Poisson and logit regression",
     "glm_covariates": "Poisson and logit, many covariates (8.5 million rows)",
     "gpu": "AKM regression, CPU and GPU",
+    "ols": "OLS regression",
+    "iv": "Two-stage least squares",
+    "binary": "Logit and probit regression",
+    "general_gpu": "OLS, IV and logit, CPU and GPU",
 }
 
 # the x axis: column, tick label, axis label (given the rows), point name
@@ -155,12 +238,16 @@ X_AXES = {
                 lambda rows, sizes: "Workers (firms = workers / 15; about "
                 f"{sum(rows[n] / n for n in sizes) / len(sizes):.1f} rows per worker)",
                 "workers"),
+    "rows": ("n_rows",
+             lambda n: f"{n / 1_000_000:g}M" if n >= 1_000_000 else f"{n / 1_000:g}k",
+             lambda rows, sizes: "Rows (10 covariates)", "rows"),
     "covariates": ("n_covariates", lambda n: f"{n:,}",
                    lambda rows, sizes: "Covariates (age indicators, from 5-year bins "
                    "to 1-month bins)", "covariates"),
 }
 AXIS = {"akm": "workers", "kss": "workers", "covariates": "covariates",
-        "glm": "workers", "glm_covariates": "covariates", "gpu": "workers"}
+        "glm": "workers", "glm_covariates": "covariates", "gpu": "workers",
+        "ols": "rows", "iv": "rows", "binary": "rows", "general_gpu": "rows"}
 
 
 def read(name):
@@ -202,7 +289,8 @@ def figure(bench, metric, theme_name, rows):
             where = f"{name}, {panel}" if panel else label
             points = []
             for r in rows:
-                if r["configuration"] != label or (family and r["family"] != family):
+                if r["configuration"] != label or (
+                        family and r[PANEL_COLUMN.get(bench, "family")] != family):
                     continue
                 if r["status"] != "ok":
                     why = r["status"].split(":")[0]
@@ -318,7 +406,9 @@ def _lower(text):
 
 
 def _machine(bench):
-    name = "gpu_machine.json" if bench == "gpu" else "machine.json"
+    name = {"gpu": "gpu_machine.json", "general_gpu": "general_gpu_machine.json",
+            "ols": "general_machine.json", "iv": "general_machine.json",
+            "binary": "general_machine.json"}.get(bench, "machine.json")
     try:
         return json.loads((RESULTS / name).read_text())
     except (OSError, ValueError):
@@ -327,7 +417,7 @@ def _machine(bench):
 
 def _title(bench):
     """The GPU benchmark's title names its GPU, as gpu_machine.json has it."""
-    if bench != "gpu":
+    if bench not in ("gpu", "general_gpu"):
         return TITLES[bench]
     gpus = _machine(bench).get("gpus") or [{}]
     model = (gpus[0].get("name") or "").removeprefix("NVIDIA ").split(" ")[0]
@@ -339,7 +429,7 @@ def _memory_limit(bench):
     on the GPU machine, which has far more, the limit its benchmarks ran
     under (the CPU machine's, so that its configurations had the same room)."""
     info = _machine(bench)
-    if bench != "gpu":
+    if bench not in ("gpu", "general_gpu"):
         return ("this machine's memory", info["memory_gb"]) if info.get("memory_gb") else None
     cap = (info.get("ec2") or {}).get("memory_max", "").split(" ")[0]
     if cap.endswith("M") and cap[:-1].isdigit():
@@ -349,7 +439,8 @@ def _memory_limit(bench):
 
 def main():
     FIGURES.mkdir(parents=True, exist_ok=True)
-    for bench in ("akm", "kss", "covariates", "glm", "glm_covariates", "gpu"):
+    for bench in ("akm", "kss", "covariates", "glm", "glm_covariates", "gpu",
+                  "ols", "iv", "binary", "general_gpu"):
         if not (RESULTS / f"{bench}.csv").exists():
             print(f"no results for {bench}; run benchmarks/{bench}_benchmark.py")
             continue

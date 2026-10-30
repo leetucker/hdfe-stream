@@ -65,9 +65,9 @@ enclave where the data are larger than the memory you are allowed. Every other
 library compared here needs the whole panel in memory before it starts; this
 one holds a bounded slice of it at a time, and uses scratch disk for the rest.
 
-**When they do fit, it is still a sensible default for medium and large
+**When they do fit, it is still a sensible default for medium and large HDFE
 regressions.** From about 400,000 workers (3.4 million rows) up, it was the
-fastest of the libraries benchmarked: against pyfixest, xhdfe, R's fixest and
+fastest of the HDFE libraries benchmarked: against pyfixest, xhdfe, R's fixest and
 Julia's FixedEffectModels.jl on the AKM regression and on wide designs, against
 pyfixest on Poisson and logit, and against xhdfe on the KSS decomposition, and
 at the largest sizes it used a fraction of their memory. At 5 million workers it fitted the AKM
@@ -77,10 +77,28 @@ benchmarks are simulated employer–employee panels, a shape that suits its
 design ([how it works](#how-it-works-in-one-paragraph)); one whose fixed-effect cells are no smaller than
 the data may do less well.
 
+**It is also a reasonable general-purpose regression engine.** OLS and
+weighted least squares, 2SLS, and binary logit and probit fit with no fixed
+effects or one, from a formula, with robust and clustered standard errors. On
+simulated data with 10 covariates, from a few million rows up it was within a
+small factor of the fastest libraries, ahead of some, and far lighter. At 20
+million rows an OLS took 6.5 s and 2.5 GB, against 5.4 s and 7.5 GB for
+scikit-learn, 8.5 s and 5.7 GB for polars-ols, and 9.1 s and 15.7 GB for
+pyfixest; a logit took 9.4 s and 2.4 GB, against 12.8 s and 7.7 GB for
+statsmodels and 15.9 s and 20.6 GB for pyfixest. It is not the fastest: fixest
+was about 2.2 times faster at OLS and glum about 2.2 times faster at logit,
+scikit-learn, polars-ols and statsmodels were faster from 1 to 5 million rows,
+and a hand-written solve in NumPy is faster still. Those packages return
+coefficients or, at most, classical standard errors; here you also get
+clustering, weights, IV and formulas, and a memory use that stays near 2.5 GB
+where theirs reaches 5 to 20 GB. See the [OLS, IV, logit and probit
+benchmarks](benchmarks/regression.md).
+
 **On small data it gains you nothing.** Below about 400,000 workers the
-in-memory libraries were faster — by a second or less on the regression, and
-by six seconds on the smallest KSS decomposition — and lighter: an hdfe_stream
-process starts at about 0.8 GB.
+in-memory libraries were faster — by a second or less on the AKM regression,
+and by six seconds on the smallest KSS decomposition — and lighter: an hdfe_stream process starts at about 0.8 GB. The same holds for plain
+regressions below about a million rows: a fit takes about a second, against
+tenths of a second for the fast libraries.
 
 **Use [pyfixest](https://github.com/py-econometrics/pyfixest) when you need
 what a streaming design does not offer.** It is more mature and more widely
@@ -118,7 +136,7 @@ used.
 
 ## Should I use a GPU?
 
-Probably not for this. hdfe_stream has experimental GPU options (`device="cuda"`
+Probably not for HDFE regressions. hdfe_stream has experimental GPU options (`device="cuda"`
 for the solve, `polars_engine="gpu"` for the Polars queries), but on an NVIDIA
 H100 their gains were modest throughout and appeared only at large sizes:
 about 4% at 5 million workers with both options on, and no consistent gain
@@ -127,8 +145,18 @@ below that. A GPU-oriented library such as
 performance is the priority: its CUDA backend took 24 s at 5 million workers,
 against 107 s on its CPU backend. But hdfe_stream on a 16-vCPU CPU machine took
 22 s, and that machine costs about an eighth as much per hour as AWS's smallest
-H100 machine. [CPU and GPU](benchmarks/gpu.md) has the numbers, and how to try
-the options.
+H100 machine.
+
+For plain OLS, 2SLS and logit with no fixed effects the answer is less clear-cut.
+At 20 million rows GPU libraries fitted them in 3 to 5 s (cuML, and a
+hand-written CuPy solve), 1.3 to 3.5 times faster than hdfe_stream on the CPU of
+the same machine, and not at all below a few million rows. But
+hdfe_stream's own GPU options did little for them: `polars_engine="gpu"` was
+slower at every size, and `device="cuda"`, which runs a logit's IRLS steps on
+the GPU, saved 24% at 20 million rows and nothing below 5 million. And fixest,
+on the 16-vCPU CPU machine, fitted the same OLS in 2.9 s. See [plain
+regressions on the GPU](benchmarks/gpu.md#plain-regressions-ols-iv-and-logit).
+[CPU and GPU](benchmarks/gpu.md) has the numbers, and how to try the options.
 
 ## How it works, in one paragraph
 
@@ -144,9 +172,7 @@ Parquet. So memory scales with firms × years, not with workers × rows, and tha
 asymmetry is the whole design. The covariates travel with the rows: what is
 held at once is one bucket or batch of rows × covariates, never all of them,
 which is why a wide design fits where an in-memory one does not.
-[Out of core](examples/out_of_core.md) says what that means in practice, and
-the full detail is in the docstring of
-[`hdfe_stream/__init__.py`](https://github.com/leetucker/hdfe-stream/blob/main/hdfe_stream/__init__.py).
+[Out of core](examples/out_of_core.md) says what that means in practice.
 
 ## Install
 

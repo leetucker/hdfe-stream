@@ -86,10 +86,28 @@ benchmarks are simulated employer–employee panels, a shape that suits its
 design ([how it works](#how-it-works-in-one-paragraph)); one whose fixed-effect cells are no smaller than
 the data may do less well.
 
+**It is also a reasonable general-purpose regression engine.** OLS and
+weighted least squares, 2SLS, and binary logit and probit fit with no fixed
+effects or one, from a formula, with robust and clustered standard errors. On
+simulated data with 10 covariates, from a few million rows up it was within a
+small factor of the fastest libraries, ahead of some, and far lighter. At 20
+million rows an OLS took 6.5 s and 2.5 GB, against 5.4 s and 7.5 GB for
+scikit-learn, 8.5 s and 5.7 GB for polars-ols, and 9.1 s and 15.7 GB for
+pyfixest; a logit took 9.4 s and 2.4 GB, against 12.8 s and 7.7 GB for
+statsmodels and 15.9 s and 20.6 GB for pyfixest. It is not the fastest: fixest
+was about 2.2 times faster at OLS and glum about 2.2 times faster at logit,
+scikit-learn, polars-ols and statsmodels were faster from 1 to 5 million rows,
+and a hand-written solve in NumPy is faster still. Those packages return
+coefficients or, at most, classical standard errors; here you also get
+clustering, weights, IV and formulas, and a memory use that stays near 2.5 GB
+where theirs reaches 5 to 20 GB. See the [OLS, IV, logit and probit
+benchmarks](https://leetucker.github.io/hdfe-stream/benchmarks/regression.html).
+
 **On small data it gains you nothing.** Below about 400,000 workers the
-in-memory libraries were faster — by a second or less on the regression, and
-by six seconds on the smallest KSS decomposition — and lighter: an hdfe_stream
-process starts at about 0.8 GB.
+in-memory libraries were faster — by a second or less on the AKM regression,
+and by six seconds on the smallest KSS decomposition — and lighter: an hdfe_stream process starts at about 0.8 GB. The same holds for plain
+regressions below about a million rows: a fit takes about a second, against
+tenths of a second for the fast libraries.
 
 **Use [pyfixest](https://github.com/py-econometrics/pyfixest) when you need
 what a streaming design does not offer.** It is more mature and more widely
@@ -200,7 +218,11 @@ On small data the in-memory libraries use less memory: an hdfe_stream process
 costs about 0.8 GB before it has done anything. The
 [benchmarks](https://leetucker.github.io/hdfe-stream/benchmarks/index.html) cover every size from 212,000 rows up,
 designs with up to 503 covariates, Poisson and logit, and the KSS
-decomposition, with how each was measured.
+decomposition, with how each was measured. They also cover [plain OLS, 2SLS,
+logit and probit](https://leetucker.github.io/hdfe-stream/benchmarks/regression.html)
+without fixed effects or with one, against scikit-learn, polars-ols, statsmodels
+and others: at 20 million rows hdfe_stream is not the fastest, but is within a
+small factor of most and uses a fraction of their memory.
 
 ### Should I use a GPU?
 
@@ -212,7 +234,18 @@ gain below that. A GPU-oriented library such as
 performance is the priority: its CUDA backend took 24 s at 5 million workers,
 against 107 s on its CPU backend. But hdfe_stream on a 16-vCPU CPU machine took
 22 s, and that machine costs about an eighth as much per hour as AWS's
-smallest H100 machine. [CPU and GPU](https://leetucker.github.io/hdfe-stream/benchmarks/gpu.html) has the numbers.
+smallest H100 machine.
+
+For plain OLS, 2SLS and logit with no fixed effects the answer is less clear-cut.
+At 20 million rows GPU libraries fitted them in 3 to 5 s (cuML, and a
+hand-written CuPy solve), 1.3 to 3.5 times faster than hdfe_stream on the CPU of
+the same machine, and not at all below a few million rows. But
+hdfe_stream's own GPU options did little for them: `polars_engine="gpu"` was
+slower at every size, and `device="cuda"`, which runs a logit's IRLS steps on
+the GPU, saved 24% at 20 million rows and nothing below 5 million. And fixest,
+on the 16-vCPU CPU machine, fitted the same OLS in 2.9 s. See [plain
+regressions on the GPU](https://leetucker.github.io/hdfe-stream/benchmarks/gpu.html#plain-regressions-ols-iv-and-logit).
+[CPU and GPU](https://leetucker.github.io/hdfe-stream/benchmarks/gpu.html) has the numbers.
 
 ## Documentation
 

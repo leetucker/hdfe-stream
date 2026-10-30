@@ -172,3 +172,48 @@ def test_polars_gpu_engine_without_cudf_polars_says_what_to_install(monkeypatch)
                         lambda name, *a: None if name == "cudf_polars" else real(name, *a))
     with pytest.raises(ImportError, match="cudf-polars"):
         StreamingHDFE("log_earn", [], ["worker_id", "firm_id"], polars_engine="gpu")
+
+
+# ------------------------------------------------ fits without fixed effects
+
+def _no_fe_frame(n=3000):
+    rng = np.random.default_rng(11)
+    x1, x2 = rng.standard_normal(n), rng.standard_normal(n)
+    eta = 0.3 * x1 - 0.5 * x2 + 0.1
+    return pl.DataFrame({
+        "x1": x1, "x2": x2, "w": rng.uniform(0.5, 2.0, n),
+        "yb": (rng.uniform(size=n) < 1 / (1 + np.exp(-eta))).astype(float),
+        "yp": rng.poisson(np.exp(0.2 * eta)).astype(float)})
+
+
+@pytest.mark.parametrize("fml, fit_fn, kw", [
+    ("yb ~ x1 + x2", "feglm_stream", dict(family="logit")),
+    ("yb ~ x1 + x2", "feglm_stream", dict(family="probit")),
+    ("yb ~ x1 + x2", "feglm_stream", dict(family="logit", weights="w")),
+    ("yp ~ x1 + x2", "fepois_stream", {}),
+], ids=["logit", "probit", "weighted-logit", "poisson"])
+def test_device_glm_without_fixed_effects(tmp_path, numpy_device, fml, fit_fn, kw):
+    import hdfe_stream
+    path = tmp_path / "d.parquet"
+    _no_fe_frame().write_parquet(path)
+    fn = getattr(hdfe_stream, fit_fn)
+    opts = dict(verbose=False, iwls_tol=1e-12, batch_rows=700, **kw)
+    cpu = fn(fml, str(path), workdir=tmp_path / "cpu", **opts)
+    dev = fn(fml, str(path), workdir=tmp_path / "dev", device="cuda", **opts)
+    assert rel(list(dev.coef().values()), list(cpu.coef().values())) < 1e-9
+    assert rel(dev.se, cpu.se) < 1e-8
+    assert rel(dev.deviance, cpu.deviance) < 1e-10
+
+
+def test_device_glm_rows_that_do_not_fit_are_streamed(tmp_path, numpy_device):
+    import hdfe_stream
+    path = tmp_path / "d.parquet"
+    _no_fe_frame().write_parquet(path)
+    opts = dict(verbose=False, iwls_tol=1e-12, batch_rows=700)
+    cpu = hdfe_stream.feglm_stream("yb ~ x1 + x2", str(path), family="logit",
+                                   workdir=tmp_path / "cpu", **opts)
+    numpy_device.free_bytes = lambda: 10_000.0      # far less than the rows
+    with pytest.warns(UserWarning, match="do not fit"):
+        dev = hdfe_stream.feglm_stream("yb ~ x1 + x2", str(path), family="logit",
+                                       workdir=tmp_path / "dev", device="cuda", **opts)
+    assert rel(list(dev.coef().values()), list(cpu.coef().values())) < 1e-9

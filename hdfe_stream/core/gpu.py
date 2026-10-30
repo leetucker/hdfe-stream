@@ -9,6 +9,10 @@ iteration runs there; only the right-hand sides go over and the solutions
 come back. Sums are formed in a different order than on the CPU, so the
 estimates differ in the last digits, far inside the solver tolerance.
 
+A GLM without fixed effects has no solve. With ``device="cuda"`` its rows are
+uploaded once and each IRLS step runs on the device (`glm_rows_plain`): the
+family's terms and the cross-products, of which only the sums come back.
+
 Both packages are imported only when asked for, so nothing here is needed to
 use the library without a GPU.
 """
@@ -20,6 +24,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+_INV_SQRT_2PI = 0.3989422804014327
 _CUPY_HINT = ("device='cuda' needs CuPy built for your CUDA version, e.g. "
               "`pip install cupy-cuda13x` (or cupy-cuda12x), and an NVIDIA GPU")
 
@@ -34,12 +39,73 @@ def cuda_backend():
         raise ImportError(_CUPY_HINT) from err
     if cupy.cuda.runtime.getDeviceCount() < 1:
         raise RuntimeError("device='cuda': CuPy found no CUDA device")
+    import cupyx.scipy.special as cusp
     return SimpleNamespace(
-        xp=cupy, asnumpy=cupy.asnumpy,
+        xp=cupy, asnumpy=cupy.asnumpy, special=cusp,
+        free_bytes=lambda: cupy.cuda.runtime.memGetInfo()[0],
+        release=lambda: cupy.get_default_memory_pool().free_all_blocks(),
         csr=lambda S: cusparse.csr_matrix(
             (cupy.asarray(S.data), cupy.asarray(S.indices), cupy.asarray(S.indptr)),
             shape=S.shape),
         name=cupy.cuda.runtime.getDeviceProperties(0)["name"].decode())
+
+
+def glm_rows_plain(be, family, init, ybar, y, X, f, off, beta):
+    """`_nb_glm_rows_plain` on the device, for a chunk of rows whose arrays
+    (`y`, `X`, and `f`, `off` or None) are already there: the same terms, row
+    by row, from the same formulas (`families.py`), so the sums agree with
+    the CPU's to rounding.
+
+    Returns the scalars (deviance, log-likelihood, f y, f, f log(y!), sum w),
+    the sums of w v (v = [z, x], z = eta + u less the offset, w = W f) and the
+    cross-products V'V of V = sqrt(w) v, all as host arrays: a handful of
+    numbers however many rows."""
+    xp = be.xp
+    sp = getattr(be, "special", None)
+    if sp is None:
+        import scipy.special as sp
+    with np.errstate(all="ignore"):         # the stand-in evaluates both branches of where
+        if init:
+            eta = xp.log(0.5 * (y + ybar)) if family == "poisson" else xp.zeros_like(y)
+        else:
+            eta = X @ xp.asarray(beta)
+            if off is not None:
+                eta = eta + off
+        pos = y > 0
+        lg = None
+        if family == "poisson":
+            mu = xp.exp(eta)
+            W = mu
+            u = xp.where(mu > 0, y / xp.where(mu > 0, mu, 1.0) - 1.0, 0.0)
+            dev = 2.0 * (sp.xlogy(y, y) - y * eta - y + mu)
+            lg = sp.gammaln(y + 1.0)
+            ll = y * eta - mu - lg
+        elif family == "logit":
+            p, q = sp.expit(eta), sp.expit(-eta)
+            W = p * q
+            resid = xp.where(pos, q, -p)
+            u = xp.where(W > 0, resid / xp.where(W > 0, W, 1.0), 0.0)
+            dev = -2.0 * xp.where(pos, sp.log_expit(eta), sp.log_expit(-eta))
+            ll = -0.5 * dev
+        else:
+            p, q = sp.ndtr(eta), sp.ndtr(-eta)
+            pdf = xp.exp(-0.5 * eta * eta) * _INV_SQRT_2PI
+            var = p * q
+            W = xp.where(var > 0, pdf * pdf / xp.where(var > 0, var, 1.0), 0.0)
+            resid = xp.where(pos, q, -p)
+            u = xp.where((W > 0) & (pdf > 0), resid / xp.where(pdf > 0, pdf, 1.0), 0.0)
+            dev = -2.0 * xp.where(pos, sp.log_ndtr(eta), sp.log_ndtr(-eta))
+            ll = -0.5 * dev
+        fw = xp.ones_like(y) if f is None else f
+        w = W * fw
+        z = eta + u
+        if off is not None:
+            z = z - off
+        Z = xp.concatenate([z[:, None], X], axis=1)
+        V = Z * xp.sqrt(w)[:, None]
+        scal = xp.stack([(fw * dev).sum(), (fw * ll).sum(), (fw * y).sum(), fw.sum(),
+                         (fw * lg).sum() if lg is not None else xp.zeros(()), w.sum()])
+        return be.asnumpy(scal), be.asnumpy(w @ Z), be.asnumpy(V.T @ V)
 
 
 def check_polars_gpu():

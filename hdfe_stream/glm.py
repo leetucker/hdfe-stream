@@ -198,6 +198,7 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
         self._p2 = None
         self._raw_w = None
         self._bufs = {}
+        self._dev_rows = None           # device copy of the rows, no-FE fits on the GPU
         if options.get("batch_rows") is None:
             self.batch_rows = min(2_000_000,
                                   max(100_000, int(_CHUNK_MB * 1e6 / (8 * (self.m + 4)))))
@@ -524,6 +525,7 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
             warn(f"{model['fml']}: IRLS did not converge within iwls_maxiter="
                  f"{self.iwls_maxiter} steps", self.logger)
         info = dict(last.info)
+        self._free_device_rows()
         return SimpleNamespace(
             prev=last.cur, final=cur, gamma=last.gamma, A=last.A, info=info, raw=last.raw,
             xj=xj, names=names, dropped=dropped, dev=dev, ll=agg.ll, path=path,
@@ -563,6 +565,62 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
         out.sv += p[6:]
         out.W += Wb.sum(axis=0) if blockwise else V.T @ V
 
+    def _free_device_rows(self):
+        if self._dev_rows is not None:
+            self._dev_rows = None
+            from .core.gpu import cuda_backend
+            getattr(cuda_backend(), "release", lambda: None)()
+
+    def _release_intermediates(self):
+        self._dev_rows = None
+        super()._release_intermediates()
+
+    def _device_chunks(self, be, yj, xj):
+        """The row chunks of a model without fixed effects as device arrays
+        (y, X, f, offset). The first pass uploads them and, if they fit in
+        the device's free memory with room to spare, keeps them: every later
+        step then runs without reading the rows again. If they do not fit,
+        each pass uploads them again, a chunk at a time."""
+        key = (yj, tuple(xj))
+        held = self._dev_rows
+        if held is not None and held["key"] == key and held["chunks"] is not None:
+            yield from held["chunks"]
+            return
+        budget = 0.6 * getattr(be, "free_bytes", lambda: float("inf"))()
+        keep = held is None or held["key"] != key or held["fits"]
+        chunks, used = [], 0
+        for ch, _, _ in self._row_chunks(self._columns(yj, xj)):
+            d = tuple(None if a is None else be.xp.asarray(a)
+                      for a in self._chunk_data(ch, yj, xj))
+            used += sum(a.nbytes for a in d if a is not None)
+            if keep and used > budget:
+                keep, chunks = False, []
+                warn("device='cuda': the rows do not fit in the device's free memory, so "
+                     "every IRLS step uploads them again", self.logger)
+            if keep:
+                chunks.append(d)
+            yield d
+        self._dev_rows = {"key": key, "chunks": chunks if keep else None, "fits": keep}
+
+    def _device_pass(self, out, state, yj, xj, first):
+        """`_row_pass_plain` for every chunk on the device: the family's
+        terms and the cross-products there (`core.gpu.glm_rows_plain`), and
+        only their sums come back."""
+        from .core.gpu import cuda_backend, glm_rows_plain
+        be = cuda_backend()
+        for y, X, f, off in self._device_chunks(be, yj, xj):
+            p, sv, W = glm_rows_plain(be, self.family.name, bool(state.init), float(self.ybar),
+                                      y, X, f, off, None if state.init else state.beta)
+            out.dev += float(p[0])
+            out.ll += float(p[1])
+            if first:
+                out.sy += float(p[2])
+                out.sw += float(p[3])
+                out.slg += float(p[4])
+            out.wsum += float(p[5])
+            out.sv += sv
+            out.W += W
+
     def _row_pass(self, state, yj, xj, slot, first=False):
         """Read the rows once at coefficients `state`: the deviance and
         log-likelihood there, and the cell sums of the next weighted
@@ -587,8 +645,12 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
         cursor = [0, 0, 0]
         code = FAMILY_CODES[fam.name]
         empty = np.zeros(0)
+        on_device = self.device == "cuda" and not self.fe
+        if on_device:
+            self._device_pass(out, state, yj, xj, first)
         with single_blas(c <= _SINGLE_BLAS_MAX_COLS):
-            for ch, starts, codes in self._row_chunks(self._columns(yj, xj)):
+            for ch, starts, codes in (() if on_device
+                                      else self._row_chunks(self._columns(yj, xj))):
                 lay = self._cell_layout(starts, codes, cursor)
                 y, X, f, off = self._chunk_data(ch, yj, xj)
                 if lay is None:

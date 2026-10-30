@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0
+
+- **`device="cuda"` runs GLMs without fixed effects on the GPU.** Poisson,
+  logit and probit with no fixed effects (`feglm_stream`, `fepois_stream`) did
+  nothing on the GPU before: its solver exists only with two or more fixed
+  effects. Now the rows are uploaded once and every IRLS step (the family's
+  terms, the weighted cross-products) runs on the device, so later steps do
+  not read the Parquet rows again. If the rows do not fit in the device's free
+  memory the fit warns and uploads them again at each step. Sums are formed in
+  a different order, so estimates agree with the CPU's to rounding. Linear
+  models (OLS, IV) are not yet on the GPU.
+- **Benchmarks for OLS, IV and logit/probit** with zero or one fixed effects
+  (`benchmarks/ols_benchmark.py`, `iv_benchmark.py`, `binary_benchmark.py`),
+  against scikit-learn, polars-ols, polars-ds, statsmodels, linearmodels,
+  glum, pyfixest and R, and the same models on a GPU
+  (`benchmarks/general_gpu_benchmark.py`, against cuML and CuPy). Results and
+  discussion: `docs/benchmarks/regression.md` and the plain-regressions
+  section of `docs/benchmarks/gpu.md`. The `benchmark` extra now installs the
+  comparison packages.
+
 ## 0.6.2
 
 - **Works with `polars-runtime-64`** (#5). With that runtime installed, polars'
