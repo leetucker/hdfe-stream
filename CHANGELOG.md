@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.2
+
+- **Works with `polars-runtime-64`** (#5). With that runtime installed, polars'
+  row indices are UInt64 rather than UInt32, whatever the size of the data, and
+  the level codes and `row_id` built from them failed in NumPy (`bincount`) and
+  numba. They are now Int64. No estimate changes; the `row_id` column in the
+  residual file is 8 bytes a row instead of 4.
+
 ## 0.6.1
 
 Fix a minor performance regression introduced in 0.6.0 based on a fixed cost to

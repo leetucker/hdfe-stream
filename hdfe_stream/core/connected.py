@@ -35,7 +35,7 @@ from .kernels_graph import (_nb_add_into, _nb_articulation_points, _nb_bfs_compo
                             _nb_pairs_degree, _nb_pairs_fill, _nb_peel, _nb_relabel,
                             _nb_union_keys)
 from .report import _log
-from .utils import as_lazy, _not_nan
+from .utils import as_lazy, _not_nan, row_index
 
 _CODE = (f"{PREFIX}cc0", f"{PREFIX}cc1")     # level codes (or hashes) of the two dimensions
 COMPONENT, IN_LARGEST = "component", "in_largest"
@@ -629,7 +629,7 @@ def _coded_pass(complete, dims, fe_cols, maps, index, batch_rows, make, log):
     acc = make()
     coded = complete
     for d, c in zip(dims, _CODE):
-        coded = coded.join(maps[d].lazy().with_row_index(c), on=fe_cols[d])
+        coded = coded.join(row_index(maps[d].lazy(), c), on=fe_cols[d])
     coded.select(_CODE).sink_batches(
         lambda b: acc.consume(b[_CODE[0]].to_numpy(), b[_CODE[1]].to_numpy()),
         chunk_size=batch_rows, maintain_order=False)

@@ -81,6 +81,14 @@ def _segments(g):
     return starts, local
 
 
+def row_index(frame, name):
+    """`frame.with_row_index(name)`, as Int64. Polars' own index is UInt32, or
+    UInt64 with `polars-runtime-64`, and neither mixes safely with the int64
+    offsets and indices of NumPy and numba (UInt64 has no safe cast to int64,
+    and numba types uint64 + int64 as float64)."""
+    return frame.with_row_index(name).with_columns(pl.col(name).cast(pl.Int64))
+
+
 def _scatter(idx, vals, n):
     """Column-wise bincount: out[j] = sum of the rows of vals with idx == j."""
     vals = np.asarray(vals)

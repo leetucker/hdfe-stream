@@ -15,7 +15,7 @@ from .connected import COMPONENT, _find_components
 from .kernels_base import _nb_components, _nb_diag, _nb_rhs, _nb_run_sums, _nb_union_pairs
 from .kernels_slopes import _nb_diag_sl, _nb_rhs_sl
 from .report import warn
-from .utils import as_lazy, _not_nan, _row_wise, _segments, iter_group_chunks
+from .utils import as_lazy, _not_nan, _row_wise, _segments, iter_group_chunks, row_index
 
 # Shared-state contract with the other mixins
 # -------------------------------------------
@@ -74,7 +74,7 @@ class _PassesMixin:
         # Positions in the source as given, before any row is dropped: what
         # lets the residuals, and sample(), be matched to the source again.
         raw = lf
-        lf = lf.with_row_index(self.row_id)
+        lf = row_index(lf, self.row_id)
         schema = lf.collect_schema()
         src = self._src_cols()
         missing = [c for c in src + self.keep + self.slope_vars if c not in schema]
@@ -213,7 +213,7 @@ class _PassesMixin:
                 coded = restrict(coded)
         for name, cols, cc, path in maps:
             self._log(f"pass 0: factorizing {name}")
-            self._sink(lf.select(cols).unique().sort(cols).with_row_index(cc), path,
+            self._sink(row_index(lf.select(cols).unique().sort(cols), cc), path,
                        f"pass 0 factorize {name}")
             nl = pl.scan_parquet(path).select(pl.len()).collect(engine="streaming").item()
             if name in self.o_fe:

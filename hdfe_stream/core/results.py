@@ -15,6 +15,7 @@ import polars as pl
 
 from ._columns import PREFIX, check_source
 from .results_base import RegressionMulti, RegressionResult
+from .utils import row_index
 
 if TYPE_CHECKING:
     from ..leaveout import LeaveOutComponents
@@ -460,7 +461,7 @@ class HDFEResult(RegressionResult):
                 raise ValueError(
                     f"the source has {n:,} rows, and had {spec['n_raw']:,} when the model "
                     "was fitted, so row_id would no longer line up with the residuals")
-        frame = source.with_row_index(row_id)
+        frame = row_index(source, row_id)
         flags = {}
         for kind, tables in spec["tables"].items():
             for d, table in tables.items():
