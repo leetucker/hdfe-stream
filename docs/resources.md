@@ -221,7 +221,8 @@ profile's upper bound, so a job is not refused for an estimate's pessimism.
 ## Measured peak memory
 
 Every fit records `diagnostics["peak_rss_gb"]`: the peak resident memory during
-the fit, from the kernel's own high-water mark (`VmHWM`), read once at the end;
+the fit, from the system's own high-water mark (`VmHWM` on Linux, `getrusage` on macOS,
+the peak working set on Windows), read once at the end;
 there is no polling, so it costs nothing. On Linux the counter is reset when the
 fit starts, so a second fit in the same process reports its own peak; elsewhere
 it is the process's lifetime peak. Child processes are not included.

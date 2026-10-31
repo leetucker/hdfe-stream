@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 import polars as pl
+import stream_limits
 
 
 def test_fit_reports_peak_rss_and_restores_threads(tmp_path):
@@ -17,5 +18,8 @@ def test_fit_reports_peak_rss_and_restores_threads(tmp_path):
                        "g": rng.integers(0, 50, n), "h": rng.integers(0, 20, n)})
     before = numba.get_num_threads()
     fit = feols_stream("y ~ x | g + h", df, workdir=tmp_path, n_threads=1, verbose=False)
-    assert fit.diagnostics["peak_rss_gb"] > 0
+    if stream_limits.peak_rss_gb() is not None:      # not readable on Windows
+        assert fit.diagnostics["peak_rss_gb"] > 0
+    else:
+        assert fit.diagnostics["peak_rss_gb"] is None
     assert numba.get_num_threads() == before

@@ -10,9 +10,17 @@ import sys
 import numpy as np
 import polars as pl
 import pytest
+import stream_limits
 
 from hdfe_stream import Profile, feglm_stream, feols_stream, fepois_stream
 from hdfe_stream.core.profile import Component, Request
+
+# The profile's memory model was calibrated against measured peaks on Linux and checked on macOS.
+# Windows reports a peak too (stream-limits reads the working set), but the model has not been
+# measured against real fits there, so these tests skip on it.
+needs_peak_rss = pytest.mark.skipif(
+    sys.platform == "win32" or stream_limits.peak_rss_gb() is None,
+    reason="the profile model is calibrated on Linux and macOS, and needs a peak-memory reading")
 
 
 @pytest.fixture(scope="module")
@@ -114,6 +122,7 @@ print(json.dumps({"mem": p.memory_gb, "disk": p.disk_gb, "rss": d["peak_rss_gb"]
 '''
 
 
+@needs_peak_rss
 @pytest.mark.parametrize("fn,fml,kw", [
     ("feols_stream", "y ~ x1 + x2 | w + f + yr", {}),
     ("feols_stream", "y ~ x1 | w + f", {"vcov": {"CRV1": "st"}}),
