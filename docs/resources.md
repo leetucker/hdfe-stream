@@ -33,7 +33,7 @@ so). On a cluster, importing hdfe-stream applies the limits for you; the line ab
 something imports Polars *before* hdfe-stream does, such as your own `import polars` at the top of the
 script.
 
-## What the packages do about resource limits
+## What hdfe-stream (and associated packages) do about resource limits
 
 On a cluster, a job gets a fixed number of CPUs and a fixed amount of memory,
 and is killed if it exceeds either. Two things make that hard to get right with
@@ -56,7 +56,8 @@ This page covers what hdfe-stream, logit-stream and dpd-stream do about both:
    the memory that is *left*, not a fixed share of the machine.
 4. [`peak_rss_gb`](#measured): every fit reports the peak memory it used.
 
-## A job script { #job-script }
+(job-script)=
+## A job script
 
 ```bash
 #!/bin/bash
