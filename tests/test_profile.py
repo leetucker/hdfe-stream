@@ -15,12 +15,11 @@ import stream_limits
 from hdfe_stream import Profile, feglm_stream, feols_stream, fepois_stream
 from hdfe_stream.core.profile import Component, Request
 
-# The profile's memory model was calibrated against measured peaks on Linux and checked on macOS.
-# Windows reports a peak too (stream-limits reads the working set), but the model has not been
-# measured against real fits there, so these tests skip on it.
+# These tests compare the profile with a measured peak, so they need a peak-memory reading (Linux,
+# macOS and, from stream-limits 0.1.1, Windows). The model was calibrated on Linux and checked on
+# macOS; on Windows a failure here is information about the model, not a broken test.
 needs_peak_rss = pytest.mark.skipif(
-    sys.platform == "win32" or stream_limits.peak_rss_gb() is None,
-    reason="the profile model is calibrated on Linux and macOS, and needs a peak-memory reading")
+    stream_limits.peak_rss_gb() is None, reason="peak memory cannot be read on this platform")
 
 
 @pytest.fixture(scope="module")

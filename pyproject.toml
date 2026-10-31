@@ -33,7 +33,7 @@ dependencies = [
     "pyarrow>=14.0",
     "scipy>=1.11",
     "threadpoolctl>=3.1",       # BLAS held to one thread in numba-heavy passes
-    "stream-limits>=0.1",       # thread and memory limits for jobs on a scheduler
+    "stream-limits>=0.1.1",     # thread and memory limits for jobs on a scheduler (0.1.1: Windows memory)
 ]
 
 [project.urls]

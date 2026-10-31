@@ -3,9 +3,10 @@ recorded. (The limits themselves are tested in the stream-limits package.)"""
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import polars as pl
-import stream_limits
 
 
 def test_fit_reports_peak_rss_and_restores_threads(tmp_path):
@@ -18,8 +19,10 @@ def test_fit_reports_peak_rss_and_restores_threads(tmp_path):
                        "g": rng.integers(0, 50, n), "h": rng.integers(0, 20, n)})
     before = numba.get_num_threads()
     fit = feols_stream("y ~ x | g + h", df, workdir=tmp_path, n_threads=1, verbose=False)
-    if stream_limits.peak_rss_gb() is not None:      # not readable on Windows
-        assert fit.diagnostics["peak_rss_gb"] > 0
+    peak = fit.diagnostics["peak_rss_gb"]
+    if sys.platform in ("linux", "darwin", "win32"):
+        # stream-limits reads the peak on all three (Windows from 0.1.1): a None here is a regression
+        assert peak is not None and peak > 0
     else:
-        assert fit.diagnostics["peak_rss_gb"] is None
+        assert peak is None or peak > 0
     assert numba.get_num_threads() == before
