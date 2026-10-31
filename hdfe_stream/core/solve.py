@@ -18,7 +18,7 @@ from .utils import _scatter
 
 
 class _STooLarge(Exception):
-    """The explicit reduced matrix S would exceed `max_s_gb`."""
+    """The explicit reduced matrix S would not fit in the memory headroom."""
 
 
 # A covariate spanned by the *streamed* fixed effect -- one that is constant
@@ -52,7 +52,7 @@ _CG_BLOCKS = 256
 # -------------------------------------------
 # Reads, set by _PassesMixin: the identifying cells (starts, codes, n, sums,
 # and st/ainv/cmat with varying slopes) plus n_levels, offs, obs, comp, diag.
-# From StreamingHDFE: solver, precond, tol, maxiter, rhs_block, max_s_gb,
+# From StreamingHDFE: solver, precond, tol, maxiter, rhs_block,
 # paths.
 #
 # Sets nothing that the other mixins read: _solve() returns Gamma and its
@@ -150,7 +150,7 @@ class _SolveMixin:
         Each row's columns are counted first, so S is allocated once at its
         final size, and nothing larger than S is held while it is built
         besides an index of the groups each level is in. Raises _STooLarge,
-        before allocating S, if it would exceed `max_s_gb`.
+        before allocating S, if it would not fit in the memory headroom.
         """
         _, L = self._offsets()
         t0 = time.time()
@@ -167,9 +167,11 @@ class _SolveMixin:
         nnz = int(rnnz.sum())
         idx = np.int32 if max(nnz, L) < 2**31 else np.int64
         nbytes = nnz * (8 + np.dtype(idx).itemsize) + (L + 1) * np.dtype(idx).itemsize
-        if nbytes > self.max_s_gb * 1e9:
-            raise _STooLarge(f"S would take {nbytes / 1e9:.3g} GB > max_s_gb="
-                             f"{self.max_s_gb:.3g} ({nnz:,} nonzeros)")
+        # the block-PCG arrays are allocated after S
+        limit = self._s_limit_gb(7 * L * min(self.m, self.rhs_block) * 8 / 1e9)
+        if nbytes > limit * 1e9:
+            raise _STooLarge(f"S would take {nbytes / 1e9:.3g} GB > the {limit:.3g} GB of "
+                             f"memory headroom ({self.budget}) ({nnz:,} nonzeros)")
         indptr = np.zeros(L + 1, idx)
         np.cumsum(rnnz, out=indptr[1:])
         del rnnz, cum
@@ -206,7 +208,7 @@ class _SolveMixin:
                 solver = "explicit"
             except _STooLarge as err:
                 if self.solver == "explicit":
-                    raise MemoryError(f"{err}; raise max_s_gb or use solver='stream_cg'") from None
+                    raise MemoryError(f"{err}; raise max_memory_gb or use solver='stream_cg'") from None
                 self._log(f"  {err}; falling back to stream_cg"
                           + (", on the CPU" if self.device == "cuda" else ""))
                 info["fallback"] = str(err)

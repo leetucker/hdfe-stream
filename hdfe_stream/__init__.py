@@ -115,19 +115,30 @@ core/reporting.py   pyfixest etable/coefplot views (output side)
 core/formula.py     pyfixest formula -> Polars expressions (input side)
 """
 
-from .api import feglm_stream, fepois_stream, feols_stream
+# first, before polars is imported: cap the threads at a scheduler's allocation
+# (a no-op where none is found). See stream_limits.
+import stream_limits as _stream_limits
+
+_stream_limits.apply_scheduler_defaults()
+
+from stream_limits import limit_threads  # noqa: E402  (re-exported below)
+
+from .api import feglm_stream, fepois_stream, feols_stream  # noqa: E402
 from .core.connected import ConnectedComponents, connected_components
 from .estimator import StreamingHDFE
 from .glm import StreamingGLM
 from .leaveout_se import ComponentSE
 from .leaveout_weakid import WeakIdDiagnostics
 from .leaveout import leave_out_kss
+from .core.profile import Profile  # noqa: E402
 from .core.multcomp import bonferroni, holm, rwolf, wyoung
 from .core.reporting import etable
 from .core.results import HDFEMulti, HDFEResult
 from .core.workspace import cleanup
 
 __all__ = [
+    "limit_threads",
+    "Profile",
     "feols_stream",
     "fepois_stream",
     "feglm_stream",

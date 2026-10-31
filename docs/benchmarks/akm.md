@@ -137,7 +137,7 @@ again. The defaults are tuned for a machine with room to spare; if memory is
 the binding constraint, set `rows_per_bucket` to something near what you can
 afford and leave the rest alone (with many covariates, scale `batch_rows` and
 `row_group_size` down too; see [many covariates](covariates.md)). `rhs_block`
-bounds the other big array (levels × variables), and `max_s_gb` caps the
-explicit reduced matrix, above which `solver="auto"` falls back to `stream_cg`
-by itself. [Out of core](../examples/out_of_core.md#memory-budgets) describes
+bounds the other big array (levels × variables), and `max_memory_gb` (by default the job's allocation) decides whether the
+explicit reduced matrix is built, falling back to `stream_cg` by itself when it
+does not fit. [Out of core](../examples/out_of_core.md#memory-budgets) describes
 each option.

@@ -1,6 +1,6 @@
 """The per-thread accumulators of `stream_cg` and the leave-out passes are
-capped by `max_s_gb`: fewer copies, and so fewer threads on those passes,
-when the budget is tight. The copies are a way of splitting the work, so the
+capped by the memory headroom: fewer copies, and so fewer threads on those
+passes, when memory is tight. The copies are a way of splitting the work, so the
 answer must not depend on how many there are."""
 
 from __future__ import annotations
@@ -15,13 +15,24 @@ from hdfe_stream import StreamingHDFE, feols_stream, leave_out_kss
 FML = "log_earn ~ age_squared + age_cubed | worker_id + firm_id + year"
 
 
+class FixedHeadroom:
+    """A stand-in for `MemoryBudget` with a given headroom, so that the arithmetic is
+    exact (the real one subtracts what the process holds at the moment)."""
+
+    def __init__(self, gb):
+        self.gb = gb
+
+    def headroom_gb(self, upcoming_gb=0.0):
+        return max(0.0, self.gb - upcoming_gb)
+
+
 def test_copies_follow_the_budget(workdir):
-    est = StreamingHDFE("y", ["x"], ["worker_id", "firm_id"], workdir=workdir,
-                        max_s_gb=1.0)
+    est = StreamingHDFE("y", ["x"], ["worker_id", "firm_id"], workdir=workdir)
+    est.budget = FixedHeadroom(1.0)
     nt = nb.get_num_threads()
     # 1,000 levels x 8 columns is 64 kB a copy: one per thread fits easily
     assert est._acc_copies(1_000, 8) == nt
-    # half the 1 GB budget holds 6 copies of 10M levels x 1 column (80 MB each)
+    # half the 1 GB of headroom holds 6 copies of 10M levels x 1 column (80 MB each)
     assert est._acc_copies(10_000_000, 1) == min(nt, 6)
     # one copy always, even when a single one is over the budget
     assert est._acc_copies(10**9, 8) == 1
@@ -34,7 +45,7 @@ def test_stream_cg_with_one_accumulator_matches_explicit(akm, workdir):
     explicit = feols_stream(FML, akm.src, workdir=workdir / "e", verbose=False,
                             vcov={"CRV1": "worker_id"})
     tight = feols_stream(FML, akm.src, workdir=workdir / "t", verbose=False,
-                         vcov={"CRV1": "worker_id"}, max_s_gb=1e-9)
+                         vcov={"CRV1": "worker_id"}, max_memory_gb=0.01)
     assert explicit.solver_info["solver"] == "explicit"
     assert tight.solver_info["solver"] == "stream_cg"
     assert rel(tight.beta, explicit.beta) < TOL_BETA
@@ -50,7 +61,7 @@ def test_leave_out_with_one_accumulator_matches(akm, workdir, leave_out):
     kw = dict(n_draws=16, seed=3, se=True, leave_out=leave_out, verbose=False,
               solver="stream_cg")
     wide = leave_out_kss(fml, akm.src, workdir=workdir / "w", **kw)
-    narrow = leave_out_kss(fml, akm.src, workdir=workdir / "n", max_s_gb=1e-9, **kw)
+    narrow = leave_out_kss(fml, akm.src, workdir=workdir / "n", max_memory_gb=0.01, **kw)
     for key in wide.leave_out:
         assert rel(narrow.leave_out[key], wide.leave_out[key]) < 1e-8, key
         assert rel(narrow.plug_in[key], wide.plug_in[key]) < 1e-8, key

@@ -219,3 +219,17 @@ without re-running anything.
 hdfe_stream's peak memory responds to `rows_per_bucket` and `batch_rows` on one
 panel. Its table is in the documentation, under
 [AKM regression](https://leetucker.github.io/hdfe-stream/benchmarks/akm.html#trading-memory-for-time).
+
+**The memory settings the benchmarks compare** are defined once, in `_settings.py`: "low memory"
+(`rows_per_bucket=250_000`, `batch_rows=200_000`), "sized to the design" (the covariates
+benchmarks), and a series told how much memory it may use (`max_memory_gb`). The scripts run them,
+`plot_benchmarks.py` prints each definition in the note under any figure that draws the setting, and
+the documentation quotes the same numbers, so a change is made in one place.
+
+`akm_benchmark.py` has one series that is not in the published results yet, **`hdfe_stream
+(max_memory_gb=2)`**: the default settings, told the fit may use 2 GB. It runs with the other
+configurations (so a full re-run, here or on EC2, includes it); to run only it, or to leave it out,
+use `--only` with the labels you want. It is a target, not a guarantee, so what is reported is the
+measured peak. The AKM CSV records `solver_used`, because with `solver="auto"` the choice between the
+explicit and the streamed solver now depends on the memory left; older rows lack the column, and the
+figure script draws a series only where the CSV has results for it.

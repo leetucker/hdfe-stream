@@ -138,7 +138,7 @@ def test_device_without_cupy_says_what_to_install(monkeypatch):
 
 def test_device_falls_back_to_the_cpu_when_s_is_too_large(akm, tmp_path, numpy_device):
     fit = feols_stream(FML, akm.src, workdir=tmp_path, verbose=False, device="cuda",
-                       max_s_gb=1e-6)
+                       max_memory_gb=0.01)
     assert fit.solver_info["solver"] == "stream_cg"
     assert fit.solver_info["device"] == "cpu"
 

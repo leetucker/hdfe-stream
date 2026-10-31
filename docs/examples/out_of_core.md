@@ -58,7 +58,7 @@ estimates are the same either way.
 
 | `solver` | what it does | when |
 |---|---|---|
-| `"auto"` (default) | `explicit`, falling back to `stream_cg` if the reduced matrix would exceed `max_s_gb` | leave it alone |
+| `"auto"` (default) | `explicit`, falling back to `stream_cg` if the reduced matrix would not fit in the memory left | leave it alone |
 | `"explicit"` | builds the reduced matrix S once and solves it in memory | fastest when it fits; its size depends on how levels co-occur, not on rows |
 | `"stream_cg"` | applies the reduced matrix by streaming the cell table each iteration | when the reduced matrix is the thing that does not fit |
 | `"within"` | hands the reduced system to `within-py` (the `within` extra) | an alternative; no varying-slopes support |
@@ -72,7 +72,7 @@ why:
   explicit                        -> explicit     0.03s  16 iterations
   stream_cg                       -> stream_cg    0.03s  16 iterations
   auto (tiny budget, falls back)  -> stream_cg    0.05s  16 iterations
-      fell back because: S would take 0.000701 GB > max_s_gb=1e-07 (57,969 nonzeros)
+      fell back because: S would take 0.000701 GB > the 0 GB of memory headroom (MemoryBudget(limit_gb=0.01, reserve=0.15, headroom_gb=0.00)) (57,969 nonzeros)
 ```
 
 ## Memory budgets
@@ -92,9 +92,11 @@ why:
 : variables solved for at a time (default 8). This bounds the biggest
   in-memory array, about 6 × (non-streamed levels) × `rhs_block` doubles.
 
-`max_s_gb`
-: budget for the explicit S (default: a quarter of physical memory), above
-  which `solver="auto"` falls back to `stream_cg`.
+`max_memory_gb`, `memory_reserve`
+: the memory the fit may use (default: the job's allocation, else the machine's)
+  and the share of it held back (default 0.15). The explicit S is built if it fits in
+  what is left, and otherwise `solver="auto"` falls back to `stream_cg`; see
+  [Resource limits and profiling](../resources.md).
 
 None of them changes the answer: with `batch_rows=20_000`,
 `rows_per_bucket=50_000` and `rhs_block=2`, the coefficients agree with the

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import textwrap
 from pathlib import Path
 
@@ -44,6 +45,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import (FixedLocator, FuncFormatter,  # noqa: E402
                                LogLocator, NullFormatter, NullLocator)
+
+from _settings import LOW_MEMORY_NOTE, SIZED_NOTE, limit_note  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 RESULTS = HERE / "results"
@@ -72,6 +75,9 @@ SERIES = {
         "hdfe_stream (explicit)": ("yellow", "^", "-"),
         "hdfe_stream (stream_cg)": ("magenta", "v", "-"),
         "hdfe_stream (stream_cg, low memory)": ("violet", "X", "-"),
+        # told how much memory it may use: violet like the other memory-limited
+        # setting, dashed to tell them apart
+        "hdfe_stream (max_memory_gb=2)": ("violet", "P", "--"),
         "fixest (R)": ("red", "p", "-"),
         "FixedEffectModels.jl": ("green", "h", "-"),
     },
@@ -375,6 +381,17 @@ def figure(bench, metric, theme_name, rows):
                          "amount, so their lines overlap.")
     if metric == "gpu_memory":
         notes.append("The CPU configurations use no GPU memory and are not shown.")
+    # what the memory settings in the legend mean, so the figure carries its own definitions:
+    # only for the series drawn (a configuration with no results is not in the legend)
+    shown = list(legend_lines)
+    if any("low memory" in name for name in shown):
+        notes.append(LOW_MEMORY_NOTE)
+    if any("sized to the design" in name for name in shown):
+        notes.append(SIZED_NOTE)
+    for name in shown:
+        limit = re.search(r"max_memory_gb=([0-9.]+)", name)
+        if limit:
+            notes.append(limit_note(limit.group(1)))
     for why, where in skipped.items():
         notes.append(f"Missing ({why}): " + "; ".join(
             f"{label} at {_and(xs)}" for label, xs in where.items())

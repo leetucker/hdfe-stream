@@ -226,7 +226,7 @@ fit = feols_stream(fml, "panel.parquet", device="cuda", polars_engine="gpu")
 
 - `device="cuda"` builds the reduced system on the CPU as usual, copies it to
   the GPU once, and runs the conjugate-gradient iterations there. It needs
-  `solver="auto"` or `"explicit"`; above `max_s_gb` the solve falls back to the
+  `solver="auto"` or `"explicit"`; if S does not fit in the memory left, the solve falls back to the
   CPU, as it would without a GPU.
 - For a logit, probit or Poisson without fixed effects there is no solve to
   move, and `device="cuda"` instead uploads the rows once and runs every IRLS

@@ -184,7 +184,10 @@ class _PassesMixin:
         rpb = self.rows_per_bucket
         if rpb is None:
             width = self.m + len(src) + len(self.keep) + 2
-            rpb = min(20_000_000, max(500_000, int(384e6 / (8 * width))))
+            # a bucket's sort takes about 3.5 x its bytes: 10% of the headroom, at most
+            # 384 MB and at least 64 MB, so a small allocation gets smaller buckets
+            target = min(384e6, max(64e6, 0.1 * self.budget.headroom_gb() * 1e9))
+            rpb = min(20_000_000, max(500_000, int(target / (8 * width))))
         P = self.n_buckets or max(1, -(-self.n_obs // rpb))
         self.n_buckets = P
 

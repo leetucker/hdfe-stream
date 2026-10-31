@@ -49,6 +49,7 @@ from pathlib import Path
 from _harness import (DATA_DIR, EXTERNAL, RESULTS_DIR, data_path, external_command,
                       external_missing, is_done, measure, panel_shape, run_child,
                       upsert_csv, write_machine_info)
+from _settings import hdfe_options
 
 SCRIPT = Path(__file__).resolve()
 FML = "log_earn ~ age_squared + age_cubed | worker_id + firm_id + year"
@@ -64,16 +65,17 @@ CONFIGS = {
     "hdfe_stream (explicit)": ("hdfe", "explicit"),
     "hdfe_stream (stream_cg)": ("hdfe", "stream_cg"),
     "hdfe_stream (within)": ("hdfe", "within"),
-    # the same solve with the batch and bucket sizes turned down: this is the
-    # knob the in-memory libraries have no equivalent of
+    # the same solve with the batch and bucket sizes turned down (_settings.LOW_MEMORY):
+    # this is the knob the in-memory libraries have no equivalent of
     "hdfe_stream (stream_cg, low memory)": ("hdfe", "stream_cg+lowmem"),
+    # the defaults, but told it may use 2 GB (`max_memory_gb`): the fit chooses its
+    # solver, bucket size and accumulators to fit what is left. 2 GB is below the
+    # default configuration's peak at 1,000,000 workers and up, so it changes what
+    # is run there; at the smaller sizes it changes nothing
+    "hdfe_stream (max_memory_gb=2)": ("hdfe", "auto+limit:2"),
     "fixest (R)": ("fixest", "default"),
     "FixedEffectModels.jl": ("fem", "default"),
 }
-
-# what "low memory" means above: smaller read batches and more buckets, so less
-# of the data is in flight at once
-LOW_MEMORY = {"rows_per_bucket": 250_000, "batch_rows": 200_000}
 
 # a configuration that runs past this is recorded as a timeout, not waited on
 TIMEOUT_S = 3 * 3600
@@ -120,15 +122,7 @@ def run_xhdfe(path):
 def run_hdfe(solver, path, workdir):
     from hdfe_stream import feols_stream
 
-    options = {}
-    if solver.endswith("+lowmem"):
-        solver = solver.removesuffix("+lowmem")
-        options = dict(LOW_MEMORY)
-    elif "+sweep:" in solver:
-        solver, rows_per_bucket, batch_rows = solver.split(":")
-        solver = solver.removesuffix("+sweep")
-        options = {"rows_per_bucket": int(rows_per_bucket),
-                   "batch_rows": int(batch_rows)}
+    solver, options = hdfe_options(solver)
 
     t0 = time.perf_counter()
     fit = feols_stream(FML, str(path), workdir=str(workdir), solver=solver,
@@ -138,6 +132,9 @@ def run_hdfe(solver, path, workdir):
     coefs = fit.coef()
     out = {"t_read": 0.0, "t_fit": t_fit, "n_obs": int(fit.n_obs),
            "coefs": {k: float(coefs[k]) for k in COEFS},
+           # which solver ran: with "auto" it depends on the memory left, so it is
+           # recorded, not assumed
+           "solver_used": fit.solver_info.get("solver", ""),
            "reported_disk_mb": fit.diagnostics["disk_peak_gb"] * 1000}
     fit.cleanup()
     return out
@@ -281,6 +278,7 @@ def main():
                     peak_memory_mb=round(report["peak_rss_mb"], 1),
                     import_memory_mb=round(report["baseline_rss_mb"], 1),
                     peak_disk_mb=round(report["peak_disk_mb"], 1),
+                    solver_used=report.get("solver_used", ""),
                     **{f"coef_{k}": repr(report["coefs"][k]) for k in COEFS})
                 print(f"  {label:<38}{row['wall_s']:8.1f} s   peak "
                       f"{row['peak_memory_mb']:8,.0f} MB   disk "

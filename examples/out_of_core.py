@@ -55,11 +55,11 @@ print(f"  {'solver':<18}{fit.solver_info['solver']}"
 #              when S fits -- and S is sized by how levels co-occur, not by rows.
 # "stream_cg"  never build S; apply it by streaming the cells each iteration.
 #              Slower per iteration, but its memory does not depend on S.
-# "auto"       explicit, falling back to stream_cg if S would exceed max_s_gb.
+# "auto"       explicit, falling back to stream_cg if S would not fit in the memory left.
 print("\nsolvers:")
 for solver, options in [("explicit", {}), ("stream_cg", {}),
                         ("auto (tiny budget, falls back)", {"solver": "auto",
-                                                            "max_s_gb": 1e-7})]:
+                                                            "max_memory_gb": 0.01})]:
     name = options.pop("solver", solver)
     run = feols_stream(FML, data, workdir=workdir(f"solver_{solver[:9]}"),
                        solver=name, verbose=False, **options)
@@ -75,7 +75,8 @@ for solver, options in [("explicit", {}), ("stream_cg", {}),
 #                  in the sort
 # rhs_block        variables solved for at a time. This bounds the biggest
 #                  in-memory array: levels x rhs_block
-# max_s_gb         budget for the explicit S (default: a quarter of RAM)
+# max_memory_gb    the memory the fit may use (default: the job's allocation, else the
+#                  machine's); the explicit S is built only if it fits in what is left
 tight = feols_stream(FML, data, workdir=workdir("tight"),
                      batch_rows=20_000,        # small batches
                      rows_per_bucket=50_000,   # many buckets

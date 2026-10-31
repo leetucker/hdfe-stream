@@ -34,6 +34,7 @@ from pathlib import Path
 
 from _harness import (DATA_DIR, RESULTS_DIR, glm_data_path, is_done, measure,
                       panel_shape, run_child, upsert_csv, write_machine_info)
+from _settings import hdfe_options
 
 SCRIPT = Path(__file__).resolve()
 RHS = "age_squared + age_cubed | worker_id + firm_id + year"
@@ -53,9 +54,6 @@ CONFIGS = {
     "feglm_stream logit (explicit)": ("logit", "hdfe", "explicit"),
     "feglm_stream logit (low memory)": ("logit", "hdfe", "auto+lowmem"),
 }
-
-# the AKM benchmark's low-memory setting
-LOW_MEMORY = {"rows_per_bucket": 250_000, "batch_rows": 200_000}
 
 TIMEOUT_S = 3 * 3600
 
@@ -89,10 +87,7 @@ def run_pyfixest(family, path):
 def run_hdfe(family, solver, path, workdir):
     from hdfe_stream import feglm_stream, fepois_stream
 
-    options = {}
-    if solver.endswith("+lowmem"):
-        solver = solver.removesuffix("+lowmem")
-        options = dict(LOW_MEMORY)
+    solver, options = hdfe_options(solver)    # "+lowmem" is the AKM benchmark's low-memory setting
     fml = f"{OUTCOME[family]} ~ {RHS}"
     common = dict(workdir=str(workdir), solver=solver, vcov={"CRV1": "worker_id"},
                   verbose=False, save_resid=False, **options)

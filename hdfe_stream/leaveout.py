@@ -52,6 +52,7 @@ from .core.results import HDFEResult
 from .core.typing import PathLike, Source
 
 if TYPE_CHECKING:
+    from .core.profile import Profile
     import polars as pl
 
 # Number of per-row running sums the algorithm keeps.
@@ -1035,6 +1036,36 @@ def _check_leave_out(leave_out, se, stayers=None, centering="reference",
             "match uses LeaveOutTwoWay's within-match rule")
 
 
+def _profile_kss(fml, data, workdir, *, block, se, leave_out, **options):
+    """The profile of the fit that `leave_out_kss` starts with, plus the
+    leave-out stage's arrays: the per-thread inverse accumulators (L levels
+    x `block` vectors), the row-level stores (memory-mapped unless
+    ``in_memory``) and the row scratch."""
+    from .api import feols_stream
+    from .core.profile import Component
+    prof = feols_stream(fml, data, workdir=workdir, profile=True,
+                        keep_intermediates=(leave_out == "observation"), **options)
+    nt, L, N = prof.threads, prof.notes["L"], prof.notes["rows"]
+    block = block or options.get("rhs_block", 8)
+    in_memory = bool(options.get("in_memory"))
+    per_row = 8 * (5 + (1 if se else 0))
+    prof.components += [
+        Component("KSS: per-thread inverse accumulators", nt * L * block * 8,
+                  2 * nt * L * block * 8, phases=("kss",),
+                  formula=f"nt={nt} x L={L:,} x block={block} x 8 (upper: two sets)"),
+        Component("KSS: row-level stores", N * per_row, N * (per_row + 24),
+                  where="ram" if in_memory else "mapped", phases=("kss",),
+                  formula="N x 5-6 float64 per row"),
+        Component("KSS: row scratch", options.get("scratch_mb", 32) * 1e6,
+                  2 * options.get("scratch_mb", 32) * 1e6, phases=("kss",),
+                  formula="scratch_mb"),
+    ]
+    prof.model = "leave_out_kss on " + prof.model
+    prof.notes["not_modeled"] = ("the leave-one-out pruning graph, and the Hutchinson "
+                                 "trace vectors of se=True")
+    return prof
+
+
 def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
                   psi: str | None = None, n_draws: int = 250, seed: int = 0,
                   block: int | None = None, prune: bool = True,
@@ -1044,7 +1075,7 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
                   weak_interval: bool = True, confidence: float = 0.95,
                   centering: str = "reference", se_variance: str = "person_year",
                   verbose: bool = True, logger: logging.Logger | None = None,
-                  **options: Any) -> LeaveOutComponents:
+                  profile: bool = False, **options: Any) -> LeaveOutComponents | Profile:
     """Kline-Saggio-Solvsten leave-out variance components, end to end.
 
     The plug-in AKM decomposition is biased -- upward for the variances, toward
@@ -1156,6 +1187,7 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
     from .api import feols_stream
     from .core.feterms import _parse_fe_term, parse_fe
     from .core.report import warn
+    from .core.resources import thread_scope
 
     if "|" not in fml:
         raise ValueError(
@@ -1185,35 +1217,39 @@ def leave_out_kss(fml: str, data: Source, workdir: PathLike | None = None, *,
     options.setdefault("fixef_rm", "none")
     _check_leave_out(leave_out, se, stayers, centering, se_variance,
                      options.get("weights"))
-    # only leaving out an observation reads the row-level fit's sorted rows;
-    # leaving out a match reads its residual file and refits on the matches
-    fit = feols_stream(fml, data, workdir=workdir,
-                       keep_intermediates=(leave_out == "observation"),
-                       verbose=verbose, logger=logger, **options)
-    if not isinstance(fit, HDFEResult):
-        raise ValueError(
-            "this formula expands to several models; leave-out estimation needs "
-            "a single one, so fit them separately")
+    if profile:
+        return _profile_kss(fml, data, workdir, block=block, se=se, leave_out=leave_out,
+                            verbose=verbose, logger=logger, **options)
+    with thread_scope(options.get("n_threads")):
+        # only leaving out an observation reads the row-level fit's sorted rows;
+        # leaving out a match reads its residual file and refits on the matches
+        fit = feols_stream(fml, data, workdir=workdir,
+                           keep_intermediates=(leave_out == "observation"),
+                           verbose=verbose, logger=logger, **options)
+        if not isinstance(fit, HDFEResult):
+            raise ValueError(
+                "this formula expands to several models; leave-out estimation needs "
+                "a single one, so fit them separately")
 
-    components = fit.leave_out_kss(n_draws=n_draws, seed=seed, block=block,
-                                   psi=psi, leave_out=leave_out,
-                                   stayers=stayers, se=se,
-                                   se_draws=se_draws, se_trace=se_trace,
-                                   diagnose=diagnose,
-                                   diagnose_draws=diagnose_draws,
-                                   weak_interval=weak_interval,
-                                   confidence=confidence, centering=centering,
-                                   se_variance=se_variance)
-    pruning = fit.diagnostics.get("connected", {}).get("leave_one_out")
-    if pruning is not None:
-        before, after = pruning["levels_before"], pruning["levels_after"]
-        dropped = 1.0 - after[psi] / max(before[psi], 1)
-        if dropped > 0.2:
-            warn(f"leave-one-out pruning removed {dropped:.0%} of {psi}; "
-                 "the components below describe the surviving set, which is "
-                 "the sample the leave-out parameters are identified on, not "
-                 "the panel you supplied", logger)
-        pruning = {"fe": [alpha, psi], **pruning}
-    components.pruning = pruning
-    components.fit = fit
-    return components
+        components = fit.leave_out_kss(n_draws=n_draws, seed=seed, block=block,
+                                       psi=psi, leave_out=leave_out,
+                                       stayers=stayers, se=se,
+                                       se_draws=se_draws, se_trace=se_trace,
+                                       diagnose=diagnose,
+                                       diagnose_draws=diagnose_draws,
+                                       weak_interval=weak_interval,
+                                       confidence=confidence, centering=centering,
+                                       se_variance=se_variance)
+        pruning = fit.diagnostics.get("connected", {}).get("leave_one_out")
+        if pruning is not None:
+            before, after = pruning["levels_before"], pruning["levels_after"]
+            dropped = 1.0 - after[psi] / max(before[psi], 1)
+            if dropped > 0.2:
+                warn(f"leave-one-out pruning removed {dropped:.0%} of {psi}; "
+                     "the components below describe the surviving set, which is "
+                     "the sample the leave-out parameters are identified on, not "
+                     "the panel you supplied", logger)
+            pruning = {"fe": [alpha, psi], **pruning}
+        components.pruning = pruning
+        components.fit = fit
+        return components

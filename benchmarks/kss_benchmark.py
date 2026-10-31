@@ -37,6 +37,7 @@ from pathlib import Path
 
 from _harness import (DATA_DIR, RESULTS_DIR, data_path, is_done, measure,
                       panel_shape, run_child, upsert_csv, write_machine_info)
+from _settings import LOW_MEMORY
 
 SCRIPT = Path(__file__).resolve()
 FML = "log_earn ~ age_squared + age_cubed | worker_id + firm_id"
@@ -54,7 +55,6 @@ CONFIGS = {
     "hdfe_stream (low memory)": ("hdfe", "point+lowmem"),
 }
 
-LOW_MEMORY = {"rows_per_bucket": 250_000, "batch_rows": 200_000}
 TIMEOUT_S = 3 * 3600
 
 # xhdfe's standard errors are not run on panels larger than this. At 5,000,000

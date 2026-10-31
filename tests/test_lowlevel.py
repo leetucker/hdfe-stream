@@ -158,8 +158,8 @@ def test_explicit_solver_refuses_to_exceed_its_memory_budget(akm, workdir):
     """With `solver="explicit"` and a budget too small for the reduced matrix,
     the fit must fail with an actionable message rather than allocating."""
     est = StreamingHDFE("log_earn", ["age_squared"], FE, workdir=workdir,
-                        solver="explicit", max_s_gb=1e-7, verbose=False)
-    with pytest.raises(MemoryError, match="max_s_gb"):
+                        solver="explicit", max_memory_gb=0.01, verbose=False)
+    with pytest.raises(MemoryError, match="max_memory_gb"):
         est.fit(akm.src)
 
 
@@ -167,7 +167,7 @@ def test_auto_solver_falls_back_when_the_matrix_is_too_large(akm, workdir):
     """The same budget under `solver="auto"` must fall back to the streaming
     solver instead of failing."""
     est = StreamingHDFE("log_earn", ["age_squared"], FE, workdir=workdir,
-                        solver="auto", max_s_gb=1e-7, verbose=False)
+                        solver="auto", max_memory_gb=0.01, verbose=False)
     res = est.fit(akm.src)
     assert res.solver_info["solver"] == "stream_cg"
     assert "fallback" in res.solver_info

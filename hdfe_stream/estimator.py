@@ -114,7 +114,7 @@ class StreamingHDFE(_StreamingBase, _InverseMixin, _LeaveOutMixin, _TraceMixin,
     Other Parameters
     ----------------
     solver : {"auto", "explicit", "stream_cg", "within"}, default "auto"
-        ``"auto"``: ``"explicit"`` unless S would exceed `max_s_gb`, then
+        ``"auto"``: ``"explicit"`` unless S would not fit in memory, then
         ``"stream_cg"``. ``"explicit"``: build S = D_o' M_0 D_o once as a
         sparse matrix and iterate in memory; its memory is about nnz(S), which
         grows with distinct level co-occurrences (firm-year pairs, firm pairs
@@ -130,7 +130,7 @@ class StreamingHDFE(_StreamingBase, _InverseMixin, _LeaveOutMixin, _TraceMixin,
         (``pip install cupy-cuda13x``, or the build for your CUDA version):
         S is built on the CPU, copied to the GPU once, and the
         conjugate-gradient iterations run there. Needs ``solver="auto"`` or
-        ``"explicit"`` and ``precond="jacobi"``; if S exceeds `max_s_gb`,
+        ``"explicit"`` and ``precond="jacobi"``; if S does not fit,
         ``"auto"`` falls back to ``"stream_cg"`` on the CPU, as without a
         GPU. Only the solve moves: the passes over the rows, and everything
         after the fit, stay on the CPU. The estimates agree with the CPU's to
@@ -153,13 +153,25 @@ class StreamingHDFE(_StreamingBase, _InverseMixin, _LeaveOutMixin, _TraceMixin,
         relative to its right-hand side.
     maxiter : int, default 5000
         The most conjugate-gradient iterations; a solve that reaches it warns.
-    max_s_gb : float, optional
-        Memory budget, in GB, for the reduced system: the cap on the explicit
-        matrix S, above which ``solver="auto"`` uses ``"stream_cg"``, and on
-        the per-thread accumulators that ``"stream_cg"`` and the leave-out
-        passes use, which together take at most half of it (with fewer
-        threads on those passes when it binds). Default: 25% of physical
-        memory.
+    max_memory_gb : float, optional
+        The memory this fit may use, in GB. Default: the job's allocation (a
+        cgroup limit, ``STREAM_LIMITS_MEMORY_GB``) or else the machine's. The
+        choices that trade speed for memory are made against what is left of
+        it (the limit, less `memory_reserve`, less what the process holds
+        now): the explicit matrix S is built if it fits, and otherwise
+        ``"stream_cg"`` streams it; per-thread accumulators drop to fewer
+        copies (fewer threads on those passes) when they would not fit; the
+        sort buckets of pass 0 shrink in a small allocation; and an
+        estimate that cannot be made smaller (CRV3, the wild-bootstrap sums)
+        raises ``MemoryError`` up front with the numbers, not at the
+        operating system's kill. Polars' own buffers follow its out-of-core
+        budget instead, which is fixed at import (see `stream_limits`).
+    memory_reserve : float, optional
+        The share of the memory limit held back from those choices for what
+        they do not model (allocator slack, transient copies, pages a cgroup
+        charges for files), 0 to 1. Default 0.15
+        (``STREAM_LIMITS_MEMORY_RESERVE``): lower it to let the fast paths
+        run closer to the limit, raise it for a job that must not be killed.
     rhs_block : int, default 8
         Variables solved at a time; bounds solver memory at about
         6 x (total non-streamed levels) x rhs_block doubles.
@@ -211,7 +223,11 @@ class StreamingHDFE(_StreamingBase, _InverseMixin, _LeaveOutMixin, _TraceMixin,
         Load the identifying cells into memory instead of memory-mapping
         them.
     n_threads : int, optional
-        Numba threads. Default: all available.
+        Numba and BLAS threads for this fit, restored afterwards. Default:
+        all available (or the scheduler's allocation; see `stream_limits`).
+        Polars' threads are fixed for the process and are not affected: cap
+        them with ``STREAM_LIMITS_MAX_THREADS`` or `stream_limits.limit_threads`
+        before polars is imported.
     scratch_mb : int, default 32
         Budget, in MB, for the row-blocked scratch the leave-out passes hold.
         Those passes want about a dozen float64 columns per row of the chunk,

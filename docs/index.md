@@ -265,6 +265,7 @@ since the packages differ by CUDA version. See
 
 examples/index
 kss/index
+resources
 benchmarks/index
 reference/index
 changelog

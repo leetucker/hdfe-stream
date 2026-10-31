@@ -5,7 +5,6 @@ Parquet iteration in whole fe[0] groups, and segment/scatter primitives.
 from __future__ import annotations
 
 import contextlib
-import os
 import re
 from pathlib import Path
 from typing import Iterator, Sequence
@@ -17,13 +16,6 @@ import pyarrow.parquet as pq
 
 from ._columns import GCODE
 from .typing import PathLike, Source
-
-
-def _phys_mem_gb():
-    try:
-        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
-    except (ValueError, OSError, AttributeError):
-        return 16.0
 
 
 def _safe(name):

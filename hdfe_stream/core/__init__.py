@@ -12,6 +12,11 @@ Stable names
     core.feterms       parse_fe
     core.report        warn
     core.utils         as_lazy, single_blas
+    core.profile       Profile, Component, Request, ScanStats, scan_source,
+                       combine_profiles, source_row_group_rows
+    core.resources     detect_cpus, detect_memory_gb, limit_threads, limit_memory,
+                       thread_scope, peak_rss_gb, reset_peak_rss, current_rss_gb,
+                       describe, MemoryBudget
     core.workspace     Run, cleanup
     core.gpu           check_polars_gpu, cuda_backend
     core.store         BlockStore, Block, PolarsEngine, block_rows,
@@ -42,6 +47,10 @@ Infrastructure
     typing.py          type aliases of the public signatures
     report.py          logging / printing
     utils.py           small shared helpers; Parquet iteration in whole groups
+    profile.py         `Profile`: estimated memory/disk, the scan, the request
+    profile_streaming.py  the memory model of the shared passes (`_ProfileMixin`)
+    resources.py       CPUs and memory a job may use, thread limits, peak memory
+                       (re-exports the `stream-limits` package)
     store.py           a block store of rows, for estimators that read every
                        row in each iteration (dense Newton)
     workspace.py       run directories, `cleanup()`

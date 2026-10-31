@@ -257,6 +257,10 @@ regressions on the GPU](https://leetucker.github.io/hdfe-stream/benchmarks/gpu.h
   Kline–Saggio–Sølvsten bias correction for the AKM decomposition, its standard
   errors and weak-identification diagnostic, and every way it differs from the
   reference implementations.
+- [**Resource limits and profiling**](https://leetucker.github.io/hdfe-stream/resources.html): `profile=True`
+  estimates a fit's memory and disk before you run it; the packages cap their
+  threads and Polars' memory at a PBS/Slurm/cgroup allocation (the standalone
+  [`stream-limits`](https://leetucker.github.io/stream-limits/) package), and their memory guards follow what is left of it.
 - [**Benchmarks**](https://leetucker.github.io/hdfe-stream/benchmarks/index.html): time, memory and disk against
   pyfixest, xhdfe, fixest and FixedEffectModels.jl.
 - [**Function reference**](https://leetucker.github.io/hdfe-stream/reference/index.html): every option.

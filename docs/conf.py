@@ -54,6 +54,7 @@ intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "polars": ("https://docs.pola.rs/api/python/stable", None),
     "numpy": ("https://numpy.org/doc/stable", None),
+    "stream_limits": ("https://leetucker.github.io/stream-limits", None),
 }
 
 html_theme = "furo"

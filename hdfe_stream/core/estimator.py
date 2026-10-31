@@ -25,11 +25,13 @@ from .connected import _min_degree, _parse_pair
 from .feterms import _parse_fe_term
 from .inference import _InferenceMixin
 from .passes import _PassesMixin
+from .profile_streaming import _ProfileMixin
 from .report import _log
+from .resources import MemoryBudget, peak_rss_gb, reset_peak_rss, thread_scope
 from .results import HDFEMulti, HDFEResult
 from .results_base import _canon_cluster, vcov_key
 from .solve import _SolveMixin
-from .utils import _norm_vars, _phys_mem_gb, _safe
+from .utils import _norm_vars, _safe
 from .workspace import _ACTIVE_RUNS, _MARKER, Run, _base_dir, _dir_bytes, _remove_path
 
 # The pipeline stages are mixed in from passes.py, solve.py and inference.py;
@@ -55,7 +57,7 @@ def _polars_panic_message(exc):
             "Polars version and the formula.")
 
 
-class _StreamingBase(_PassesMixin, _SolveMixin, _InferenceMixin):
+class _StreamingBase(_ProfileMixin, _PassesMixin, _SolveMixin, _InferenceMixin):
     """The driver that `StreamingHDFE` documents: everything but the
     leave-out estimators, which it adds as mixins."""
 
@@ -70,7 +72,7 @@ class _StreamingBase(_PassesMixin, _SolveMixin, _InferenceMixin):
                  tol: float = 1e-10, maxiter: int = 5000, batch_rows: int | None = None,
                  row_group_size: int = 500_000, n_buckets: int | None = None,
                  rows_per_bucket: int | None = None, cells_in_memory: bool = False,
-                 rhs_block: int = 8, assembly: str = "auto", max_s_gb: float | None = None,
+                 rhs_block: int = 8, assembly: str = "auto",
                  collin_tol: float = 1e-10, collin_tol_rel: float = 1e-6,
                  n_threads: int | None = None, scratch_mb: int = 32,
                  fixef_rm: str = "singleton", connected: str | None = None,
@@ -82,7 +84,8 @@ class _StreamingBase(_PassesMixin, _SolveMixin, _InferenceMixin):
                  log_level: int = logging.INFO, outputs: str = "auto",
                  save_resid: bool = True, keep_intermediates: bool = False,
                  collapse_cells: bool | str = "auto", device: str = "cpu",
-                 polars_engine: str = "cpu") -> None:
+                 polars_engine: str = "cpu", max_memory_gb: float | None = None,
+                 memory_reserve: float | None = None) -> None:
         ys, xs = _norm_vars(y), _norm_vars(x if x is not None else [])
         self.var_names = list(ys) + [k for k in xs if k not in ys]
         self.var_exprs = {**xs, **ys}
@@ -219,7 +222,9 @@ class _StreamingBase(_PassesMixin, _SolveMixin, _InferenceMixin):
         self.n_buckets, self.rows_per_bucket = n_buckets, rows_per_bucket
         self.cells_in_memory = cells_in_memory
         self.rhs_block = max(1, int(rhs_block))
-        self.max_s_gb = max_s_gb if max_s_gb is not None else 0.25 * _phys_mem_gb()
+        # what may still be allocated, for the guards that choose between a fast path
+        # and a slower one (see _s_limit_gb)
+        self.budget = MemoryBudget(max_memory_gb, memory_reserve)
         self.collin_tol, self.collin_tol_rel = collin_tol, collin_tol_rel
         if weights_type not in ("aweights", "fweights"):
             raise ValueError("weights_type must be 'aweights' or 'fweights'")
@@ -227,8 +232,7 @@ class _StreamingBase(_PassesMixin, _SolveMixin, _InferenceMixin):
                         (pl.col(weights) if isinstance(weights, str) else weights).cast(pl.Float64))
         self.weights_name = weights if isinstance(weights, str) else ("<expr>" if weights is not None else None)
         self.weights_type = weights_type
-        if n_threads:
-            nb.set_num_threads(n_threads)
+        self.n_threads = n_threads      # held for the length of fit(), then restored
         self.verbose = verbose
         self.logger, self.log_level = logger, log_level
 
@@ -302,17 +306,23 @@ class _StreamingBase(_PassesMixin, _SolveMixin, _InferenceMixin):
             Path(out).unlink(missing_ok=True)
             return False
 
+    def _s_limit_gb(self, upcoming_gb=0.0):
+        """The most memory, in GB, the explicit S may take (and, at half of it,
+        the per-thread accumulators): the memory headroom now, less
+        `upcoming_gb` still to be allocated in the phase."""
+        return self.budget.headroom_gb(upcoming_gb)
+
     def _acc_copies(self, levels, width):
         """How many per-thread copies of a levels x width float64 accumulator
         a parallel pass gets: one per thread, as long as all of them together
-        stay within half of `max_s_gb`, and at least one.
+        stay within half of `_s_limit_gb()`, and at least one.
 
         The kernels split their groups among the copies, so fewer copies
         means fewer threads on that pass rather than more memory. Half the
         budget, because the leave-out passes can hold two such sets at once
         (their own, and the solver's)."""
         per_copy = max(int(levels) * max(int(width), 1) * 8, 1)
-        fit = int(0.5 * self.max_s_gb * 1e9 // per_copy)
+        fit = int(0.5 * self._s_limit_gb() * 1e9 // per_copy)
         return max(1, min(nb.get_num_threads(), fit))
 
     def _debug(self, msg):
@@ -490,23 +500,12 @@ class _StreamingBase(_PassesMixin, _SolveMixin, _InferenceMixin):
             One result, or several when there are several models.
         """
         t0 = time.time()
-        default = vcov_key(vcov)
-        keys = list(dict.fromkeys(["iid", "hetero", default]))
-        extra = [_canon_cluster(c) for c in ([cluster] if isinstance(cluster, str) else cluster)]
-        self.boot_req = None
-        if bootcluster is not None:
-            self.boot_req = _canon_cluster(bootcluster)
-            if "+" in self.boot_req:
-                raise ValueError(f"bootcluster={bootcluster!r}: the wild cluster bootstrap "
-                                 "is one-way; give one column or an 'a^b' combination")
-            extra = list(dict.fromkeys(extra + [self.boot_req]))
-        self.cluster_cols = list(dict.fromkeys(
-            c for req in [k.split(":", 1)[1] for k in keys if k.startswith(("CRV1:", "CRV3:"))]
-            + extra
-            for part in req.split("+") for c in part.split("^")))
+        default, keys, extra = self._requests(vcov, cluster, bootcluster)
         self._init_run()
+        reset_peak_rss()
         try:
-            results = self._fit_passes(source, keys, extra, default, fe_dof, t0)
+            with thread_scope(self.n_threads):
+                results = self._fit_passes(source, keys, extra, default, fe_dof, t0)
         except BaseException as exc:
             # nothing from a failed fit is kept (unless debugging). The
             # traceback's frames still hold memory maps of the intermediates,
@@ -521,11 +520,14 @@ class _StreamingBase(_PassesMixin, _SolveMixin, _InferenceMixin):
             raise
         self._release_intermediates()
         _ACTIVE_RUNS.discard(str(self.workdir))
+        rss = peak_rss_gb()
+        rss = None if rss is None else round(rss, 3)
         peak = self.disk_peak / 1e9
         kept = _dir_bytes(self.workdir) / 1e9
         for r in results:
             r.diagnostics["disk_peak_gb"] = round(peak, 3)
             r.diagnostics["disk_results_gb"] = round(kept, 3)
+            r.diagnostics["peak_rss_gb"] = rss
             if self.polars_engine == "gpu":
                 r.diagnostics["polars_gpu_fallbacks"] = list(self.polars_gpu_fallbacks)
         self._log(f"done in {time.time()-t0:.1f}s; peak disk use {peak:.2f} GB, result files "

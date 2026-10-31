@@ -13,6 +13,7 @@ from .estimator import StreamingHDFE
 from .glm import StreamingGLM
 from .core.report import _log
 from .core.formula import _plan_formula, pyfixest_formula_api
+from .core.profile import Profile, combine_profiles
 from .core.results import HDFEMulti, HDFEResult
 from .core.results_base import vcov_key
 from .core.utils import as_lazy
@@ -21,7 +22,7 @@ from .core.utils import as_lazy
 def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,
                  vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
                  fe_dof: str = "exact", bootcluster: str | None = None,
-                 **options: Any) -> HDFEResult | HDFEMulti:
+                 profile: bool = False, **options: Any) -> HDFEResult | HDFEMulti | Profile:
     """Out-of-core OLS with high-dimensional fixed effects, from a
     pyfixest-style formula.
 
@@ -103,10 +104,11 @@ def feols_stream(fml: str, data: Source, workdir: PathLike | None = None,
         yield StreamingHDFE(y=list(g["y"].items()), x=list(g["x"].items()), fe=list(fe),
                             workdir=workdir, models=g["models"], **options)
     return _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options,
-                        bootcluster)
+                        bootcluster, profile=profile)
 
 
-def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options, bootcluster=None):
+def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options, bootcluster=None,
+                 profile=False):
     """Plan the formula, fit each estimator that `estimators(fe, group)`
     makes for each set of fixed effects, and return the results in the
     formula's order."""
@@ -114,6 +116,10 @@ def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options, bootclus
     _log(options.get("verbose", True), f"planning {fml!r} (formula expansion, level discovery)",
          options.get("logger"), options.get("log_level"))
     groups = _plan_formula(fml, lf)
+    if profile:
+        profiles = [est._profile(lf, data, vcov, cluster, fe_dof, bootcluster)
+                    for fe, g in groups.items() for est in estimators(fe, g)]
+        return combine_profiles(profiles)
     results = []
     try:
         for fe, g in groups.items():
@@ -137,7 +143,8 @@ def fepois_stream(fml: str, data: Source, workdir: PathLike | None = None,
                   vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
                   fe_dof: str = "exact", offset: str | pl.Expr | None = None,
                   iwls_tol: float = 1e-8, iwls_maxiter: int = 25,
-                  separation_check: bool = True, **options: Any) -> HDFEResult | HDFEMulti:
+                  separation_check: bool = True, profile: bool = False,
+                  **options: Any) -> HDFEResult | HDFEMulti | Profile:
     """Out-of-core Poisson regression (log link) with high-dimensional fixed
     effects, from a pyfixest-style formula.
 
@@ -183,13 +190,14 @@ def fepois_stream(fml: str, data: Source, workdir: PathLike | None = None,
     """
     return _fit_glm(fml, data, "poisson", workdir, vcov, cluster, fe_dof,
                     dict(options, offset=offset, iwls_tol=iwls_tol, iwls_maxiter=iwls_maxiter,
-                         separation_check=separation_check))
+                         separation_check=separation_check), profile=profile)
 
 
 def feglm_stream(fml: str, data: Source, family: str, workdir: PathLike | None = None,
                  vcov: Vcov = "iid", cluster: Sequence[str] | str = (),
                  fe_dof: str = "exact", iwls_tol: float = 1e-8, iwls_maxiter: int = 25,
-                 separation_check: bool = True, **options: Any) -> HDFEResult | HDFEMulti:
+                 separation_check: bool = True, profile: bool = False,
+                 **options: Any) -> HDFEResult | HDFEMulti | Profile:
     """Out-of-core logit or probit regression with high-dimensional fixed
     effects, from a pyfixest-style formula.
 
@@ -236,10 +244,10 @@ def feglm_stream(fml: str, data: Source, family: str, workdir: PathLike | None =
                             if str(family).lower() == "gaussian" else ""))
     return _fit_glm(fml, data, str(family).lower(), workdir, vcov, cluster, fe_dof,
                     dict(options, iwls_tol=iwls_tol, iwls_maxiter=iwls_maxiter,
-                         separation_check=separation_check))
+                         separation_check=separation_check), profile=profile)
 
 
-def _fit_glm(fml, data, family, workdir, vcov, cluster, fe_dof, options):
+def _fit_glm(fml, data, family, workdir, vcov, cluster, fe_dof, options, profile=False):
     key = vcov_key(vcov)
     if key is not None and key.startswith("CRV3:"):
         raise ValueError("CRV3 standard errors are not available for GLMs; use CRV1")
@@ -255,4 +263,4 @@ def _fit_glm(fml, data, family, workdir, vcov, cluster, fe_dof, options):
             yield StreamingGLM(y=[(yname, g["y"][yname])], x=[(x, g["x"][x]) for x in xs],
                                fe=list(fe), family=family, workdir=workdir, models=models,
                                **options)
-    return _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options)
+    return _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options, profile=profile)

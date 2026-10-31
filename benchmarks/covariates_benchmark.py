@@ -55,6 +55,7 @@ from pathlib import Path
 from _harness import (DATA_DIR, EXTERNAL, RESULTS_DIR, data_path, external_command,
                       external_missing, is_done, measure, run_child, upsert_csv,
                       write_machine_info)
+from _settings import SIZED_BATCH_BYTES, SIZED_BUCKET_BYTES
 
 SCRIPT = Path(__file__).resolve()
 N_WORKERS = 1_000_000
@@ -72,12 +73,7 @@ CONFIGS = {
     "FixedEffectModels.jl": ("fem", "default"),
 }
 
-# "sized to the design": rows held at once scale down with the width of the
-# design, so that a bucket (sorted in memory) and a batch or row group (read in
-# memory) stay near these many bytes of design however wide it is. Never above
-# the defaults, so a narrow design runs exactly as the default configuration.
-SIZED_BUCKET_BYTES = 1e9
-SIZED_BATCH_BYTES = 250e6
+# "sized to the design": see _settings.py
 
 
 def sized_options(k):

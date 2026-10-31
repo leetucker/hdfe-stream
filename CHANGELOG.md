@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.8.0
+
+- **Fit resources (CPUs and memory) are constrained to your job's limits automatically.** On a
+  cluster (PBS, Slurm, or a container with cgroup limits), importing `hdfe_stream` caps the threads of
+  Polars, numba, BLAS and pyarrow at the job's CPU allocation, and with Polars 2.x gives Polars a
+  memory budget so its streaming operations spill to disk instead of growing. Caveats: the Polars
+  budget is a target for its buffers, not a hard cap on the process, and Polars 1.x has no such
+  option, so there only the threads are capped. The caps must be in place before Polars is
+  imported: import `hdfe_stream` first, or call `stream_limits.set_limits()` at the top of the script.
+  With no limit found nothing changes. See "Resource limits and profiling" in the documentation.
+- **`profile=True`: estimate a fit's memory and disk before running it.**
+  `feols_stream`, `fepois_stream`, `feglm_stream` and `leave_out_kss` take
+  `profile=True` and return a `hdfe_stream.Profile` instead of a result: one
+  streaming scan of the data, the model's arrays sized from what it finds, an
+  expected size and an upper bound for each, the peak by phase, and
+  `recommend()` / `recommend().pbs` as a resource request. Nothing is fitted
+  and no run directory is made. The shared code (`Profile`, `Component`,
+  `scan_source`) is in `hdfe_stream.core.profile` for logit-stream and
+  dpd-stream, which take the same option. See "Resource limits and profiling"
+  in the documentation.
+- **Depends on the new [`stream-limits`](https://leetucker.github.io/stream-limits/) package**
+  (standard library only), which does the limiting for all three packages and works on its own;
+  its documentation covers the thread, memory and scheduler details.
+- **`max_memory_gb` and `memory_reserve`: choices follow the memory left.**
+  `max_s_gb`'s default (25% of physical memory) and the CRV3, `bootcluster` and
+  IV-diagnostics guards (25%) used the node's memory and a fixed share of it,
+  which a correctly sized PBS job always hit. They now ask whether their exact
+  allocation fits in the headroom: the limit (the job's allocation, or
+  `max_memory_gb`), less a reserve (`memory_reserve`, default 0.15), less what the
+  process holds. S is built if it fits, otherwise `stream_cg` streams it;
+  per-thread accumulators drop to fewer copies; pass 0's sort buckets shrink in
+  a small allocation; what cannot shrink raises `MemoryError` up front with the
+  numbers.
+- **Removed: `max_s_gb`.** It capped the explicit S and the per-thread accumulators
+  separately from the rest of the memory. The headroom rule above subsumes it:
+  lower `max_memory_gb` to tighten the whole fit, or give `solver="stream_cg"` to
+  skip the explicit S. Passing `max_s_gb` is now a `TypeError`.
+- **`n_threads=` is scoped to the fit.** It used to call
+  `numba.set_num_threads` in the constructor and never restore it; it now holds
+  numba and BLAS to that many threads for the length of `fit()` (and of
+  `leave_out_kss`) and restores them.
+- **`diagnostics["peak_rss_gb"]`**: the peak resident memory of each fit, from
+  the kernel's high-water mark (no polling).
+- New `hdfe_stream.core.resources` and `hdfe_stream.core.profile` (stable names).
+
 ## 0.7.0
 
 - **`device="cuda"` runs GLMs without fixed effects on the GPU.** Poisson,

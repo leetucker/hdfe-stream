@@ -26,7 +26,7 @@ from .kernels_base import (
 from .kernels_slopes import _nb_pass2_sl, _nb_residualize_rows_sl
 from .report import warn
 from .results import HDFEResult
-from .utils import _phys_mem_gb, _safe, _scatter, _tbl_to_np, iter_group_chunks
+from .utils import _safe, _scatter, _tbl_to_np, iter_group_chunks
 
 
 def _readonly(a):
@@ -478,11 +478,12 @@ class _InferenceMixin:
                 crv3[t] = {"acc": np.zeros((nt, k, k))}
             else:
                 need = spec["G"] * k * (k + 1) * 8 / 1e9
-                if need > 0.25 * _phys_mem_gb():
+                if not self.budget.fits(need):
                     raise MemoryError(
                         f"CRV3 by {req!r} needs {need:.1f} GB for per-cluster sums "
-                        f"({spec['G']:,} clusters x {k} covariates squared); use CRV1, "
-                        "or fewer covariates")
+                        f"({spec['G']:,} clusters x {k} covariates squared) and "
+                        f"{self.budget.headroom_gb():.1f} GB is free ({self.budget}); use CRV1, "
+                        "fewer covariates, or raise max_memory_gb")
                 crv3[t] = {"AG": np.zeros((spec["G"], k, k)), "sG": np.zeros((spec["G"], k))}
         bread_c = np.ascontiguousarray(bread, dtype=np.float64)
         # bootcluster=: per-cluster sum w h h' and w e h, and the rows per
@@ -496,10 +497,12 @@ class _InferenceMixin:
                 boot = {"term": t, "AG": crv3[t]["AG"], "sG": crv3[t]["sG"], "shared": True}
             else:
                 need = spec["G"] * k * (k + 1) * 8 / 1e9
-                if need > 0.25 * _phys_mem_gb():
+                if not self.budget.fits(need):
                     raise MemoryError(
                         f"bootcluster={self.boot_req!r} needs {need:.1f} GB for per-cluster "
-                        f"sums ({spec['G']:,} clusters x {k} covariates squared)")
+                        f"sums ({spec['G']:,} clusters x {k} covariates squared) and "
+                        f"{self.budget.headroom_gb():.1f} GB is free ({self.budget}); "
+                        "raise max_memory_gb")
                 boot = {"term": t, "AG": np.zeros((spec["G"], k, k)),
                         "sG": np.zeros((spec["G"], k)), "shared": False}
             boot["n"] = np.zeros(spec["G"], np.int64)
@@ -703,9 +706,10 @@ class _InferenceMixin:
             spec = self.clusters[t]
             if spec["kind"] in ("fe", "extra"):
                 need = spec["G"] * m * 8 / 1e9
-                if need > 0.25 * _phys_mem_gb():
+                if not self.budget.fits(need):
                     warn(f"{fml}: the IV diagnostics by {t!r} need {need:.1f} GB of cluster "
-                         "sums; not computed", self.logger)
+                         f"sums and {self.budget.headroom_gb():.1f} GB is free; not computed "
+                         "(raise max_memory_gb)", self.logger)
                     return None
                 scores[t] = np.zeros((spec["G"], m))
         return {"ycols": ycols, "dcols": dcols, "x2": x2, "z1": z1, "Gz": Gz, "Gy": Gy,
