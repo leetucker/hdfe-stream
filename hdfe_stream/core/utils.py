@@ -42,9 +42,10 @@ def iter_group_tables(paths: PathLike | Sequence[PathLike], columns: Sequence[st
     if isinstance(paths, (str, Path)):
         paths = [paths]
     carry = None
+    # pre_buffer=False: see `core.store.iter_batches`
     for batch in (b for p in paths
-                  for b in pq.ParquetFile(p).iter_batches(batch_size=batch_rows,
-                                                          columns=columns)):
+                  for b in pq.ParquetFile(p, pre_buffer=False).iter_batches(
+                      batch_size=batch_rows, columns=columns)):
         tbl = pa.Table.from_batches([batch])
         if carry is not None:
             tbl = pa.concat_tables([carry, tbl])

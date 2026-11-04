@@ -286,8 +286,14 @@ def write_sample(engine: PolarsEngine, source: pl.LazyFrame, keep: pl.Expr,
 
 
 def iter_batches(path, rows: int) -> Iterator[pl.DataFrame]:
-    """A Parquet file's rows, `rows` at a time, as DataFrames."""
-    pf = pq.ParquetFile(path)
+    """A Parquet file's rows, `rows` at a time, as DataFrames.
+
+    Read without pyarrow's pre-buffering: with it (the default),
+    `iter_batches` buffers the selected columns of the whole file as it
+    goes, so the peak grows with the file (pyarrow 25: 4.7 GB extra reading
+    a 4.4 GB, 20-million-row file, against 0.3 GB without), and on a local
+    disk it is slower too."""
+    pf = pq.ParquetFile(path, pre_buffer=False)
     try:
         for batch in pf.iter_batches(batch_size=rows):
             yield pl.from_arrow(batch)

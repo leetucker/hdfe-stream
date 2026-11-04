@@ -144,8 +144,9 @@ class _InferenceMixin:
         """
         if self.no_fe:
             pieces = 8 * nb.get_num_threads()
+            # pre_buffer=False: see `core.store.iter_batches`
             for batch in (b for path in self.paths["rows"]
-                          for b in pq.ParquetFile(path).iter_batches(
+                          for b in pq.ParquetFile(path, pre_buffer=False).iter_batches(
                               batch_size=self.batch_rows, columns=cols or None)):
                 ch = _tbl_to_np(pa.Table.from_batches([batch]))
                 n = batch.num_rows

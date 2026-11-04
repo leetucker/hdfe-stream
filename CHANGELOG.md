@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- **New in `hdfe_stream.core`: treatment-effect building blocks** shared by match-stream and
+  diff-stream (moved from match-stream's staging area, unchanged in behavior):
+  `core.influence` (influence-function variances from per-cluster sums, one-way and multi-way;
+  the weights-fixed weighted mean difference; the joint variance of estimators on different
+  tables), `core.mestimation` (a fitted binary logit/probit first stage and the correction of
+  an influence function for it) and `core.ipw` (inverse-probability weights and the Hajek IPW
+  difference in means with the estimated-score correction), and `core.balance` (a weighted
+  two-group balance table: means, standardized mean differences, variance ratios and eCDF gaps,
+  with MatchIt's conventions). Their names are stable (listed in `hdfe_stream.core`).
+- **`core.influence.ClusterScoreAccumulator`**: `if_vcov`'s one-way clustered variance from
+  batches of whole clusters (as `iter_groups` yields them, or rows that are already cluster
+  sums), in p x p memory whatever the number of clusters: with 2 million clusters and 20
+  estimators, 0.8 GB against `if_vcov`'s 4.5 GB, no slower. Several score blocks per batch
+  give their cross-covariances too.
+- **Lower peak memory reading Parquet files in batches.** `core.store.iter_batches` (and so
+  `iter_groups`) and the row passes read without pyarrow's pre-buffering, which buffers the whole
+  file's selected columns as `iter_batches` goes: 4.7 GB extra reading a 4.4 GB file, against
+  0.3 GB. Fits change little (their row files are read in smaller pieces); results are unchanged.
+
 ## 0.8.0
 
 - **Fit resources (CPUs and memory) are constrained to your job's limits automatically.** On a

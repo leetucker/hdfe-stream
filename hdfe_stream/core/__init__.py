@@ -28,6 +28,13 @@ Stable names
     core.ivtests       kp_rk, identification, iid_omegas, weak_f, hansen_j,
                        sargan, partial_r2, effective_f, anderson_rubin,
                        c_statistic
+    core.influence     IFVariance, cluster_dims, if_vcov, ClusterScoreAccumulator,
+                       WeightedMeanDifference, weighted_mean_difference,
+                       group_mean_phis, joint_if_vcov
+    core.mestimation   BinaryFirstStage, corrected_contributions
+    core.ipw           ipw_weight, ipw_weights, trim_bounds, IPWEstimate,
+                       ipw_mean_difference
+    core.balance       weighted_balance, effective_sizes, GroupSizes, EPS_DIFF
 
     The hooks a `RegressionResult` subclass implements (its docstring) are
     stable too.
@@ -80,4 +87,12 @@ Results and export
     wildboot.py        the wild cluster bootstrap
     multcomp.py        multiple-testing corrections
     ivtests.py         IV identification and overidentification tests from sums
+Treatment effects (first written for match-stream and diff-stream)
+    influence.py       influence-function variances from per-cluster sums,
+                       one-way and multi-way; weighted mean differences
+    mestimation.py     a fitted binary logit/probit first stage and the
+                       correction of an influence function for it
+    ipw.py             inverse-probability weights and the Hajek IPW
+                       difference in means
+    balance.py         a weighted two-group balance table (MatchIt's conventions)
 """
