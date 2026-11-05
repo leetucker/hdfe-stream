@@ -137,7 +137,20 @@ again. The defaults are tuned for a machine with room to spare; if memory is
 the binding constraint, set `rows_per_bucket` to something near what you can
 afford and leave the rest alone (with many covariates, scale `batch_rows` and
 `row_group_size` down too; see [many covariates](covariates.md)). `rhs_block`
-bounds the other big array (levels × variables), and `max_memory_gb` (by default the job's allocation) decides whether the
+bounds the other big array (levels × variables).
+
+**There is a floor, and it is specific to the regression design.** Turning these
+settings down only reduces the memory that is proportional to the batches and
+buckets. What is left grows with the number of workers (fixed-effect levels and
+clusters), and no setting shrinks it. In this benchmark's design (worker, firm
+and year effects, clustered by worker) that floor is about 0.8 GB of fixed
+overhead plus roughly 0.5 KB per worker: about 1.4 GB at a million workers and
+3.2 GB at five million. That is why the low-memory curve flattens at the largest
+sizes. A different design (fewer levels, no clustering by a high-cardinality
+variable) has a different floor, so these figures describe this benchmark, not a
+general limit.
+
+`max_memory_gb` (by default the job's allocation) decides whether the
 explicit reduced matrix is built, falling back to `stream_cg` by itself when it
 does not fit. [Out of core](../examples/out_of_core.md#memory-budgets) describes
 each option.
