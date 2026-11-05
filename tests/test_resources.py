@@ -18,9 +18,10 @@ The limit is on private memory, which stream-limits measures on Linux and
 Windows. On macOS it measures resident memory, which counts the mapped
 scratch files (0.6 GB more here), so there the limit is a looser safety net.
 On Windows, private memory is committed memory: a buffer or an allocator
-segment counts in full once allocated, touched or not. There the logit fit
-had 1.61 GB committed while 1.14 GB was resident, so Windows also gets the
-looser limit, until its own CI figures set a tighter one.
+segment counts in full once allocated, touched or not, so the same fits
+measure more there. Measured in CI (GitHub's windows-latest, 2 threads):
+OLS 1.38-1.47 GB, logit 1.70 GB; the limit there is 2.0 GB, which a fit
+holding the panel (at least 2.2 GB) would still exceed.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ pytestmark = pytest.mark.resource
 
 ROWS_WORKERS, ROWS_YEARS = 300_000, 40          # 10.2 million rows
 BUDGET_GB = 0.5                                  # the fit's max_memory_gb
-LIMIT_GB = {"darwin": 2.6, "win32": 2.6}.get(sys.platform, 1.6)
+LIMIT_GB = {"darwin": 2.6, "win32": 2.0}.get(sys.platform, 1.6)
 FML = "~ age_squared + age_cubed | worker_id + firm_id + year"
 
 

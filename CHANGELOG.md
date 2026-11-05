@@ -25,9 +25,9 @@
   and dpd-stream fits peak 0.25-0.5 GB lower. Results are unchanged.
 - **Memory tests.** `pytest -m resource` fits OLS and a logit on a 10-million-row panel in a
   child process under a 1.6 GB limit, which a fit holding the 0.5 GB panel in memory would
-  exceed (2.6 GB on macOS and Windows, where the memory measured includes mapped files or
-  untouched allocations). CI runs them on Linux, macOS and Windows; the default `pytest` run
-  skips them. The `test` extra now includes `stream-limits[testing]`.
+  exceed (2.6 GB on macOS and 2.0 GB on Windows, where the memory measured includes mapped
+  files or untouched allocations). CI runs them on Linux, macOS and Windows; the default
+  `pytest` run skips them. The `test` extra now includes `stream-limits[testing]`.
 
 ## 0.8.0
 
