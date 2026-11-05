@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hdfe-stream"
-version = "0.8.0"
+version = "0.9.0"
 description = "Out-of-core regression with several high-dimensional fixed effects: OLS, Poisson, logit and probit, with AKM/KSS variance decompositions"
 readme = "README.md"
 license = "MIT"
@@ -75,11 +75,13 @@ docs = [
 ]
 # the test suite compares against pyfixest and exercises the optional solvers,
 # so it needs every extra; wildboottest is what pyfixest's wild cluster
-# bootstrap runs on, which tests/test_wildboot.py compares against
+# bootstrap runs on, which tests/test_wildboot.py compares against;
+# stream-limits[testing] runs tests/test_resources.py's fits under a memory limit
 test = [
     "pytest>=7.0",
     "hdfe-stream[all]",
     "wildboottest>=0.3.2",
+    "stream-limits[testing]>=0.2.1",
 ]
 
 [tool.setuptools.package-data]
@@ -90,6 +92,8 @@ include = ["hdfe_stream*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# memory tests (tests/test_resources.py) are slow: run them with `pytest -m resource`
+addopts = "-m 'not resource'"
 filterwarnings = [
     # pyfixest and its dependencies are noisy about deprecations we don't control
     "ignore::DeprecationWarning",

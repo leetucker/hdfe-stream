@@ -25,6 +25,9 @@ import pytest
 
 from hdfe_stream.simulate import simulate_akm, simulate_rich, simulate_trends
 
+# resource_runner and the `resource` marker (tests/test_resources.py)
+pytest_plugins = ["stream_limits.pytest_plugin"]
+
 # Panel sizes. 2,500 workers is the smallest that reliably leaves the
 # worker-firm graph connected (one component), which keeps the fixed effects
 # identified without a large panel.

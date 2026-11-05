@@ -1,25 +1,32 @@
 # Changelog
 
-## Unreleased
+## 0.9.0
 
-- **New in `hdfe_stream.core`: treatment-effect building blocks** shared by match-stream and
-  diff-stream (moved from match-stream's staging area, unchanged in behavior):
-  `core.influence` (influence-function variances from per-cluster sums, one-way and multi-way;
-  the weights-fixed weighted mean difference; the joint variance of estimators on different
-  tables), `core.mestimation` (a fitted binary logit/probit first stage and the correction of
-  an influence function for it) and `core.ipw` (inverse-probability weights and the Hajek IPW
-  difference in means with the estimated-score correction), and `core.balance` (a weighted
-  two-group balance table: means, standardized mean differences, variance ratios and eCDF gaps,
-  with MatchIt's conventions). Their names are stable (listed in `hdfe_stream.core`).
-- **`core.influence.ClusterScoreAccumulator`**: `if_vcov`'s one-way clustered variance from
-  batches of whole clusters (as `iter_groups` yields them, or rows that are already cluster
-  sums), in p x p memory whatever the number of clusters: with 2 million clusters and 20
-  estimators, 0.8 GB against `if_vcov`'s 4.5 GB, no slower. Several score blocks per batch
-  give their cross-covariances too.
-- **Lower peak memory reading Parquet files in batches.** `core.store.iter_batches` (and so
-  `iter_groups`) and the row passes read without pyarrow's pre-buffering, which buffers the whole
-  file's selected columns as `iter_batches` goes: 4.7 GB extra reading a 4.4 GB file, against
-  0.3 GB. Fits change little (their row files are read in smaller pieces); results are unchanged.
+- **Building blocks for treatment-effect estimators in `hdfe_stream.core`**, moved from
+  match-stream so that match-stream and diff-stream share them. Their names are stable (listed
+  in `hdfe_stream.core`).
+  - `core.influence`: influence-function variances from per-cluster sums (one-way and
+    multi-way), the weighted mean difference, and the joint variance of estimators fitted on
+    different tables. `ClusterScoreAccumulator` builds the one-way clustered variance batch by
+    batch, in memory that does not grow with the number of clusters: 0.8 GB, against 4.5 GB,
+    for 2 million clusters and 20 estimators.
+  - `core.mestimation`: a fitted logit or probit first stage, and the correction of an
+    influence function for estimating it.
+  - `core.ipw`: inverse-probability weights, and the IPW difference in means corrected for the
+    estimated score.
+  - `core.balance`: a weighted two-group balance table (means, standardized mean differences,
+    variance ratios, eCDF gaps) with MatchIt's conventions. Covariates with zero variance are
+    allowed: a standardized difference whose scale is 0 is 0, or ±inf when the means differ,
+    and the variance ratio is inf when only the control group's variance is 0, null when both
+    are.
+- **Less memory reading Parquet in batches.** `core.store.iter_batches` and `iter_groups` no
+  longer use pyarrow's pre-buffering, which held the selected columns of the whole file as it
+  read: 4.7 GB extra for a 4.4 GB file, now 0.3 GB. Packages built on them gain most: logit-stream
+  and dpd-stream fits peak 0.25-0.5 GB lower. Results are unchanged.
+- **Memory tests.** `pytest -m resource` fits OLS and a logit on a 10-million-row panel in a
+  child process under a 1.6 GB limit, which a fit holding the 0.5 GB panel in memory would
+  exceed. CI runs them on Linux, macOS and Windows; the default `pytest` run skips them. The
+  `test` extra now includes `stream-limits[testing]`.
 
 ## 0.8.0
 

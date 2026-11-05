@@ -123,7 +123,7 @@ def weighted_balance(lf: pl.LazyFrame | pl.DataFrame, group, terms, weight=None,
                      scale: str | dict = "pooled", ecdf: bool = True) -> pl.DataFrame:
     """The balance table: one row per term with ``mean1``, ``mean0``,
     ``var1``, ``var0``, ``smd``, ``var_ratio`` (var1 / var0; null for a 0/1
-    term), ``ecdf_mean`` and ``ecdf_max`` (|m1 - m0| for a 0/1 term).
+    term or two zero variances; infinite for positive var1 and zero var0), ``ecdf_mean`` and ``ecdf_max`` (|m1 - m0| for a 0/1 term).
 
     Parameters
     ----------
@@ -154,11 +154,14 @@ def weighted_balance(lf: pl.LazyFrame | pl.DataFrame, group, terms, weight=None,
             raise ValueError(f"scale must be 'group1', 'group0', 'pooled' or a dict, "
                              f"not {scale!r}")
         diff = m1 - m0
-        smd = (diff / sd if sd > 0 else np.copysign(np.inf, diff)) if abs(diff) > EPS_DIFF else diff
+        smd = (
+            (np.copysign(np.inf, diff) if sd == 0 else diff / sd)
+            if abs(diff) > EPS_DIFF else diff
+        )
         if binary:
             ratio, emean, emax = None, abs(diff), abs(diff)
         else:
-            ratio = v1 / v0 if v0 > 0 else (np.inf if v1 > 0 else None)
+            ratio = v1 / v0 if v0 != 0 else (np.inf if v1 > 0 else None)
             emean, emax = ecdf_gaps(data, i) if ecdf else (np.nan, np.nan)
         rows.append({"term": name, "mean1": m1, "mean0": m0, "var1": v1, "var0": v0,
                      "smd": smd, "var_ratio": ratio, "ecdf_mean": emean, "ecdf_max": emax})

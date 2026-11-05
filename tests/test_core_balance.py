@@ -77,10 +77,6 @@ def test_effective_sizes(df):
 
 def test_zero_variance_balance_ratios_and_standardization():
     """Constant controls are valid for balance, even when the ratio is infinite."""
-    import numpy as np
-    import polars as pl
-    from hdfe_stream.core.balance import weighted_balance
-
     d = pl.DataFrame({"d": [False, False, True, True],
                       "mixed": [2., 2., 1., 3.],
                       "same": [2., 2., 2., 2.],
