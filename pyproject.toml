@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hdfe-stream"
-version = "0.9.0"
+version = "0.9.1"
 description = "Out-of-core regression with several high-dimensional fixed effects: OLS, Poisson, logit and probit, with AKM/KSS variance decompositions"
 readme = "README.md"
 license = "MIT"
@@ -30,7 +30,7 @@ dependencies = [
     "polars>=1.37,!=1.41.*",       # 1.41 panics in streaming joins of wide frames
     "numpy>=1.24",
     "numba>=0.59",
-    "pyarrow>=14.0",
+    "pyarrow>=16.0",            # 16: the first release built for NumPy 2 (14 and 15 fail to import with it)
     "scipy>=1.11",
     "threadpoolctl>=3.1",       # BLAS held to one thread in numba-heavy passes
     "stream-limits>=0.1.1",     # thread and memory limits for jobs on a scheduler (0.1.1: Windows memory)

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.1
+
+- **`HDFEResult.solve_normal_equations`.** Solves a linear fit's normal equations for
+  right-hand sides built from rows: for weight columns v_j of a frame, u_j = S^- Z'v_j, with S
+  the fit's weighted Gram matrix of fixed effects and covariates. The result,
+  `NormalEquationsSolution`, gives the solutions as fixed-effect tables and covariate
+  coefficients, and `predict` gives z'u_j for any rows. For a weighted sum of predictions, w_i
+  z_i'u_j is the weight that estimation row i's outcome gets in it, which is what imputation
+  estimators (Borusyak, Jaravel and Spiess) need for their standard errors; diff-stream uses it
+  for BJS with high-dimensional fixed effects. It needs a fit made with
+  `keep_intermediates=True`. Nothing else changes.
+- **pyarrow 16 or later.** The floor was pyarrow 14, but pyarrow 14 and 15 were built against
+  NumPy 1 and fail to import with NumPy 2, which the other floors allow: the lowest versions
+  resolved on Python 3.12 gave an installation that could not import. The NumPy floor is
+  unchanged.
+
 ## 0.9.0
 
 - **Building blocks for treatment-effect estimators in `hdfe_stream.core`**, moved from

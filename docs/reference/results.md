@@ -20,10 +20,18 @@
    .. automethod:: resid
    .. automethod:: sample
    .. automethod:: predict
+   .. automethod:: solve_normal_equations
    .. automethod:: to_pyfixest
    .. automethod:: leave_out_kss
    .. automethod:: cleanup
    .. autoproperty:: files_dir
+
+.. autoclass:: NormalEquationsSolution
+   :no-members:
+
+   .. automethod:: fixef
+   .. automethod:: predict
+   .. automethod:: cleanup
 
 .. autoclass:: HDFEMulti
    :no-members:

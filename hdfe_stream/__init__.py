@@ -134,6 +134,7 @@ from .core.profile import Profile  # noqa: E402
 from .core.multcomp import bonferroni, holm, rwolf, wyoung
 from .core.reporting import etable
 from .core.results import HDFEMulti, HDFEResult
+from .normal_equations import NormalEquationsSolution
 from .core.workspace import cleanup
 
 __all__ = [
@@ -146,6 +147,7 @@ __all__ = [
     "StreamingGLM",
     "HDFEResult",
     "HDFEMulti",
+    "NormalEquationsSolution",
     "etable",
     "bonferroni",
     "holm",
@@ -164,7 +166,7 @@ def _detect_version():
         from importlib.metadata import version
         return version("hdfe-stream")
     except Exception:                 # source tree without an installed dist
-        return "0.6.0"
+        return "0.9.1"
 
 
 __version__ = _detect_version()

@@ -486,6 +486,46 @@ class HDFEResult(RegressionResult):
                      .select(row_id, *source.collect_schema().names(), "in_sample",
                              "dropped_because"))
 
+    def solve_normal_equations(self, data: Any, columns: Any, block: int = 16):
+        """Solve the fit's normal equations for right-hand sides built from
+        rows.
+
+        For each column v_j of `data`, solves S u_j = Z'v_j, where S = A'WA
+        is the normal-equations matrix of the fit (its fixed effects and
+        covariates, A, on the estimation sample, with the fit's weights W)
+        and Z'v_j sums the design rows of `data` weighted by v_j. So u_j is
+        how the coefficients respond to the right-hand side, and for a
+        weighted sum of predictions over the rows of `data`,
+        sum_r v_rj * prediction_r, the derivative with respect to estimation
+        row i's outcome is w_i z_i'u_j (`NormalEquationsSolution.predict`
+        gives z_i'u_j). Imputation estimators need exactly this for their
+        standard errors: the weight each untreated observation gets in an
+        average of imputed outcomes (Borusyak, Jaravel and Spiess 2024).
+
+        Needs a linear model without varying slopes or instruments, fitted
+        with ``keep_intermediates=True`` and a solver other than "within".
+        Every level in `data` must be in the estimation sample. A level
+        combination the fixed effects do not identify (across connected
+        components) is solved only up to the normalization, as with
+        `predict`.
+
+        Parameters
+        ----------
+        data : DataFrame, LazyFrame, or Parquet path or glob
+            Rows with every column the model uses, and the `columns`.
+        columns : str or list of str
+            The weight columns, one right-hand side each.
+        block : int, default 16
+            Right-hand sides solved at a time; memory grows with it.
+
+        Returns
+        -------
+        NormalEquationsSolution
+        """
+        from ..normal_equations import solve_normal_equations
+
+        return solve_normal_equations(self, data, columns, block)
+
     def predict(self, newdata: Any = None, type: str = "link",
                 name: str = "prediction") -> pl.LazyFrame:
         """Predictions on new data, or on the source, as a lazy frame.

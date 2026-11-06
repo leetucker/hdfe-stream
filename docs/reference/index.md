@@ -13,6 +13,7 @@ are in `hdfe_stream.simulate`.
 | `HDFEResult` | one model: coefficients, standard errors, fixed effects, residuals, the sample |
 | `HDFEMulti` | a formula that expands to several models |
 | `HDFEResult.predict`, `.confint`, `.wald_test`, `.wildboottest` | predictions on new data, confidence intervals (pointwise or simultaneous), Wald tests, the wild cluster bootstrap |
+| `HDFEResult.solve_normal_equations`, `NormalEquationsSolution` | the fit's normal equations solved for right-hand sides built from rows: how a weighted sum of predictions depends on each observation's outcome |
 | **[Leave-out variance components](kss.md)** | |
 | `leave_out_kss` | the Kline–Saggio–Sølvsten decomposition, end to end |
 | `LeaveOutComponents`, `ComponentSE`, `WeakIdDiagnostics` | its result, standard errors and weak-identification diagnostic |
