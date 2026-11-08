@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.9.2
+
+Faster fits on large panels with many variables, and less scratch disk. Results are unchanged.
+
+- **Large fits with more than 8 variables are faster.** An example is Sun-Abraham's
+  estimator in diff-stream, which has a variable for each cohort and period. Before, the fit
+  worked through the variables 8 at a time, and for each group of 8 it read the whole file of
+  stored cell sums from disk. When that file is bigger than the computer's memory, those
+  repeated reads were most of the run time. The fit now gets what it needs from the sums as it
+  writes them, so the file is not read again. On 8 million units (64 million rows), the
+  solving step dropped from 284 to 19 seconds and the whole fit from 542 to 294 seconds.
+  The process also holds less memory: its peak fell from 20.6 to 7.1 GB, because the file's
+  pages no longer pile up in memory. When the file is small enough to stay in memory,
+  there is little change in speed.
+- **Less scratch disk.** That file of cell sums is now written only when something reads it:
+  the `within` solver, the cell-based way of building the normal equations (the default for 8
+  or fewer variables), or the old one-group-at-a-time path described above. For other fits, a
+  wide design for example, it is not written at all. In the same Sun-Abraham fit with a
+  million units, scratch disk use fell from 3.6 to 0.4 GB, and the saving grows with the
+  number of rows.
+- **Memory limit.** Building what the fit needs in one go takes the number of fixed-effect
+  levels times the number of variables times 8 bytes. If that is more than a fifth of the
+  memory left under `max_memory_gb`, the fit works through the variables 8 at a time, as in
+  0.9.1, which is slower but uses less memory. The `rhs_block` option still sets the size of
+  those groups.
+
 ## 0.9.1
 
 - **`HDFEResult.solve_normal_equations`.** Solves a linear fit's normal equations for

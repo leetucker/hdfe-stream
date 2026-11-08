@@ -304,7 +304,9 @@ class _SolveMixin:
         own = sums is None
         if own:
             sums, names, raw_ss = self.sums, self.var_names, self.raw_ss
-        m = sums.shape[1]
+        # The estimator's own sums are not on disk when pass 1 built the whole
+        # right-hand side (see _pass1_cells); `pre` below is then all it reads.
+        m = self.m if sums is None else sums.shape[1]
         t0 = time.time()
         if L == 0:
             # No dimension besides the streamed one (or none at all): the
@@ -315,6 +317,9 @@ class _SolveMixin:
         # the right-hand side of the estimator's own variables, when pass 1
         # built it (all of them in one block); used once, then released
         pre = self.__dict__.pop("_rhs_pass1", None) if own else None
+        if sums is None and pre is None and self.solver != "within":
+            raise RuntimeError("the cell sums were not written and the right-hand "
+                               "side was not kept; this is a bug in hdfe-stream")
         gamma = (np.empty((L, m)) if in_memory else
                  np.lib.format.open_memmap(self.paths["gamma"], mode="w+",
                                            dtype=np.float64, shape=(L, m)))

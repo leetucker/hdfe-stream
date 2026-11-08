@@ -90,7 +90,11 @@ why:
 
 `rhs_block`
 : variables solved for at a time (default 8). This bounds the biggest
-  in-memory array, about 6 × (non-streamed levels) × `rhs_block` doubles.
+  in-memory array, about 6 × (non-streamed levels) × `rhs_block` doubles. When
+  the design has more variables than that, the solve's right-hand side is still built
+  for all of them in pass 1 if it takes under a fifth of the memory left (levels × variables
+  doubles); otherwise each block's is built from the stored cell sums, which reads
+  the whole file of them once per block.
 
 `max_memory_gb`, `memory_reserve`
 : the memory the fit may use (default: the job's allocation, else the machine's)

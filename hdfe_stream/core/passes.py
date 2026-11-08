@@ -62,6 +62,9 @@ def _drop_levels(frame, tables, fe_cols):
 
 class _PassesMixin:
 
+    # whether pass 1 wrote the cell sums to disk (set there; see _pass1_cells)
+    _sums_on_disk = True
+
     # ------------------------------------------------------------------ pass 0
     def _pass0_code(self, source, keys, extra):
         lf = as_lazy(source)
@@ -350,12 +353,24 @@ class _PassesMixin:
         obs = np.zeros(tot)             # weight per level (all cells)
         cnt = np.zeros(tot)             # observations per level (all cells)
         diag = np.zeros(tot)            # Jacobi diagonal (identifying cells)
-        # step 2's right-hand side D_o' M_0 V, when all the variables are
-        # solved in one block: it is then the size the solve allocates anyway
-        rhs = np.zeros((tot, m)) if 0 < m <= self.rhs_block else None
+        # step 2's right-hand side D_o' M_0 V, accumulated here while the cell
+        # sums are in memory. With more variables than one block it costs
+        # tot x m doubles, which is kept to a fifth of the memory left; the
+        # alternative is to build each block's from the memory-mapped sums
+        # in step 2, a pass over the whole file per block (about 30 GB each
+        # at 10 million units).
+        rhs = (np.zeros((tot, m)) if 0 < m and (
+            m <= self.rhs_block or self.budget.fits(tot * m * 8 / 1e9, share=0.2)) else None)
         sizes = []
         ps, p = len(self.slope_vars), self.p
-        kinds = ("codes", "n") + (("sums",) if m else ()) + (("st", "ainv", "cmat") if ps else ())
+        # The cell sums are read back only by the `within` solver, by cell
+        # assembly in step 3, and by step 2 for the blocks of a right-hand side
+        # that was not built here. When none applies the file is not written:
+        # at 10 million units and 50 variables it is 30 GB of scratch disk.
+        self._sums_on_disk = bool(m) and (rhs is None or self.assembly != "rows"
+                                          or self.solver == "within")
+        kinds = (("codes", "n") + (("sums",) if self._sums_on_disk else ())
+                 + (("st", "ainv", "cmat") if ps else ()))
         files = {k: open(self.paths["ident"][k], "wb") for k in kinds}
         self.fe0_rank = 0               # fe[0] parameters: sum of per-group ranks
         # Union-find for each pair of non-streamed dimensions, for the
@@ -406,7 +421,8 @@ class _PassesMixin:
             kn.tofile(files["n"])
             if m:
                 ksums = np.ascontiguousarray(S[keep])
-                ksums.tofile(files["sums"])
+                if self._sums_on_disk:
+                    ksums.tofile(files["sums"])
             if ps:
                 gk = ncells > 1
                 kst = np.ascontiguousarray(st[keep])
@@ -508,7 +524,8 @@ class _PassesMixin:
             return load(np.memmap(self.paths["ident"][key], dtype=dtype, mode="r", shape=shape))
         self.codes = mm("codes", np.uint32, (M, D))
         self.n = mm("n", np.float64, (M,))
-        self.sums = mm("sums", np.float64, (M, m))
+        # None when pass 1 did not write them: nothing reads them then
+        self.sums = mm("sums", np.float64, (M, m)) if (self._sums_on_disk or not m) else None
         if self.slope_vars:
             p, G = self.p, len(self.starts) - 1
             self.st = mm("st", np.float64, (M, p))

@@ -174,7 +174,11 @@ class StreamingHDFE(_StreamingBase, _InverseMixin, _LeaveOutMixin, _TraceMixin,
         run closer to the limit, raise it for a job that must not be killed.
     rhs_block : int, default 8
         Variables solved at a time; bounds solver memory at about
-        6 x (total non-streamed levels) x rhs_block doubles.
+        6 x (total non-streamed levels) x rhs_block doubles. With more
+        variables than this, pass 1 still builds the solve's right-hand side
+        for all of them at once if that takes under a fifth of the memory left
+        (non-streamed levels x variables doubles); otherwise each block's is
+        built from the stored cell sums, one pass over them per block.
     batch_rows : int, optional
         Rows per chunk when streaming Parquet, and per slice of whole groups
         of the streamed dimension when building the cell table. Default:
