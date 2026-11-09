@@ -354,21 +354,26 @@ class _PassesMixin:
         cnt = np.zeros(tot)             # observations per level (all cells)
         diag = np.zeros(tot)            # Jacobi diagonal (identifying cells)
         # step 2's right-hand side D_o' M_0 V, accumulated here while the cell
-        # sums are in memory. With more variables than one block it costs
-        # tot x m doubles, which is kept to a fifth of the memory left; the
-        # alternative is to build each block's from the memory-mapped sums
-        # in step 2, a pass over the whole file per block (about 30 GB each
-        # at 10 million units).
-        rhs = (np.zeros((tot, m)) if 0 < m and (
-            m <= self.rhs_block or self.budget.fits(tot * m * 8 / 1e9, share=0.2)) else None)
+        # sums are in memory. It is tot x m doubles. In memory when that is a
+        # fifth of the memory left or less (or when it is one block); otherwise a
+        # memory-mapped file, which is tot x m x 8 bytes of disk (0.8 GB at 10
+        # million units and 50 variables), where the alternative, building each
+        # block's from the stored cell sums in step 2, reads the whole file of
+        # sums per block (about 30 GB each at 10 million units).
+        rhs = None
+        if 0 < m:
+            if m <= self.rhs_block or self.budget.fits(tot * m * 8 / 1e9, share=0.2):
+                rhs = np.zeros((tot, m))
+            else:
+                rhs = np.lib.format.open_memmap(self.paths["rhs"], mode="w+",
+                                                dtype=np.float64, shape=(tot, m))
         sizes = []
         ps, p = len(self.slope_vars), self.p
         # The cell sums are read back only by the `within` solver, by cell
         # assembly in step 3, and by step 2 for the blocks of a right-hand side
         # that was not built here. When none applies the file is not written:
         # at 10 million units and 50 variables it is 30 GB of scratch disk.
-        self._sums_on_disk = bool(m) and (rhs is None or self.assembly != "rows"
-                                          or self.solver == "within")
+        self._sums_on_disk = bool(m) and (self.assembly != "rows" or self.solver == "within")
         kinds = (("codes", "n") + (("sums",) if self._sums_on_disk else ())
                  + (("st", "ainv", "cmat") if ps else ()))
         files = {k: open(self.paths["ident"][k], "wb") for k in kinds}
@@ -444,6 +449,13 @@ class _PassesMixin:
         np.save(self.paths["ident"]["starts"],
                 np.concatenate(([0], np.cumsum(sizes))).astype(np.int64))
         self.obs, self.cnt, self.n_identifying = obs, cnt, len(sizes)
+        if isinstance(rhs, np.memmap):
+            # Unmap the file: the pages of a mapped file count in the process's
+            # resident memory, which the memory budget reads, and step 2's solver
+            # choice would see 0.8 GB less room at 10 million units. Step 2 maps
+            # it again a block at a time.
+            rhs.flush()
+            rhs = self.paths["rhs"]
         self.diag, self._rhs_pass1 = diag, rhs
         self._other_pair_components = {
             (self.o_fe[i], self.o_fe[j]): int(np.count_nonzero(parent == np.arange(len(parent))))

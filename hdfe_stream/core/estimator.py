@@ -252,6 +252,7 @@ class _StreamingBase(_ProfileMixin, _PassesMixin, _SolveMixin, _InferenceMixin):
                       "st": str(p / "ident_st.f64"), "ainv": str(p / "ident_ainv.f64"),
                       "cmat": str(p / "ident_cmat.f64")},
             "gamma": str(p / "gamma.npy"),
+            "rhs": str(p / "rhs.npy"),
         }
 
     def _log(self, msg):

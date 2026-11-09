@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.10.0
+
+Fits with many variables no longer slow down sharply under a tight memory limit.
+
+- **Fits with more than 8 variables are much faster under a tight memory limit.** The solve needs
+  an array with a row for every fixed-effect level and a column for every variable. When that
+  array was more than a fifth of the memory left under `max_memory_gb`, the fit instead wrote a
+  file of every cell's sums (30 GB or more on a large panel) and read all of it back for each
+  group of 8 variables. Now the array goes into a file of its own, which is far smaller (0.8 GB
+  for 2 million levels and 50 variables), and the solve reads it one group at a time. In
+  diff-stream, Sun-Abraham on 10 million units with a 4 GB limit took ten times as long as
+  without a limit (1,742 seconds against 173) and used 36.5 GB of scratch disk. It now takes about
+  1.3 times as long (242 seconds against 191, measured on a machine with half the cores) and about
+  5 GB. The estimates agree with the fit that keeps the array in memory to 1e-15. Fits with 8 or
+  fewer variables, and fits where the array fits in memory, are not affected.
+- **The array's file stops counting against the memory limit once the first pass ends.** The
+  pages of a memory-mapped file count as memory in use, and with them counted a fit near its
+  limit could find no room left and choose slower methods for the solve. The file is now released
+  when the first pass finishes and read back a block at a time. In the same fit, the solving step
+  went from 95 to 56 seconds.
+
 ## 0.9.2
 
 Faster fits on large panels with many variables, and less scratch disk. Results are unchanged.

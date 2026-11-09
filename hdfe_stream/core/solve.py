@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import numba as nb
 import numpy as np
@@ -331,7 +332,13 @@ class _SolveMixin:
                 X, it, c, r = solve(sums[:, j0:j1])
             else:
                 if pre is not None:
-                    b = pre[:, j0:j1]
+                    if isinstance(pre, str):
+                        # the file pass 1 wrote: map it, copy this block, unmap
+                        mapped = np.load(pre, mmap_mode="r")
+                        b = np.array(mapped[:, j0:j1])
+                        del mapped
+                    else:
+                        b = pre[:, j0:j1]
                 else:
                     b = np.zeros((L, j1 - j0))
                     if self.slope_vars:
@@ -352,6 +359,8 @@ class _SolveMixin:
             its.append(it)
             conv &= c
             rel = max(rel, r)
+        if isinstance(pre, str):
+            Path(pre).unlink(missing_ok=True)
         if in_memory:
             return gamma, self._solve_info(info, its, conv, rel, fe_spanned, t0)
         gamma.flush()

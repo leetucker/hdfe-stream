@@ -166,12 +166,31 @@ def test_cell_sums_are_written_when_the_solver_or_assembly_reads_them(
     assert _sums_files(workdir, "read") and fit is not None
 
 
-def test_cell_sums_are_written_when_the_blocks_read_them(rich, workdir, no_room_for_wide_rhs):
-    """With no room for the right-hand side in pass 1, step 2 builds it from
-    the file, which is then written."""
-    fit = _fit(UNIQUE, rich, workdir, "blocks", keep_intermediates=True, assembly="rows",
-               rhs_block=1)
-    assert _sums_files(workdir, "blocks") and fit is not None
+def test_rhs_goes_to_a_file_when_it_does_not_fit_in_memory(
+        rich, workdir, no_room_for_wide_rhs, monkeypatch):
+    """With no room for the right-hand side in memory, pass 1 accumulates it in
+    a memory-mapped file instead: the cell sums are not written for step 2 to
+    read back, the file is deleted after the solve, and the fit is the same."""
+    opened = []
+    original = np.lib.format.open_memmap
+    monkeypatch.setattr(np.lib.format, "open_memmap",
+                        lambda path, *a, **k: (opened.append(str(path)), original(path, *a, **k))[1])
+    one = _fit(UNIQUE, rich, workdir, "one")     # fewer variables than a block: in memory
+    assert not [p for p in opened if p.endswith("rhs.npy")]
+    from hdfe_stream.core.passes import _PassesMixin
+    handed_on = []
+    pass1 = _PassesMixin._pass1_cells
+    monkeypatch.setattr(_PassesMixin, "_pass1_cells",
+                        lambda self: (pass1(self), handed_on.append(self._rhs_pass1))[1])
+    wide = _fit(UNIQUE, rich, workdir, "wide", keep_intermediates=True, assembly="rows",
+                rhs_block=1)
+    assert [p for p in opened if p.endswith("rhs.npy")]
+    # pass 1 unmaps the file (its pages would count as resident memory in the
+    # budget's reading) and hands step 2 its path
+    assert handed_on and all(isinstance(h, str) and h.endswith("rhs.npy") for h in handed_on)
+    assert not _sums_files(workdir, "wide")
+    assert not list((workdir / "wide").rglob("rhs.npy"))
+    _assert_same_fit(one, wide)
 
 
 def test_intermediates_reload_without_the_cell_sums(rich, workdir):
