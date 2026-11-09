@@ -56,7 +56,7 @@ all = ["hdfe-stream[within,amg,formula]"]
 # xhdfe is compared too, but installs from source (see benchmarks/README.md)
 benchmark = [
     "hdfe-stream[formula]",
-    "pyfixest>=0.70.0",      # its default demeaner (LSMR) is the one compared against
+    "pyfixest>=0.70.0; python_version >= '3.11'",      # its default demeaner (LSMR) is the one compared against
     "matplotlib>=3.7",
     # the OLS, IV, logit and probit benchmarks' competitors
     "scikit-learn",

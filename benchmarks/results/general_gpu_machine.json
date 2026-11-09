@@ -4,8 +4,8 @@
  "memory_gb": 249.7,
  "platform": "Linux-7.0.0-1014-aws-x86_64-with-glibc2.39",
  "python": "3.14.8",
- "hdfe-stream": "0.7.0",
- "pyfixest": "0.60.0",
+ "hdfe-stream": "0.10.0",
+ "pyfixest": "0.70.0",
  "xhdfe": "2.28.1.20260929",
  "polars": "1.39.3",
  "numpy": "2.5.3",
@@ -18,7 +18,7 @@
  "glum": "3.4.1",
  "scipy": "1.18.1",
  "pandas": "3.0.6",
- "measured": "2026-10-30",
+ "measured": "2026-11-09",
  "gpus": [
   {
    "name": "NVIDIA H100 80GB HBM3",
@@ -34,7 +34,7 @@
  "torch": "2.15.0",
  "cuml": "26.06.00",
  "ec2": {
-  "run": "2026-10-30T1406Z_p5.4xlarge_spot_gpu_general-gpu",
+  "run": "2026-11-09T1912Z_p5.4xlarge_spot_gpu_pyfixest0.70",
   "instance_type": "p5.4xlarge",
   "market": "spot",
   "region": "us-east-2",

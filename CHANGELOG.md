@@ -27,6 +27,9 @@ is defined as in fixest.
   average 1, and without weights or with frequency weights. With other analytic weights the RMSE
   changes: multiplying every weight by `c` used to multiply it by `sqrt(c)`. Coefficients, standard
   errors and R-squared are unchanged. pyfixest 0.60 still divides by the number of rows.
+- **Benchmarks re-run** with pyfixest 0.70.0, whose default demeaner (LSMR) is the one compared against;
+  the alternating-projections (MAP) demeaner is no longer benchmarked. pyfixest 0.70.0's Poisson fit fails on the 1,000,000- and 5,000,000-worker panels, which
+  0.60.0 fit at 1,000,000.
 - **Fits with more than 8 variables are much faster under a tight memory limit.** The solve needs
   an array with a row for every fixed-effect level and a column for every variable. When that
   array was more than a fifth of the memory left under `max_memory_gb`, the fit instead wrote a

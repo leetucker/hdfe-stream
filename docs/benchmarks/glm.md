@@ -9,9 +9,8 @@ from 25,000 to 5,000,000 workers (212,000 to 42.5 million rows), with firms =
 workers / 15. [Poisson and logit, many covariates](glm_covariates.md) holds the
 data fixed and varies the width instead.
 
-pyfixest runs with its LSMR demeaner. Its default, MAP, stops with "Demeaning
-failed after 10000 iterations" on these panels at every size tried, from 25,000
-workers up, for both models. xhdfe fits linear models only. hdfe_stream runs at
+pyfixest runs with its default demeaner, LSMR. xhdfe fits linear models only.
+hdfe_stream runs at
 its defaults, with `solver="explicit"`, and with the OLS benchmark's low-memory
 setting (`rows_per_bucket=250_000`, `batch_rows=200_000`).
 
@@ -60,20 +59,27 @@ Wall time and peak memory, hdfe_stream at its defaults:
 
 | workers | rows | Poisson: `fepois_stream` | Poisson: pyfixest | logit: `feglm_stream` | logit: pyfixest |
 |---:|---:|---:|---:|---:|---:|
-| 25,000 | 212,000 | 1.6 s, 0.8 GB | 2.3 s, 0.6 GB | 1.6 s, 0.9 GB | 2.3 s, 0.6 GB |
-| 100,000 | 850,000 | 3.1 s, 1.1 GB | 9.3 s, 1.2 GB | 3.0 s, 1.1 GB | 8.8 s, 1.2 GB |
-| 400,000 | 3.4 million | 9.3 s, 1.7 GB | 40 s, 3.8 GB | 9.1 s, 1.7 GB | 40 s, 3.8 GB |
-| 1,000,000 | 8.5 million | 22 s, 2.2 GB | 126 s, 8.0 GB | 22 s, 2.1 GB | 111 s, 8.2 GB |
-| 5,000,000 | 42.5 million | 145 s, 4.0 GB | out of memory | 137 s, 4.0 GB | out of memory |
+| 25,000 | 212,000 | 1.4 s, 0.8 GB | 1.4 s, 0.6 GB | 1.5 s, 0.8 GB | 1.3 s, 0.6 GB |
+| 100,000 | 850,000 | 2.9 s, 1.1 GB | 4.4 s, 1.4 GB | 2.9 s, 1.1 GB | 4.9 s, 1.3 GB |
+| 400,000 | 3.4 million | 9.4 s, 1.7 GB | 18 s, 3.7 GB | 9.6 s, 1.7 GB | 20 s, 3.7 GB |
+| 1,000,000 | 8.5 million | 23 s, 2.2 GB | failed | 22 s, 2.1 GB | 65 s, 7.7 GB |
+| 5,000,000 | 42.5 million | 151 s, 4.0 GB | failed | 152 s, 4.0 GB | out of memory |
 
-- **Time.** From 100,000 workers up, hdfe_stream is 3 to 6 times faster.
-- **Memory.** At 5,000,000 workers pyfixest was killed at this machine's
-  limit of 29.6 GB (of 30.8 GB), for both models. hdfe_stream peaked at 4.0
-  GB, or 3.7 GB with the low-memory setting, in 2 to 6% more time. At
-  25,000 workers pyfixest uses less, as with OLS: an hdfe_stream process costs
-  about 0.8 GB before it has done anything.
-- **Disk.** About 67 bytes per row: 2.8 GB at 42.5 million rows, a little
+- **Time.** From 100,000 workers up, hdfe_stream is faster: about 1.5 to 2 times
+  at 100,000 and 400,000 workers, and 2.9 times for logit at 1,000,000.
+- **Memory.** At 5,000,000 workers pyfixest's logit fit was killed at this
+  machine's limit of 29.6 GB (of 30.8 GB). hdfe_stream peaked at 4.0 GB, or
+  3.6 to 3.7 GB with the low-memory setting, in 6 to 15% more time. At 25,000
+  workers pyfixest uses less, as with OLS: an hdfe_stream process costs about
+  0.8 GB before it has done anything.
+- **Disk.** About 68 bytes per row: 2.9 GB at 42.5 million rows, a little
   more than OLS on the same design writes (2.6 GB).
 - **Against OLS.** `feols_stream` fits the same design in 4.9 s at 1,000,000
-  workers and 22 s at 5,000,000, so a Poisson or logit fit costs 4 to 7 OLS
+  workers and 23 s at 5,000,000, so a Poisson or logit fit costs 5 to 7 OLS
   fits.
+- **pyfixest's Poisson fits failed from 1,000,000 workers up.** pyfixest 0.70.0
+  stops with `ValueError: signed component between term 1 column 0 and term 2
+  column 0 is not diagonally scalable to SDDM form`, raised by the LSMR
+  demeaner's preconditioner, at both sizes. pyfixest 0.60.0 completed the
+  1,000,000-worker Poisson fit (126 s, 8.0 GB), and ran out of memory at
+  5,000,000. Its logit fits, which use the same demeaner, were not affected.

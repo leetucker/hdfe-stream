@@ -49,8 +49,8 @@ fit = feols_stream(f"log_earn ~ i(age_bin, ref={first}) | worker_id + firm_id",
 
 The cross-products cost k × k per row. They are formed chunk by chunk as BLAS
 matrix products, so they are fast, but 503 indicators take several times as long
-as 167. Disk grows with the width too, since the working copy of the rows
-carries every covariate.
+as 167. Disk barely grows with the width: the cell sums, the part that does, are
+written only when a later step reads them back.
 
 The example builds age in months at an interview month that varies from year to
 year (were it fixed within a worker, fine age bins would be collinear with the
@@ -59,9 +59,9 @@ runs in seconds; the point is the pattern:
 
 ```text
      bins covariates  seconds  disk GB  design evaluated
-    12 mo         41      0.9    0.013  per bucket
-     3 mo        167      2.9    0.039  per bucket
-     1 mo        503      9.6    0.111  per bucket
+    12 mo         41      1.4    0.005  per bucket
+     3 mo        167      6.2    0.006  per bucket
+     1 mo        503     11.5    0.009  per bucket
 ```
 
 :::{dropdown} The full script: `examples/wide_designs.py`

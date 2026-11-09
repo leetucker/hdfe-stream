@@ -53,39 +53,39 @@ At 1 and 5 million workers (memory: the process's peak, then the GPU's):
 
 | configuration | 1M workers | 5M workers |
 |---|---:|---:|
-| hdfe_stream, CPU | 6.0 s, 3.9 GB | 27.7 s, 7.8 GB |
-| hdfe_stream, GPU solve | 6.6 s, 4.5 + 0.6 GB | 28.2 s, 8.4 + 0.8 GB |
-| hdfe_stream, GPU solve and GPU Polars | 8.6 s, 4.4 + 3.8 GB | 26.7 s, 6.7 + 10.9 GB |
-| pyfixest (LSMR), CPU | 13.3 s, 6.0 GB | 101.6 s, 27.0 GB |
-| pyfixest (LSMR), GPU | 13.7 s, 5.8 + 3.8 GB | 133.2 s, 23.4 + 16.5 GB |
-| xhdfe, CPU | 12.7 s, 5.0 GB | 106.6 s, 19.3 GB |
-| xhdfe, GPU | **4.2 s**, 3.0 + 1.8 GB | **24.3 s**, 12.7 + 7.0 GB |
+| hdfe_stream, CPU | 6.2 s, 4.1 GB | 28.9 s, 7.8 GB |
+| hdfe_stream, GPU solve | 6.5 s, 4.7 + 0.6 GB | 28.8 s, 8.5 + 0.8 GB |
+| hdfe_stream, GPU solve and GPU Polars | 8.6 s, 4.5 + 3.9 GB | 27.7 s, 6.9 + 10.7 GB |
+| pyfixest (LSMR), CPU | 10.2 s, 4.8 GB | 77.2 s, 21.3 GB |
+| pyfixest (LSMR), GPU | 10.9 s, 5.2 + 3.8 GB | 54.8 s, 20.6 + 16.5 GB |
+| xhdfe, CPU | 13.4 s, 5.0 GB | 107.2 s, 19.3 GB |
+| xhdfe, GPU | **4.2 s**, 3.1 + 1.8 GB | **24.4 s**, 12.7 + 7.0 GB |
 
 ## Reading the HDFE regression figures
 
 **hdfe_stream gains little from the GPU, and only at the largest size.** Its
 design keeps the solve small: the rows are reduced to sums over worker-firm
-cells before solving, so at 5 million workers the solve is 3.5 of 28 seconds
-on the CPU, and on the GPU it took 3.6. Moving the Polars queries to the GPU as
-well saved 1.5 seconds there (5%) and 1.7 GB of host memory, with the data held
-in 10.9 GB of GPU memory instead. Up to a million workers the solve itself was
-slower on the GPU, and with the Polars queries on the GPU too the whole fit was
-slower, by up to 2.5 seconds on the smallest panels, where starting the GPU engines costs
+cells before solving, so at 5 million workers the solve is 3.5 of 29 seconds
+on the CPU, and on the GPU it took 3.5. Moving the Polars queries to the GPU as
+well saved 1.2 seconds there (4%) and 0.9 GB of host memory, with the data held
+in 10.7 GB of GPU memory instead. Up to a million workers the solve itself was
+no faster on the GPU, and with the Polars queries on the GPU too the whole fit was
+slower, by up to 3 seconds on the smallest panels, where starting the GPU engines costs
 more than they save. Two of the fit's Polars queries run on the CPU even then,
 as `diagnostics["polars_gpu_fallbacks"]` reports: cudf-polars does not yet
 support the approximate distinct count in pass 0's scan, or the partitioned
 write that follows it.
 
-**pyfixest's PyTorch backend gained nothing reliable.** It was slower than
-pyfixest's CPU backend at every size here; at 5 million workers it took 133 s
-against 102 s on the CPU, and 93 s in an earlier run on an identical machine,
-the one measurement that moved between the two runs. pyfixest describes the
-backend as experimental.
+**pyfixest's PyTorch backend helps only at the largest size.** At 5 million
+workers it took 55 s against 77 s on pyfixest's CPU backend (29% less), with
+16.5 GB on the GPU. At a million workers and below it was slower: 10.9 s
+against 10.2 s at a million, and 3.8 s against 0.8 s at 25,000. pyfixest
+describes the backend as experimental.
 
 **xhdfe gains the most:** its CUDA backend is 3 to 4.4 times as fast as its CPU
 backend from a million workers up, and the fastest configuration on this
-machine from 100,000 workers up. At 5 million workers it took 24.3 s,
-against 27.7 s for hdfe_stream on this machine's CPU and 26.7 s with both of
+machine from 100,000 workers up. At 5 million workers it took 24.4 s,
+against 28.9 s for hdfe_stream on this machine's CPU and 27.7 s with both of
 hdfe_stream's GPU options, with 12.7 GB of host memory and 7.0 GB on the GPU.
 
 ## Plain regressions: OLS, IV and logit
@@ -147,34 +147,34 @@ Wall time:
 
 | configuration | 100,000 rows | 1 million | 5 million | 20 million |
 |---|---:|---:|---:|---:|
-| hdfe_stream OLS (CPU) | 1.2 s | 1.6 s | 3.5 s | 6.4 s |
-| hdfe_stream OLS (GPU Polars) | 3.6 s | 4.0 s | 5.7 s | 10.8 s |
+| hdfe_stream OLS (CPU) | 1.0 s | 1.4 s | 3.2 s | 6.0 s |
+| hdfe_stream OLS (GPU Polars) | 3.3 s | 3.6 s | 5.0 s | 8.5 s |
 | polars-ols (CPU) | 0.1 s | 0.4 s | 2.1 s | 8.1 s |
-| cuML OLS | 1.7 s | 1.9 s | 2.5 s | 4.8 s |
+| cuML OLS | 1.7 s | 1.9 s | 2.5 s | 4.7 s |
 | CuPy normal equations (OLS) | 0.6 s | 0.8 s | 1.3 s | 3.3 s |
-| hdfe_stream IV (CPU) | 1.6 s | 2.3 s | 4.8 s | 13.1 s |
-| hdfe_stream IV (GPU Polars) | 4.0 s | 4.7 s | 7.6 s | 17.4 s |
-| polars-ols two stages (CPU) | 0.1 s | 0.8 s | 4.4 s | 17.4 s |
+| hdfe_stream IV (CPU) | 1.4 s | 2.1 s | 4.4 s | 12.1 s |
+| hdfe_stream IV (GPU Polars) | 3.7 s | 4.3 s | 6.7 s | 14.2 s |
+| polars-ols two stages (CPU) | 0.1 s | 0.8 s | 4.4 s | 17.6 s |
 | CuPy 2SLS | 0.6 s | 0.8 s | 1.5 s | 4.0 s |
-| hdfe_stream logit (CPU) | 1.3 s | 2.0 s | 4.1 s | 11.1 s |
-| hdfe_stream logit (GPU IRLS) | 1.8 s | 2.3 s | 3.9 s | 8.4 s |
-| hdfe_stream logit (GPU Polars) | 3.7 s | 4.5 s | 6.8 s | 14.9 s |
-| hdfe_stream logit (GPU IRLS + GPU Polars) | 3.9 s | 4.5 s | 6.3 s | 12.1 s |
+| hdfe_stream logit (CPU) | 1.0 s | 1.8 s | 3.9 s | 11.0 s |
+| hdfe_stream logit (GPU IRLS) | 1.5 s | 2.0 s | 3.5 s | 8.1 s |
+| hdfe_stream logit (GPU Polars) | 3.4 s | 4.0 s | 6.2 s | 13.0 s |
+| hdfe_stream logit (GPU IRLS + GPU Polars) | 3.7 s | 4.2 s | 5.6 s | 10.1 s |
 | polars-ds logit (CPU) | 0.1 s | 0.7 s | 3.0 s | 12.1 s |
-| cuML logit | 1.7 s | 2.0 s | 2.5 s | 4.6 s |
+| cuML logit | 1.7 s | 2.1 s | 2.5 s | 4.6 s |
 | CuPy Newton logit | 0.6 s | 0.8 s | 1.3 s | 3.2 s |
 
 - **A GPU does help plain regressions, unlike the fixed-effects one, but not
-  hdfe_stream's linear fits.** At 20 million rows cuML fits OLS in 4.8 s and
-  logit in 4.6 s, and the CuPy versions take 3.2 to 4.0 s, against 6.4 s for
-  hdfe_stream OLS, 13.1 s for IV and 11.1 s for logit on the CPU: gains of 1.3
-  to 3.5 times. Below about 5 million rows the CPU libraries are faster.
+  hdfe_stream's linear fits.** At 20 million rows cuML fits OLS in 4.7 s and
+  logit in 4.6 s, and the CuPy versions take 3.2 to 4.0 s, against 6.0 s for
+  hdfe_stream OLS, 12.1 s for IV and 11.0 s for logit on the CPU: gains of 1.3
+  to 3.4 times. Below about 5 million rows the CPU libraries are faster.
 - **`polars_engine="gpu"` made hdfe_stream slower at every size and in every
-  model**, by 1.3 to 3.0 times, and held up to 13 GB of GPU memory. An OLS or
+  model**, by 1.2 to 3.4 times, and held up to 13 GB of GPU memory. An OLS or
   2SLS fit has no solve to move, so its time goes to reading and writing rows in
   Polars, which is the part this option moves.
-- **`device="cuda"` helps logit at large sizes.** It took 8.4 s at 20 million
-  rows against 11.1 s on the CPU (24% less), 3.9 s against 4.1 s at 5 million,
+- **`device="cuda"` helps logit at large sizes.** It took 8.1 s at 20 million
+  rows against 11.0 s on the CPU (26% less), 3.5 s against 3.9 s at 5 million,
   and was slower at 1 million rows and below. With the Polars engine as well it
   was slower than with `device="cuda"` alone. Only the IRLS steps move: the
   other passes (scanning and writing the rows, and the final pass for the
@@ -195,7 +195,7 @@ For this problem, the evidence here says probably not. A GPU-first HDFE library
 gains a lot from the GPU, but against its own CPU path; against a CPU-first one
 the gain is small, and the GPU machine costs far more. In the
 [AKM benchmark](akm.md), on a 16-vCPU CPU machine (a `c8id.4xlarge`),
-hdfe_stream fitted 5 million workers in 22 s and 3.9 GB. That is as fast as
+hdfe_stream fitted 5 million workers in 23 s and 3.9 GB. That is as fast as
 xhdfe on the H100 (24 s, and 12.7 GB of memory plus 7.0 GB on the GPU), on a
 machine that costs about an eighth as much per hour: $0.89 an hour on demand,
 against $6.88 for the `p5.4xlarge`, AWS's smallest H100 machine.
@@ -245,16 +245,12 @@ On an AWS EC2 `p5.4xlarge`: one NVIDIA H100 (80 GB), 16 vCPUs of an AMD EPYC
 7R13, NVIDIA driver 595.112 (CUDA 13.2), and the instance's local NVMe drive for
 the data. The benchmarks were limited to 29.6 GB of memory, as on the CPU
 machine, so that every configuration had the same room as there. This was
-hdfe_stream 0.6.1, measured on 2026-10-29. The pyfixest and xhdfe rows were
-measured on 2026-10-19 on the same instance type and set up the same way (the
-hdfe_stream rows of that run, on 0.5.0, the release that added the GPU
-options, agreed with the 0.6.1 ones to within 3% from 400,000 workers up).
-Python and its packages were those of the other benchmarks, except Polars
+hdfe_stream 0.10.0 and pyfixest 0.70.0, measured on 2026-11-09. Python and its packages were those of the other benchmarks, except Polars
 1.39.3, which cudf-polars 26.6 needs (2.0.0 elsewhere), with CuPy 14.2.0,
-cudf-polars 26.6.0 and, for pyfixest's rows, PyTorch 2.14.1 (CUDA 13.0). The
+cudf-polars 26.6.0 and, for pyfixest's rows, PyTorch 2.15.0 (CUDA 13.0). The
 CPU numbers here are therefore not those of the other pages: this is a
-different, older CPU, with an older Polars, and hdfe_stream took 28 s at 5
-million workers here against 22 s there.
+different, older CPU, with an older Polars, and hdfe_stream took 29 s at 5
+million workers here against 23 s there.
 
 - **Peak GPU memory** is the configuration's process's, polled from
   `nvidia-smi`. Each configuration runs in a fresh process, so the GPU ones pay
@@ -268,6 +264,4 @@ million workers here against 22 s there.
   one change: its source calls `cub::Max`, which the CUDA 13 toolkit removed,
   and the build replaces it with `cuda::maximum<>{}`, the same operation. Its
   result is kept only if xhdfe reports that it used the GPU.
-- Each point is one run. A second complete run on an identical machine agreed
-  with it to within a few percent, except for pyfixest's GPU backend at 5
-  million workers (above).
+- Each point is one run.

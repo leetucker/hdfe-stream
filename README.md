@@ -80,7 +80,7 @@ fastest of the libraries benchmarked: against pyfixest, xhdfe, R's fixest and
 Julia's FixedEffectModels.jl on the AKM regression and on wide designs, against
 pyfixest on Poisson and logit, and against xhdfe on the KSS decomposition, and
 at the largest sizes it used a fraction of their memory. At 5 million workers it fitted the AKM
-regression in 22 seconds on a 16-vCPU machine, about as fast as xhdfe on an
+regression in 23 seconds on a 16-vCPU machine, about as fast as xhdfe on an
 NVIDIA H100 (24 seconds), without a GPU (see [should I use a GPU?](#should-i-use-a-gpu)). The
 benchmarks are simulated employer–employee panels, a shape that suits its
 design ([how it works](#how-it-works-in-one-paragraph)); one whose fixed-effect cells are no smaller than
@@ -195,14 +195,14 @@ Every configuration agrees on the coefficients to within 2e-9.
 
 | configuration | wall time | peak memory | peak disk |
 |---|---:|---:|---:|
-| pyfixest (MAP, its default) | 919 s | 20.8 GB | — |
-| pyfixest (LSMR) | 74 s | 27.0 GB | — |
+| pyfixest (LSMR, its default) | 59 s | 22.0 GB | — |
 | xhdfe | 79 s | 19.3 GB | — |
 | fixest (R) | 152 s | 9.1 GB | — |
 | FixedEffectModels.jl (Julia) | 79 s | 9.5 GB | — |
-| hdfe_stream (`explicit`, its default) | 22 s | 3.9 GB | 2.6 GB |
-| hdfe_stream (`stream_cg`) | 22 s | 3.8 GB | 2.6 GB |
-| **hdfe_stream (`stream_cg`, low memory)** | **24 s** | **3.7 GB** | 2.7 GB |
+| hdfe_stream (`explicit`, its default) | 23 s | 3.9 GB | 2.6 GB |
+| hdfe_stream (`stream_cg`) | 23 s | 3.8 GB | 2.6 GB |
+| hdfe_stream (`stream_cg`, low memory) | 26 s | 3.9 GB | 2.7 GB |
+| **hdfe_stream (`max_memory_gb=2`)** | **25 s** | **3.2 GB** | 2.6 GB |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/leetucker/hdfe-stream/main/docs/figures/akm_memory.dark.svg">
@@ -228,16 +228,16 @@ gain below that. A GPU-oriented library such as
 [xhdfe](https://github.com/reisportela/xhdfe-xfe) is the better choice if GPU
 performance is the priority: its CUDA backend took 24 s at 5 million workers,
 against 107 s on its CPU backend. But hdfe_stream on a 16-vCPU CPU machine took
-22 s, and that machine costs about an eighth as much per hour as AWS's
+23 s, and that machine costs about an eighth as much per hour as AWS's
 smallest H100 machine.
 
 For plain OLS, 2SLS and logit with no fixed effects the answer is less clear-cut.
 At 20 million rows GPU libraries fitted them in 3 to 5 s (cuML, and a
-hand-written CuPy solve), 1.3 to 3.5 times faster than hdfe_stream on the CPU of
+hand-written CuPy solve), 1.3 to 3.4 times faster than hdfe_stream on the CPU of
 the same machine, and not at all below a few million rows. But
 hdfe_stream's own GPU options did little for them: `polars_engine="gpu"` was
 slower at every size, and `device="cuda"`, which runs a logit's IRLS steps on
-the GPU, saved 24% at 20 million rows and nothing below 5 million. And fixest,
+the GPU, saved 26% at 20 million rows, 10% at 5 million and nothing below that. And fixest,
 on the 16-vCPU CPU machine, fitted the same OLS in 2.9 s. See [plain
 regressions on the GPU](https://leetucker.github.io/hdfe-stream/benchmarks/gpu.html#plain-regressions-ols-iv-and-logit).
 [CPU and GPU](https://leetucker.github.io/hdfe-stream/benchmarks/gpu.html) has the numbers.

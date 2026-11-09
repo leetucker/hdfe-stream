@@ -4,8 +4,8 @@
  "memory_gb": 30.8,
  "platform": "Linux-7.0.0-1014-aws-x86_64-with-glibc2.39",
  "python": "3.14.8",
- "hdfe-stream": "0.7.0",
- "pyfixest": "0.60.0",
+ "hdfe-stream": "0.10.0",
+ "pyfixest": "0.70.0",
  "xhdfe": "2.28.1.20260929",
  "polars": "2.0.0",
  "numpy": "2.5.3",
@@ -18,18 +18,20 @@
  "glum": "3.4.1",
  "scipy": "1.18.1",
  "pandas": "3.0.6",
+ "measured": "2026-11-09",
+ "ec2": {
+  "run": "2026-11-09T1831Z_c8id.4xlarge_spot_pyfixest0.70-general",
+  "instance_type": "c8id.4xlarge",
+  "market": "spot",
+  "region": "us-east-2",
+  "az": "us-east-2a",
+  "memory_max": "96% of memory (systemd MemoryMax)",
+  "data_disk": "local NVMe (/dev/nvme1n1)",
+  "baseline": "2026-10-30T1226Z_c8id.4xlarge_spot_general-cpu"
+ },
  "R": "4.5.3",
  "fixest": "0.14.2",
  "julia": "1.13.2",
  "FixedEffectModels.jl": "2.1.0",
- "measured": "2026-10-30",
- "ec2": {
-  "run": "2026-10-30T1226Z_c8id.4xlarge_spot_general-cpu",
-  "instance_type": "c8id.4xlarge",
-  "market": "spot",
-  "region": "us-east-2",
-  "az": "us-east-2c",
-  "memory_max": "96% of memory (systemd MemoryMax)",
-  "data_disk": "local NVMe (/dev/nvme1n1)"
- }
+ "external_measured": "2026-10-30 (fixest, lm, glm and the other libraries' rows were not re-run)"
 }
