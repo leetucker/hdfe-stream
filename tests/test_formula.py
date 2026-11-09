@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from conftest import (FE_DOF_PF, TOL_BETA, TOL_RESID, TOL_SE, ensure_interactions,
+from conftest import (pf_attr, FE_DOF_PF, pf_collin_vars, TOL_BETA, TOL_RESID, TOL_SE, ensure_interactions,
                       pf_feols, rel, resid_sorted, scaled)
 
 pytest.importorskip("pyfixest")
@@ -129,8 +129,8 @@ def test_sample_and_collinearity_match_pyfixest(fitted, index):
     models, refs = fitted(index)
     for model in models:
         ref = refs[model.fml]
-        assert model.n_obs == ref._N, model.fml
-        dropped_ref = getattr(ref, "_collin_vars", None) or []
+        assert model.n_obs == pf_attr(ref, "N"), model.fml
+        dropped_ref = pf_collin_vars(ref)
         assert len(model.collin_vars) == len(dropped_ref), (
             model.fml, model.collin_vars, dropped_ref)
 
@@ -175,7 +175,7 @@ def test_exactly_collinear_covariates_are_dropped(fitted):
     dropped = set(model.collin_vars)
     assert any(d.startswith("year::") for d in dropped), dropped
     assert any("treat" in d for d in dropped), dropped
-    assert dropped == set(getattr(ref, "_collin_vars", None) or [])
+    assert dropped == set(pf_collin_vars(ref))
 
     assert model.coefnames == ["age_squared"]
 

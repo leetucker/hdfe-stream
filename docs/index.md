@@ -191,11 +191,6 @@ pip install "hdfe-stream[formula]"     # formula syntax needs pyfixest
 | `test` | the test suite |
 | `docs` | building this documentation (Sphinx) |
 
-On Python 3.15, pyfixest 0.60 (for the `formula` extra) has no wheels yet. It
-builds from source with a Rust toolchain and
-`PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1` set; everything else installs from
-wheels.
-
 Without `formula` you still get [`StreamingHDFE`](reference/lowlevel.md), the
 lower-level interface that takes column names or Polars expressions instead of a
 formula string.
@@ -241,8 +236,10 @@ since the packages differ by CUDA version. See
   set. See [GLM: not available](examples/glm.md#not-available).
 - **A converted result cannot recompute its own vcov**, because it holds no
   data. Ask for what you need at fit time via `cluster=`.
-- **Formula support pins a pyfixest range** (`>=0.60,<0.61`), because it uses
-  pyfixest's internal formula modules. `StreamingHDFE` has no such dependency.
+- **Formula support limits the pyfixest versions** (`>=0.60,<0.71`), because it
+  uses pyfixest's internal formula modules. `StreamingHDFE` has no such
+  dependency. The instrument block `y ~ x + [endog ~ instrument] | fe` and
+  expression slopes need pyfixest 0.70 or later.
 - **Needs scratch disk**, roughly the size of your data during the fit. Leave-out
   estimation adds to that: it memory-maps its row-sized accumulators rather than
   holding them, which is what keeps it inside a bounded memory footprint, at

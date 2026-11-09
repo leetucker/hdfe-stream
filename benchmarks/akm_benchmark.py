@@ -46,7 +46,7 @@ import csv
 import time
 from pathlib import Path
 
-from _harness import (DATA_DIR, EXTERNAL, RESULTS_DIR, data_path, external_command,
+from _harness import (DATA_DIR, EXTERNAL, RESULTS_DIR, pyfixest_n_obs, data_path, external_command,
                       external_missing, is_done, measure, panel_shape, run_child,
                       upsert_csv, write_machine_info)
 from _settings import hdfe_options
@@ -99,7 +99,7 @@ def run_pyfixest(variant, path):
                    fixef_rm="none", demeaner=demeaner)
     t_fit = time.perf_counter() - t0
     coefs = fit.coef().to_dict()
-    return {"t_read": t_read, "t_fit": t_fit, "n_obs": int(fit._N),
+    return {"t_read": t_read, "t_fit": t_fit, "n_obs": pyfixest_n_obs(fit),
             "coefs": {k: float(coefs[k]) for k in COEFS}}
 
 

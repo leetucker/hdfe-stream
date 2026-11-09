@@ -14,7 +14,7 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from conftest import FE_DOF_PF, TOL_BETA, TOL_SE, rel
+from conftest import pf_attr, FE_DOF_PF, TOL_BETA, TOL_SE, rel
 
 pf = pytest.importorskip("pyfixest")
 
@@ -65,7 +65,7 @@ def test_matches_pyfixest(data, fml, vcov, fixef_rm):
     path, frame = data
     with fit(path, fml, vcov=vcov, fixef_rm=fixef_rm) as res:
         ref = pyfixest_fit(frame, fml, vcov=vcov, fixef_rm=fixef_rm)
-        assert res.n_obs == ref._N
+        assert res.n_obs == pf_attr(ref, "N")
         assert rel(res.beta, ref.coef().to_numpy()) < TOL_BETA
         assert rel(res.se, ref.se().to_numpy()) < TOL_SE
 
@@ -122,7 +122,7 @@ def test_poisson_matches_pyfixest(data):
                                 fixef_rm=fixef_rm, tol=1e-11)
             ref = pf.fepois(fml, frame, fixef_rm=fixef_rm, iwls_tol=1e-12)
         with res:
-            assert res.n_obs == ref._N
+            assert res.n_obs == pf_attr(ref, "N")
             assert rel(res.beta, ref.coef().to_numpy()) < 1e-6
 
 

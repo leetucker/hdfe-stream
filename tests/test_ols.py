@@ -11,7 +11,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from conftest import (FE_DOF_PF, TOL_BETA, TOL_RESID, TOL_SE, TOL_STAT,
+from conftest import (pf_attr, FE_DOF_PF, TOL_BETA, TOL_RESID, TOL_SE, TOL_STAT,
                       cluster_spec, ensure_interactions, pf_feols, rel, scaled)
 
 pytest.importorskip("pyfixest")
@@ -106,7 +106,7 @@ def test_one_way_clustered_se_match_pyfixest(fits, references, fe):
         ref.vcov({"CRV1": cluster_spec(dim)})
         got = res.with_vcov({"CRV1": dim})
         assert rel(got.se, ref.se().to_numpy()) < TOL_SE, dim
-        assert got.df_t == pytest.approx(ref._df_t, abs=0.5), dim
+        assert got.df_t == pytest.approx(pf_attr(ref, "df_t"), abs=0.5), dim
 
 
 @pytest.mark.parametrize("fe", FE_SETS, ids=lambda fe: "+".join(fe))
@@ -131,7 +131,7 @@ def test_residuals_and_fixed_effects_match_pyfixest(fits, references, akm, fe):
     mine = res.resid().select(*keys, "resid", *fe_cols).collect()
     beta = ref.coef().to_numpy()
     # pyfixest's rows are the ones it kept (singletons are dropped)
-    used = akm.pandas.loc[ref._data.index]
+    used = akm.pandas.loc[pf_attr(ref, "data").index]
     theirs = pl.DataFrame({
         **{k: used[k].to_numpy() for k in keys},
         "resid_ref": ref.resid(),
@@ -150,7 +150,7 @@ def test_fit_statistics_match_pyfixest(fits, references, fe):
     res = fits[(tuple(fe), "explicit")]
     ref = references[tuple(fe)]
     ref.vcov("iid")
-    assert res.n_obs == ref._N
+    assert res.n_obs == pf_attr(ref, "N")
     for attr, ref_attr in [("r2", "_r2"), ("adj_r2", "_adj_r2"),
                            ("r2_within", "_r2_within"), ("rmse", "_rmse")]:
         assert rel(getattr(res, attr), getattr(ref, ref_attr)) < TOL_STAT, attr

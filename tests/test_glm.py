@@ -26,7 +26,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from conftest import FE_DOF_PF, TOL_BETA, TOL_SE, TOL_STAT, rel, scaled
+from conftest import pf_attr, FE_DOF_PF, TOL_BETA, TOL_SE, TOL_STAT, rel, scaled
 
 pytest.importorskip("pyfixest")
 
@@ -100,8 +100,8 @@ def assert_agrees(res, ref):
     assert res.coefnames == list(ref.coef().index)
     assert rel(res.beta, ref.coef().to_numpy()) < TOL_BETA
     assert rel(res.se, ref.se().to_numpy()) < TOL_SE
-    assert res.n_obs == ref._N
-    assert res.df_t == ref._df_t
+    assert res.n_obs == pf_attr(ref, "N")
+    assert res.df_t == pf_attr(ref, "df_t")
     assert rel(res.deviance, ref.deviance) < TOL_STAT
 
 
@@ -125,8 +125,8 @@ def test_fepois_matches_pyfixest(glm_panel, fml, vcov):
         ref = pf_glm("poisson", fml, pdf, vcov=vcov)
         assert_agrees(res, ref)
         assert res.family == "poisson" and res.diagnostics["irls"]["converged"]
-        assert rel(res.loglik, ref._loglik) < TOL_STAT
-        assert rel(res.pseudo_r2, ref._pseudo_r2) < 1e-8
+        assert rel(res.loglik, pf_attr(ref, "loglik")) < TOL_STAT
+        assert rel(res.pseudo_r2, pf_attr(ref, "pseudo_r2")) < 1e-8
 
 
 @pytest.mark.parametrize("vcov", VCOVS[:3], ids=VCOV_IDS[:3])
@@ -181,7 +181,7 @@ def test_several_models(glm_panel):
     path, pdf = glm_panel
     fml = "yp + yq ~ csw0(x1, x2) | worker_id + firm_id"
     with fit("poisson", fml, path, vcov="hetero") as multi:
-        refs = {(r._depvar, tuple(r._coefnames)): r
+        refs = {(pf_attr(r, "depvar"), tuple(pf_attr(r, "coefnames"))): r
                 for r in pf_glm("poisson", fml, pdf, vcov="hetero").to_list()}
         assert len(multi) == len(refs) == 6
         assert [res.depvar for res in multi] == ["yp"] * 3 + ["yq"] * 3

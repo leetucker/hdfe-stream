@@ -1,8 +1,10 @@
 """Formula front end: pyfixest syntax -> Polars expressions.
 
 Depends on pyfixest's *internal* formula modules (see `pyfixest_formula_api`),
-which is why the package pins a pyfixest range. Required for `feols_stream`;
-`StreamingHDFE` works without it.
+which is why the package pins a pyfixest range. Two generations of that
+internal API are supported (0.60, where a parsed formula's parts are strings,
+and 0.70, where they are formulaic objects); `parse_formula` hides the
+difference. Required for `feols_stream`; `StreamingHDFE` works without it.
 """
 
 from __future__ import annotations
@@ -13,7 +15,9 @@ import re
 import numpy as np
 import polars as pl
 
-from .feterms import parse_fe
+from dataclasses import dataclass
+
+from .feterms import _parse_fe_term, interactions_to_caret, parse_fe, rewrite_fe_interactions
 
 
 # --------------------------------------------------------------------------
@@ -48,6 +52,65 @@ def pyfixest_formula_api():
             "(pyfixest.estimation.formula), which this pyfixest version does not "
             "provide; pin a compatible pyfixest or use StreamingHDFE directly") from err
     return Formula, create_model_matrix
+
+
+@dataclass(frozen=True)
+class ParsedFormula:
+    """One model of a (possibly multiple-estimation) formula, in the form the
+    rest of the package uses, whichever pyfixest parsed it.
+
+    key : identifies the model (pyfixest's text for it; it differs between
+        pyfixest versions, so compare keys only within one parse)
+    dep, rhs : the dependent variable and the right-hand side (without fixed
+        effects; for IV, with the endogenous variables)
+    fe : the fixed-effect part, ``"a + b^c + d[t]"`` (interactions as ``^``)
+    iv : None, or ``(endogenous, first_stage_rhs)`` for an IV model
+    """
+    key: str
+    dep: str
+    rhs: str
+    fe: str
+    iv: tuple | None = None
+
+
+def parse_formula(fml):
+    """The models of a pyfixest-style formula, as `ParsedFormula`s.
+
+    Accepts fixed-effect interactions as ``a^b`` or ``a:b``. IV is
+    ``y ~ x | fe | endog ~ instrument`` with any pyfixest, and also
+    ``y ~ x + [endog ~ instrument] | fe`` with pyfixest 0.70 or later."""
+    Formula, _ = pyfixest_formula_api()
+    if _new_parser(Formula):
+        fml = rewrite_fe_interactions(fml, ":")
+        out = []
+        for s in Formula.parse(fml):
+            iv = None
+            if s.is_instrumental_variable:
+                fs = s.as_first_stage()
+                iv = (str(fs.dependent), str(fs.second_stage.rhs))
+            out.append(ParsedFormula(
+                s.render(), str(s.dependent), str(s.second_stage.rhs),
+                interactions_to_caret(s.fixed_effects_key or ""), iv))
+        return out
+    if re.search(r"\[[^\]]*~", fml):
+        raise ValueError(
+            "the bracketed IV syntax `y ~ x + [endog ~ instrument] | fe` needs pyfixest "
+            "0.70 or later; with this pyfixest write `y ~ x | fe | endog ~ instrument`")
+    fml = rewrite_fe_interactions(fml, "^")
+    out = []
+    for s in Formula.parse(fml):
+        dep, rhs = (t.strip() for t in s.second_stage.split("~", 1))
+        iv = None
+        if s.first_stage is not None:
+            # first stage "endog ~ instruments + exogenous"
+            iv = tuple(t.strip() for t in s.first_stage.split("~", 1))
+        out.append(ParsedFormula(s.formula, dep, rhs, s.fixed_effects or "", iv))
+    return out
+
+
+def _new_parser(Formula):
+    """True for pyfixest 0.70's parser (formulaic objects), False for 0.60's."""
+    return hasattr(Formula, "fixed_effect_specifications")
 
 
 _FUNCS = {
@@ -230,16 +293,15 @@ def compile_design(depvar, rhs, schema, levels, intercept=False):
 def _plan_formula(fml, lf):
     """Expand a pyfixest formula into groups of models that share a set of
     fixed effects (and therefore one pass 0/1 and one solve)."""
-    Formula, _ = pyfixest_formula_api()
     schema = lf.collect_schema()
-    specs = Formula.parse(fml)
+    specs = parse_formula(fml)
 
     # level discovery for all categorical variables (one streaming pass each)
     cats = set()
     for s in specs:
-        cats |= categorical_vars(s.second_stage.split("~", 1)[1], schema)
-        if s.first_stage is not None:
-            cats |= categorical_vars(s.first_stage.split("~", 1)[1], schema)
+        cats |= categorical_vars(s.rhs, schema)
+        if s.iv is not None:
+            cats |= categorical_vars(s.iv[1], schema)
     levels = {}
     for v in sorted(cats):
         u = lf.select(pl.col(v).drop_nulls().unique().sort()).collect(engine="streaming")
@@ -247,20 +309,19 @@ def _plan_formula(fml, lf):
 
     groups = {}
     for s in specs:
-        dep, rhs = (t.strip() for t in s.second_stage.split("~", 1))
-        fe = tuple(parse_fe(s.fixed_effects))
-        (dname, dexpr), cols = compile_design(dep, rhs, schema, levels, intercept=not fe)
+        fe = tuple(parse_fe(s.fe))
+        (dname, dexpr), cols = compile_design(s.dep, s.rhs, schema, levels, intercept=not fe)
         g = groups.setdefault(fe, {"y": {}, "x": {}, "models": []})
         g["y"][dname] = dexpr
-        model = {"fml": s.formula, "y": dname, "x": [nm for nm, _ in cols]}
+        model = {"fml": s.key, "y": dname, "x": [nm for nm, _ in cols]}
         extra = []
-        if s.first_stage is not None:
-            # first stage "endog ~ instruments + exogenous": its columns are the
-            # instrument set Z; the endogenous columns come from compiling the
-            # left-hand side as a right-hand side
-            endog, fs_rhs = (t.strip() for t in s.first_stage.split("~", 1))
-            _, fs_cols = compile_design(dep, fs_rhs, schema, levels, intercept=not fe)
-            _, en_cols = compile_design(dep, endog, schema, levels)
+        if s.iv is not None:
+            # the first stage's columns are the instrument set Z; the
+            # endogenous columns come from compiling the endogenous
+            # variables as a right-hand side
+            endog, fs_rhs = s.iv
+            _, fs_cols = compile_design(s.dep, fs_rhs, schema, levels, intercept=not fe)
+            _, en_cols = compile_design(s.dep, endog, schema, levels)
             model["iv"] = {"endog": [nm for nm, _ in en_cols], "z": [nm for nm, _ in fs_cols]}
             missing = [e for e in model["iv"]["endog"] if e not in model["x"]]
             if missing:
@@ -270,3 +331,16 @@ def _plan_formula(fml, lf):
             g["x"].setdefault(nm, ex)
         g["models"].append(model)
     return groups
+
+
+def slope_columns(groups, schema):
+    """Polars expressions for the varying-slope variables that are not columns
+    of the source: ``worker_id[t ** 2]`` slopes on the square of ``t``. Each
+    is named by its text, which is how the estimator looks it up."""
+    exprs = {}
+    for fe in groups:
+        for term in fe:
+            for sl in _parse_fe_term(term)[1]:
+                if sl not in schema and sl not in exprs:
+                    exprs[sl] = numeric_expr(sl).alias(sl)
+    return list(exprs.values())

@@ -2,8 +2,24 @@
 
 ## 0.10.0
 
-Fits with many variables no longer slow down sharply under a tight memory limit.
+Works with pyfixest 0.70 as well as 0.60, and accepts pyfixest 0.70's formula syntax. Fits with many
+variables no longer slow down sharply under a tight memory limit.
 
+- **pyfixest 0.60 through 0.70.** Formulas, `etable`, `summary` and `iplot` work with either.
+  Install either version with `hdfe-stream[formula]`.
+- **Fixed-effect interactions can be written `firm_id:year`**, as in pyfixest 0.70.
+  `firm_id^year` still works with both versions, without a deprecation warning.
+- **Instrumental variables can be written `y ~ x + [endog ~ instrument] | fe`**
+  (pyfixest 0.70 and later). `y ~ x | fe | endog ~ instrument` works with both versions.
+- **Several outcomes can be written `sw(y, y2) ~ x`.** `y + y2 ~ x` still works.
+- **Varying slopes can be expressions** (pyfixest 0.70 and later): `worker_id[t, t ** 2]`.
+  They can also be on an interacted dimension, `worker_id:firm_id[t]`.
+  Slopes without the intercept, `worker_id[[t]]`, are not available yet and say so.
+- **Coefficient and model names are pyfixest's own for the version installed.** With pyfixest
+  0.70, a model's `fml` is pyfixest 0.70's spelling of it (`y ~ 1 + x`, `a:b`).
+- **For packages built on `hdfe_stream.core`:** `hdfe_stream.core.formula.parse_formula` returns
+  the models of a formula in one form for both pyfixest versions, in place of reading
+  pyfixest's parsed formula directly. `pyfixest_formula_api` is unchanged.
 - **Fits with more than 8 variables are much faster under a tight memory limit.** The solve needs
   an array with a row for every fixed-effect level and a column for every variable. When that
   array was more than a fifth of the memory left under `max_memory_gb`, the fit instead wrote a

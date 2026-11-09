@@ -12,7 +12,7 @@ from .core.typing import PathLike, Source, Vcov
 from .estimator import StreamingHDFE
 from .glm import StreamingGLM
 from .core.report import _log
-from .core.formula import _plan_formula, pyfixest_formula_api
+from .core.formula import _plan_formula, parse_formula, slope_columns
 from .core.profile import Profile, combine_profiles
 from .core.results import HDFEMulti, HDFEResult
 from .core.results_base import vcov_key
@@ -116,6 +116,9 @@ def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options, bootclus
     _log(options.get("verbose", True), f"planning {fml!r} (formula expansion, level discovery)",
          options.get("logger"), options.get("log_level"))
     groups = _plan_formula(fml, lf)
+    derived = slope_columns(groups, lf.collect_schema())
+    if derived:
+        lf = lf.with_columns(derived)
     if profile:
         profiles = [est._profile(lf, data, vcov, cluster, fe_dof, bootcluster)
                     for fe, g in groups.items() for est in estimators(fe, g)]
@@ -133,8 +136,7 @@ def _fit_formula(fml, data, estimators, vcov, cluster, fe_dof, options, bootclus
             for r in results:
                 r.cleanup()
         raise
-    Formula, _ = pyfixest_formula_api()
-    order = {s.formula: i for i, s in enumerate(Formula.parse(fml))}
+    order = {s.key: i for i, s in enumerate(parse_formula(fml))}
     results.sort(key=lambda r: order.get(r.fml, len(order)))
     return results[0] if len(results) == 1 else HDFEMulti(results)
 

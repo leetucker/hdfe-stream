@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import FE_DOF_PF, TOL_BETA, TOL_SE, rel
+from conftest import pf_attr, FE_DOF_PF, TOL_BETA, TOL_SE, rel
 
 pytest.importorskip("pyfixest")
 
@@ -62,7 +62,7 @@ def test_crv3_matches_pyfixest(small, tmp_path, fml, cluster, options):
         assert res.coefnames == list(ref.coef().index)
         assert rel(res.beta, ref.coef().to_numpy()) < TOL_BETA
         assert rel(res.se, ref.se().to_numpy()) < TOL_SE
-        assert res.df_t == ref._df_t
+        assert res.df_t == pf_attr(ref, "df_t")
         # CRV1 by the same variable comes along, and can be switched to
         crv1 = res.with_vcov({"CRV1": cluster})
         ref.vcov({"CRV1": cluster})

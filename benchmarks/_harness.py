@@ -504,3 +504,10 @@ def write_machine_info(path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(machine_info(), indent=1) + "\n")
+
+
+def pyfixest_n_obs(fit):
+    """The number of observations a pyfixest fit used (a private attribute in
+    pyfixest 0.60, `sample_info.n_obs` from 0.70)."""
+    info = getattr(fit, "sample_info", None)
+    return int(info.n_obs if info is not None else fit._N)

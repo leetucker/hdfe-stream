@@ -48,16 +48,20 @@ event = feols_stream(
 
 Any number of dimensions works, including one (a within regression) and none
 (OLS with an intercept); see [one fixed effect, or none](fewer_fixed_effects.md).
-`^` combines columns into one dimension, with a separate effect per firm–year
-cell:
+`:` combines columns into one dimension, with a separate effect per firm–year
+cell (`^`, the fixest spelling, works too):
 
 ```python
-feols_stream("log_earn ~ age_squared + age_cubed | worker_id + firm_id^year",
+feols_stream("log_earn ~ age_squared + age_cubed | worker_id + firm_id:year",
              data, workdir="scratch", vcov={"CRV1": "firm_id"})
 ```
 
-Varying slopes on the streamed dimension use fixest syntax, `worker_id[t]`; see
-[varying slopes](varying_slopes.md).
+Varying slopes on the streamed dimension use the same syntax as pyfixest,
+`worker_id[t]`; see [varying slopes](varying_slopes.md).
+
+Several outcomes are written `sw(log_earn, y2) ~ ...`. An instrumental-variable
+model is written `y ~ x + [endog ~ instrument] | fe` (pyfixest 0.70 and later)
+or `y ~ x | fe | endog ~ instrument`.
 
 **Singletons.** Observations alone in their level of some fixed effect are
 dropped, as in pyfixest, repeating until none is left, since dropping one can

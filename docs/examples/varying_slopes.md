@@ -40,9 +40,15 @@ A covariate inside the span of the worker intercepts and their trends cannot be
 identified, and is dropped as collinear. Here `age` is birth year plus `t`, so
 `age_squared` lies in the span of `{1, t, t2}` within a worker.
 
+Slopes can be expressions of columns, as in pyfixest 0.70 and later:
+`worker_id[t, t ** 2]` is a worker intercept plus slopes on `t` and its square.
+The dimension that carries the slopes can be an interaction, `worker_id:firm_id[t]`
+(the slopes go on the last name, as in pyfixest).
+
 Varying slopes are available on the streamed dimension only, and only one
 dimension may carry them. They are not available with `solver="within"`, or for
-Poisson, logit and probit.
+Poisson, logit and probit. Slopes without the intercept, `worker_id[[t]]`, are
+not available; use `worker_id[t]`.
 
 ## The streamed dimension
 

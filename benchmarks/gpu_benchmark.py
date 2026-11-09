@@ -56,6 +56,7 @@ from pathlib import Path
 
 from _harness import (
     DATA_DIR,
+    pyfixest_n_obs,
     RESULTS_DIR,
     data_path,
     is_done,
@@ -171,7 +172,7 @@ def run_pyfixest(variant, path):
     coefs = fit.coef().to_dict()
     notes = sorted({str(w.message).strip().splitlines()[0][:160] for w in caught
                     if not issubclass(w.category, (DeprecationWarning, FutureWarning))})
-    return {"t_read": t_read, "t_fit": t_fit, "n_obs": int(fit._N),
+    return {"t_read": t_read, "t_fit": t_fit, "n_obs": pyfixest_n_obs(fit),
             "coefs": {k: float(coefs[k]) for k in COEFS}, "gpu_peak_mb": gpu.peak_mb,
             "notes": "; ".join(notes)}
 

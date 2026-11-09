@@ -15,7 +15,7 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from conftest import FE_DOF_PF
+from conftest import pf_attr, FE_DOF_PF
 
 pf = pytest.importorskip("pyfixest")
 
@@ -147,7 +147,7 @@ def test_sample_is_the_rows_pyfixest_used(path, frame):
             warnings.simplefilter("ignore")
             ref = pf.feols("y ~ x | w + f", frame)
         used = res.sample().filter(pl.col("in_sample")).collect()["row_id"].to_list()
-        assert used == sorted(ref._data.index.tolist())
+        assert used == sorted(pf_attr(ref, "data").index.tolist())
 
 
 def test_nothing_is_dropped_as_a_singleton_when_asked_not_to(path):

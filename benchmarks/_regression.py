@@ -23,7 +23,7 @@ import argparse
 import time
 from pathlib import Path
 
-from _harness import (DATA_DIR, RESULTS_DIR, external_command,
+from _harness import (DATA_DIR, RESULTS_DIR, pyfixest_n_obs, external_command,
                       external_missing, general_data_path, is_done, measure,
                       run_child, upsert_csv, write_machine_info)
 
@@ -107,7 +107,7 @@ def run_pyfixest(task, fe, path):
         fit = pf.feglm(f"yb ~ {rhs}", data=frame, family=task, vcov="iid")
     t_fit = time.perf_counter() - t0
     coefs, ses = fit.coef(), fit.se()
-    return packed(t_read, t_fit, fit._N, list(coefs.index), coefs.values, ses.values)
+    return packed(t_read, t_fit, pyfixest_n_obs(fit), list(coefs.index), coefs.values, ses.values)
 
 
 def run_statsmodels(task, fe, path):

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hdfe-stream"
-version = "0.9.2"
+version = "0.10.0"
 description = "Out-of-core regression with several high-dimensional fixed effects: OLS, Poisson, logit and probit, with AKM/KSS variance decompositions"
 readme = "README.md"
 license = "MIT"
@@ -47,7 +47,7 @@ Changelog = "https://github.com/leetucker/hdfe-stream/blob/main/CHANGELOG.md"
 within = ["within-py>=0.3.0"]
 amg = ["pyamg>=5.1"]
 formula = [
-    "pyfixest>=0.60.0,<0.61.0",
+    "pyfixest>=0.60.0,<0.71.0",
     "formulaic>=1.0",
     "pandas>=2.0",
 ]
@@ -56,6 +56,7 @@ all = ["hdfe-stream[within,amg,formula]"]
 # xhdfe is compared too, but installs from source (see benchmarks/README.md)
 benchmark = [
     "hdfe-stream[formula]",
+    "pyfixest>=0.70.0",      # its default demeaner (LSMR) is the one compared against
     "matplotlib>=3.7",
     # the OLS, IV, logit and probit benchmarks' competitors
     "scikit-learn",

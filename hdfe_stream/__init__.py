@@ -72,7 +72,8 @@ Pass 1 (streamed + numba)    read the sorted rows in slices of whole fe[0]
                              cross-products when assembly="cells"); keep cells
                              of fe[0] groups with more than one cell as
                              memory-mapped arrays; Jacobi diagonal and step
-                             2's right-hand side, chunk by chunk.
+                             2's right-hand side (a file when it is large),
+                             chunk by chunk.
 Step 2 (solver, per block)   solve  S Gamma = D_o' M_0 V,  S = D_o' M_0 D_o,
                              for all variables V in blocks of `rhs_block`
                              columns: "explicit" (sparse S built once, block
@@ -166,7 +167,7 @@ def _detect_version():
         from importlib.metadata import version
         return version("hdfe-stream")
     except Exception:                 # source tree without an installed dist
-        return "0.9.2"
+        return "0.10.0"
 
 
 __version__ = _detect_version()

@@ -10,7 +10,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from conftest import FE_DOF_PF, TOL_SE, pf_feols, rel
+from conftest import pf_attr, FE_DOF_PF, TOL_SE, pf_feols, rel
 
 pytest.importorskip("pyfixest")
 
@@ -214,7 +214,7 @@ def test_adapter_matches_a_real_pyfixest_fit(rich, fits):
     adapter = fits["ols"].to_pyfixest()
     assert list(adapter.coef().index) == list(ref.coef().index)
     assert rel(adapter.se().to_numpy(), ref.se().to_numpy()) < TOL_SE
-    assert adapter._vcov_type == ref._vcov_type == "CRV"
+    assert adapter._vcov_type == pf_attr(ref, "vcov_type") == "CRV"
 
 
 def test_adapter_cannot_recompute_the_vcov(fits):

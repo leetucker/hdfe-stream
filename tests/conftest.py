@@ -187,6 +187,39 @@ def pf_feols(fml, panel, tol=1e-12, **kwargs):
                         fixef_maxiter=500_000, **kwargs)
 
 
+def pf_attr(ref, name):
+    """A fitted pyfixest model's value for what 0.60 kept in a private
+    attribute: the same name on 0.60, the typed component that replaced it on
+    0.70 (where the private names are gone or deprecated)."""
+    if not hasattr(ref, "coeftable"):                       # pyfixest 0.60
+        return getattr(ref, "_" + name)
+    vc, fs = ref.variance_covariance, ref.fitstat
+    return {
+        "df_t": lambda: vc.df_t,
+        "vcov": lambda: vc.vcov,
+        "G": lambda: vc.G,
+        "vcov_type": lambda: vc.spec.vcov_type,
+        "N": lambda: ref.sample_info.n_obs,
+        "k_fe": lambda: ref.fixef_counts.n_levels_by_fe,
+        "scores": lambda: ref.sandwich.scores,
+        "tZX": lambda: np.linalg.inv(ref.sandwich.bread),
+        "loglik": lambda: fs.loglik,
+        "pseudo_r2": lambda: fs.pseudo_r2,
+        "depvar": lambda: ref.model.depvar,
+        "coefnames": lambda: list(ref.coef().index),
+        "data": lambda: ref.model_matrix.dependent,
+    }[name]()
+
+
+def pf_collin_vars(ref):
+    """The coefficients a pyfixest fit dropped as collinear (a private list
+    in pyfixest 0.60, `collinearity` in 0.70)."""
+    check = getattr(ref, "collinearity", None)
+    if check is not None:
+        return list(check.dropped_coef_names)
+    return list(getattr(ref, "_collin_vars", None) or [])
+
+
 def resid_sorted(result):
     """Residuals of a streaming result, sorted, as a numpy array.
 

@@ -32,7 +32,7 @@ import argparse
 import time
 from pathlib import Path
 
-from _harness import (DATA_DIR, RESULTS_DIR, glm_data_path, is_done, measure,
+from _harness import (DATA_DIR, RESULTS_DIR, pyfixest_n_obs, glm_data_path, is_done, measure,
                       panel_shape, run_child, upsert_csv, write_machine_info)
 from _settings import hdfe_options
 
@@ -80,7 +80,7 @@ def run_pyfixest(family, path):
                        demeaner=pf.LsmrDemeaner())
     t_fit = time.perf_counter() - t0
     coefs = fit.coef().to_dict()
-    return {"t_read": t_read, "t_fit": t_fit, "n_obs": int(fit._N),
+    return {"t_read": t_read, "t_fit": t_fit, "n_obs": pyfixest_n_obs(fit),
             "coefs": {k: float(coefs[k]) for k in COEFS}}
 
 

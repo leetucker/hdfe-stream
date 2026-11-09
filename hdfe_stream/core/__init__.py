@@ -8,7 +8,7 @@ Stable names
 
     core.typing        PathLike, Source, Vcov, Variables
     core.formula       compile_design, categorical_vars, numeric_expr,
-                       pyfixest_formula_api
+                       parse_formula, pyfixest_formula_api
     core.feterms       parse_fe
     core.report        warn
     core.utils         as_lazy, single_blas

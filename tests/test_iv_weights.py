@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from conftest import (FE_DOF_PF, TOL_BETA, TOL_RESID, TOL_SE, TOL_STAT,
+from conftest import (pf_attr, FE_DOF_PF, TOL_BETA, TOL_RESID, TOL_SE, TOL_STAT,
                       pf_feols, rel, resid_sorted, scaled)
 
 pytest.importorskip("pyfixest")
@@ -82,7 +82,7 @@ def test_fit_statistics_match_pyfixest(fitted, index):
     fits, refs = fitted
     res, ref = fits[index].with_vcov("iid"), refs[index]
     ref.vcov("iid")
-    assert res.n_obs == ref._N
+    assert res.n_obs == pf_attr(ref, "N")
     for attr, ref_attr in [("r2", "_r2"), ("adj_r2", "_adj_r2"),
                            ("r2_within", "_r2_within"),
                            ("adj_r2_within", "_adj_r2_within"), ("rmse", "_rmse")]:

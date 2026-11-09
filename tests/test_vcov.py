@@ -17,7 +17,7 @@ from itertools import combinations
 import numpy as np
 import pytest
 
-from conftest import FE_DOF_PF, TOL_BETA, TOL_SE, TOL_VCOV, pf_feols, rel
+from conftest import pf_attr, FE_DOF_PF, TOL_BETA, TOL_SE, TOL_VCOV, pf_feols, rel
 
 pytest.importorskip("pyfixest")
 
@@ -69,8 +69,8 @@ def fitted(rich, tmp_path_factory):
 def test_two_way_vcov_matches_pyfixest(fitted, index):
     fits, refs = fitted
     res, ref = fits[index], refs[index]
-    scale = np.max(np.abs(ref._vcov))
-    assert np.max(np.abs(res.vcov - ref._vcov)) / scale < TOL_VCOV
+    scale = np.max(np.abs(pf_attr(ref, "vcov")))
+    assert np.max(np.abs(res.vcov - pf_attr(ref, "vcov"))) / scale < TOL_VCOV
 
 
 @pytest.mark.parametrize("index", range(len(CASES)), ids=IDS)
@@ -86,8 +86,8 @@ def test_two_way_degrees_of_freedom_match_pyfixest(fitted, index):
     fits, refs = fitted
     res, ref = fits[index], refs[index]
     cluster = CASES[index][1]
-    assert res.df_t == pytest.approx(ref._df_t, abs=0.5)
-    assert min(res.n_clusters[cluster]) == min(ref._G[:2])
+    assert res.df_t == pytest.approx(pf_attr(ref, "df_t"), abs=0.5)
+    assert min(res.n_clusters[cluster]) == min(pf_attr(ref, "G")[:2])
 
 
 @pytest.mark.parametrize("index", range(len(CASES)), ids=IDS)
@@ -116,9 +116,9 @@ def test_three_way_matches_inclusion_exclusion(rich, workdir):
     frame = rich.pandas
 
     ref = pf_feols(fml, rich, vcov="hetero")
-    scores, bread = ref._scores, np.linalg.inv(ref._tZX)
-    n_obs = ref._N
-    n_params = len(ref.coef()) + sum(ref._k_fe) - 1
+    scores, bread = pf_attr(ref, "scores"), np.linalg.inv(pf_attr(ref, "tZX"))
+    n_obs = pf_attr(ref, "N")
+    n_params = len(ref.coef()) + sum(pf_attr(ref, "k_fe")) - 1
 
     group_counts = [frame[w].nunique() for w in ways]
     g_min = min(group_counts)
