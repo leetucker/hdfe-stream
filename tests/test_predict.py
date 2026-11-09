@@ -16,7 +16,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from conftest import FE_DOF_PF, scaled
+from conftest import FE_DOF_PF, pf_tolerance, scaled
 
 pf = pytest.importorskip("pyfixest")
 
@@ -36,7 +36,7 @@ def fit(fml, source, fn=feols_stream, *args, **kwargs):
 def pf_predict(fml, train, newdata, **kwargs):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        model = pf.feols(fml, train.to_pandas(), fixef_tol=1e-12, **kwargs)
+        model = pf.feols(fml, train.to_pandas(), **pf_tolerance(), **kwargs)
         return model.predict(newdata=newdata.to_pandas(), atol=1e-14, btol=1e-14)
 
 

@@ -10,12 +10,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from conftest import (pf_attr, FE_DOF_PF, TOL_BETA, TOL_RESID, TOL_SE, TOL_STAT,
+from conftest import (pf_attr, pf_rmse_unweighted_scale, FE_DOF_PF, TOL_BETA, TOL_RESID, TOL_SE, TOL_STAT,
                       pf_feols, rel, resid_sorted, scaled)
 
 pytest.importorskip("pyfixest")
 
 from hdfe_stream import feols_stream  # noqa: E402
+from hdfe_stream.core.formula import parse_formula  # noqa: E402
 
 # (formula, weight options)
 CASES = [
@@ -86,6 +87,8 @@ def test_fit_statistics_match_pyfixest(fitted, index):
     for attr, ref_attr in [("r2", "_r2"), ("adj_r2", "_adj_r2"),
                            ("r2_within", "_r2_within"),
                            ("adj_r2_within", "_adj_r2_within"), ("rmse", "_rmse")]:
+        if attr == "rmse" and pf_rmse_unweighted_scale(CASES[index][1]):
+            continue
         mine, theirs = getattr(res, attr), getattr(ref, ref_attr)
         # pyfixest reports NaN for some statistics under IV; we must agree on
         # which ones are undefined, not just on the finite values
@@ -128,8 +131,6 @@ def test_first_stage_f_matches_wald_statistic(rich, tmp_path_factory, index, key
 
     The statistic depends on the vcov, so each flavor needs its own fit.
     """
-    from pyfixest.estimation.formula.parse import Formula
-
     fml, options = CASES[index]
     kwargs = reference_kwargs(options)
     base = tmp_path_factory.mktemp("ivf")
@@ -137,15 +138,15 @@ def test_first_stage_f_matches_wald_statistic(rich, tmp_path_factory, index, key
     res = feols_stream(fml, rich.src, workdir=base / key.replace(":", "_"), vcov=spec,
                        fe_dof=FE_DOF_PF, verbose=False, tol=1e-11, **options)
 
-    spec_parsed = Formula.parse(fml)[0]
+    (spec_parsed,) = parse_formula(fml)
+    endog, first_rhs = spec_parsed.iv
     model = pf_feols(fml, rich, vcov=spec, **kwargs)
-    first = pf_feols(f"{spec_parsed.first_stage} | {spec_parsed.fixed_effects}",
-                     rich, vcov=spec, **kwargs)
+    first = pf_feols(f"{endog} ~ {first_rhs} | {spec_parsed.fe}", rich, vcov=spec, **kwargs)
 
     excluded = [c for c in first.coef().index if c not in model.coef().index]
     idx = [list(first.coef().index).index(c) for c in excluded]
     coefs = first.coef().to_numpy()[idx]
-    wald = coefs @ np.linalg.solve(first._vcov[np.ix_(idx, idx)], coefs) / len(idx)
+    wald = coefs @ np.linalg.solve(pf_attr(first, "vcov")[np.ix_(idx, idx)], coefs) / len(idx)
 
     assert rel(res.f_stat_1st_stage[0], wald) < 1e-7
     res.cleanup()

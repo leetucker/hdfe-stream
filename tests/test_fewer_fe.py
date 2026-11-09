@@ -13,7 +13,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from conftest import (pf_attr, FE_DOF_PF, TOL_BETA, TOL_RESID, TOL_SE, TOL_STAT,
+from conftest import (pf_attr, pf_rmse_unweighted_scale, FE_DOF_PF, TOL_BETA, TOL_RESID, TOL_SE, TOL_STAT,
                       ensure_interactions, pf_feols, rel, resid_sorted, scaled)
 
 pytest.importorskip("pyfixest")
@@ -91,6 +91,8 @@ def test_fit_statistics_match_pyfixest(fitted, index):
     for attr, ref_attr in [("r2", "_r2"), ("adj_r2", "_adj_r2"),
                            ("r2_within", "_r2_within"),
                            ("adj_r2_within", "_adj_r2_within"), ("rmse", "_rmse")]:
+        if attr == "rmse" and pf_rmse_unweighted_scale(CASES[index][1]):
+            continue
         mine, theirs = getattr(res, attr), getattr(ref, ref_attr)
         # no within R2 without fixed effects, and none of these under IV:
         # the two must agree on which are undefined, not just on the values
@@ -216,3 +218,19 @@ def test_leave_out_needs_two_fixed_effects(rich, workdir, fml):
     with feols_stream(fml, rich.src, workdir=workdir, verbose=False) as res:
         with pytest.raises(ValueError, match="two fixed effects"):
             res.leave_out_kss()
+
+
+def test_rmse_divides_by_the_sum_of_the_weights(rich, tmp_path):
+    """As fixest: sqrt(sum w e^2 / sum w), so it does not depend on the scale
+    of analytic weights (pyfixest 0.60 divides by the number of rows)."""
+    frame = rich.frame.with_columns((pl.col("wa") * 7.0).alias("wa7"))
+    path = tmp_path / "w.parquet"
+    frame.write_parquet(path)
+    a = feols_stream("log_earn ~ age_squared", path, weights="wa", workdir=tmp_path / "a",
+                     verbose=False)
+    b = feols_stream("log_earn ~ age_squared", path, weights="wa7", workdir=tmp_path / "b",
+                     verbose=False)
+    sum_w = frame.drop_nulls(["log_earn", "age_squared", "wa"])["wa"].sum()
+    assert rel(a.rmse, b.rmse) < 1e-12
+    assert rel(a.rmse, np.sqrt(a.rss / sum_w)) < 1e-12
+    a.cleanup(), b.cleanup()

@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from scipy import stats
 
-from conftest import FE_DOF_PF, rel
+from conftest import FE_DOF_PF, pf_tolerance, pf_wald, rel
 
 pf = pytest.importorskip("pyfixest")
 
@@ -39,7 +39,7 @@ def theirs(fml, frame, fn=None, **kwargs):
         if fn == "fepois":
             return pf.fepois(fml, frame, iwls_tol=1e-12, demeaner=pf.LsmrDemeaner(
                 fixef_atol=1e-12, fixef_btol=1e-12), **kwargs)
-        return pf.feols(fml, frame, fixef_tol=1e-12, **kwargs)
+        return pf.feols(fml, frame, **pf_tolerance(), **kwargs)
 
 
 @pytest.fixture(scope="module")
@@ -93,7 +93,7 @@ def test_wald_all_zero(pair, key):
     """R = I, q = 0: pyfixest's F statistic; the p-value from F(k, df_t)."""
     res, ref = pair[key]
     got = res.wald_test()
-    want = ref.wald_test()
+    want = pf_wald(ref)
     assert got["distribution"] == "F" and got["df1"] == 4 and got["df2"] == res.df_t
     assert rel(got["statistic"], want["statistic"]) < 1e-7
     assert got["pvalue"] == pytest.approx(stats.f.sf(got["statistic"], 4, res.df_t),
@@ -108,7 +108,7 @@ def test_wald_general_hypothesis_chi2(pair):
     got = res.wald_test(R, q, distribution="chi2")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        want = ref.wald_test(R, q, distribution="chi2")
+        want = pf_wald(ref, R, q, distribution="chi2")
     assert rel(got["statistic"], want["statistic"]) < 1e-7
     assert rel(got["pvalue"], want["pvalue"]) < 1e-6
     # F for the same hypothesis: W / 2 against F(2, df_t), not switched to chi2
@@ -165,7 +165,7 @@ def test_wald_glm_defaults_to_chi2(rich):
     ref = theirs(fml, frame.to_pandas(), "fepois", vcov={"CRV1": "firm_id"})
     with res:
         got = res.wald_test()
-        want = ref.wald_test(distribution="chi2")
+        want = pf_wald(ref, distribution="chi2")
         assert got["distribution"] == "chi2" and got["df2"] is None
         assert rel(got["statistic"], want["statistic"]) < 1e-6
         ci, ci_ref = res.confint(), ref.confint()

@@ -999,7 +999,7 @@ class _InferenceMixin:
             collin_vars=dropped, diagnostics=diag, all_vcovs=vc, r2=float(r2),
             adj_r2=float(1 - (1 - r2) * _ratio(N - 1, N - k - k_fe_r2)),
             adj_r2_within=float(1 - (1 - r2w) * _ratio(N - k_fe_r2, N - k - k_fe_r2)),
-            rmse=float(np.sqrt(rss / N)) if not iv else np.nan, is_iv=bool(iv), first_stage=first_stage,
+            rmse=float(np.sqrt(rss / self.wsum)) if not iv else np.nan, is_iv=bool(iv), first_stage=first_stage,
             f_stat_1st_stage=f_stats, iv_diag=iv_diag,
             n_clusters=n_clusters,
             weights=self.weights_name, weights_type=self.weights_type, _run=self._run,

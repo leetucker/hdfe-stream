@@ -96,13 +96,23 @@ def repeated(pdf, col="fw"):
     return pdf.loc[pdf.index.repeat(pdf[col])].reset_index(drop=True)
 
 
+def loosened(tol, family):
+    """pyfixest 0.70's probit stops iterating earlier than its `iwls_tol`
+    says: tightening the tolerance moves its estimates towards ours (1e-7 away
+    at 1e-12, 1e-8 at 1e-14, and a tighter one fails in step-halving). So the
+    comparison is looser for probit there; 0.60 and the logit agree to 1e-8."""
+    from hdfe_stream.core.reporting import _has_typed_components
+
+    return max(tol, 5e-5) if family == "probit" and _has_typed_components() else tol
+
+
 def assert_agrees(res, ref):
     assert res.coefnames == list(ref.coef().index)
-    assert rel(res.beta, ref.coef().to_numpy()) < TOL_BETA
-    assert rel(res.se, ref.se().to_numpy()) < TOL_SE
+    assert rel(res.beta, ref.coef().to_numpy()) < loosened(TOL_BETA, res.family)
+    assert rel(res.se, ref.se().to_numpy()) < loosened(TOL_SE, res.family)
     assert res.n_obs == pf_attr(ref, "N")
     assert res.df_t == pf_attr(ref, "df_t")
-    assert rel(res.deviance, ref.deviance) < TOL_STAT
+    assert rel(res.deviance, ref.deviance) < loosened(TOL_STAT, res.family)
 
 
 # -------------------------------------------------------------------- Poisson
@@ -328,8 +338,8 @@ def test_low_level_estimator(glm_panel):
     with res:
         pdf = pdf.assign(x1sq=pdf["x1"] ** 2)
         ref = pf_glm("probit", "yb ~ x1 + x1sq | firm_id", pdf, vcov="hetero")
-        assert rel(res.beta, ref.coef().to_numpy()) < TOL_BETA
-        assert rel(res.se, ref.se().to_numpy()) < TOL_SE
+        assert rel(res.beta, ref.coef().to_numpy()) < loosened(TOL_BETA, "probit")
+        assert rel(res.se, ref.se().to_numpy()) < loosened(TOL_SE, "probit")
 
 
 def test_not_converged_warns(glm_panel):

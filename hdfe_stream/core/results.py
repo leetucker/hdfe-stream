@@ -83,7 +83,9 @@ class HDFEResult(RegressionResult):
     adj_r2_within : float
         Adjusted within R-squared; nan for GLMs.
     rmse : float
-        Root mean squared error; nan for GLMs.
+        Root mean squared error, the weighted sum of squared residuals over the
+        sum of the weights (the number of observations without weights); nan
+        for GLMs.
     family : str or None
         ``"poisson"``, ``"logit"`` or ``"probit"`` for a GLM; None for OLS.
     deviance : float

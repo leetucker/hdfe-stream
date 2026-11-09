@@ -17,7 +17,7 @@ import polars as pl
 
 from dataclasses import dataclass
 
-from .feterms import _parse_fe_term, interactions_to_caret, parse_fe, rewrite_fe_interactions
+from .feterms import _parse_fe_term, _split_top, interactions_to_caret, parse_fe, rewrite_fe_interactions
 
 
 # --------------------------------------------------------------------------
@@ -73,6 +73,16 @@ class ParsedFormula:
     iv: tuple | None = None
 
 
+def _rhs_text(s):
+    """A model's right-hand side as text. pyfixest 0.70 writes the intercept
+    into it as a `1 +` term when there is one, and leaves it out (rather than
+    writing `- 1`) when the formula removed it, so say so with a `0 +`."""
+    rhs = str(s.second_stage.rhs)
+    if s.render().split("~", 1)[1].lstrip().startswith("0") and not rhs.lstrip().startswith(("0", "1")):
+        rhs = f"0 + {rhs}"
+    return rhs
+
+
 def parse_formula(fml):
     """The models of a pyfixest-style formula, as `ParsedFormula`s.
 
@@ -82,15 +92,21 @@ def parse_formula(fml):
     Formula, _ = pyfixest_formula_api()
     if _new_parser(Formula):
         fml = rewrite_fe_interactions(fml, ":")
+        # pyfixest 0.70 sorts the fixed effects in its key; the order written is
+        # the order the dimensions are streamed in, so read it from the text
+        parts = _split_top(fml, "|")[0]
+        fe = interactions_to_caret(parts[1].strip()) if len(parts) > 1 else ""
+        expands = bool(re.search(r"\b(?:c?sw0?)\s*\(", fe))     # sw(a, b) in the fixed effects
         out = []
         for s in Formula.parse(fml):
             iv = None
             if s.is_instrumental_variable:
                 fs = s.as_first_stage()
-                iv = (str(fs.dependent), str(fs.second_stage.rhs))
+                iv = (str(fs.dependent), _rhs_text(fs))
             out.append(ParsedFormula(
-                s.render(), str(s.dependent), str(s.second_stage.rhs),
-                interactions_to_caret(s.fixed_effects_key or ""), iv))
+                s.render(), str(s.dependent), _rhs_text(s),
+                (interactions_to_caret(s.fixed_effects_key or "") if expands
+                 else fe if s.fixed_effects_key else ""), iv))
         return out
     if re.search(r"\[[^\]]*~", fml):
         raise ValueError(

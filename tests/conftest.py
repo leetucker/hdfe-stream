@@ -170,6 +170,38 @@ def cluster_spec(dim):
     return interaction_name(dim)
 
 
+def pf_rmse_unweighted_scale(options):
+    """True when pyfixest's RMSE is not comparable: hdfe_stream divides the
+    weighted sum of squared residuals by the sum of the weights, as fixest and
+    pyfixest 0.70 do, where 0.60 divides by the number of observations. They
+    agree without weights, under frequency weights, and on 0.70."""
+    from hdfe_stream.core.reporting import _has_typed_components
+
+    return (not _has_typed_components() and options.get("weights") is not None
+            and options.get("weights_type", "aweights") != "fweights")
+
+
+def pf_wald(ref, *args, **kwargs):
+    """pyfixest's `wald_test` as a dict: a dict on 0.60, a `WaldTest` on 0.70."""
+    out = ref.wald_test(*args, **kwargs)
+    if isinstance(out, dict) or not hasattr(out, "stat"):
+        return out
+    return {"statistic": out.stat, "pvalue": out.pvalue, "df1": out.df1,
+            "df2": out.df2, "distribution": out.distribution}
+
+
+def pf_tolerance(tol=1e-12):
+    """Keyword arguments that make `pf.feols` demean to `tol`: `fixef_tol` on
+    pyfixest 0.60, which 0.70 replaced with a demeaner object."""
+    import inspect
+
+    import pyfixest as pf
+
+    if "fixef_tol" in inspect.signature(pf.feols).parameters:
+        return {"fixef_tol": tol}
+    return {"demeaner": pf.LsmrDemeaner(fixef_atol=tol, fixef_btol=tol)}
+
+
 def pf_feols(fml, panel, tol=1e-12, **kwargs):
     """pyfixest reference fit, demeaned to `tol` so the comparison measures
     hdfe_stream's error rather than pyfixest's convergence.

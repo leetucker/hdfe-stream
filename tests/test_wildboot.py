@@ -19,7 +19,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from conftest import FE_DOF_PF
+from conftest import FE_DOF_PF, pf_tolerance
 
 from hdfe_stream import StreamingGLM, feols_stream, rwolf, wyoung  # noqa: E402
 from hdfe_stream.core.wildboot import _draws, _Test  # noqa: E402
@@ -230,7 +230,7 @@ def test_wildboottest_matches_pyfixest(frame, pf_ok, reps, weights_type, impose_
             ours = res.wildboottest("x", reps=reps, seed=3, weights_type=weights_type,
                                     impose_null=impose_null)
             _, tstar, _ = _bootstrap([(res, 0)], reps, weights_type, impose_null, 3)
-            ref = pf.feols(fml, frame.to_pandas(), vcov={"CRV1": "state"}, fixef_tol=1e-12)
+            ref = pf.feols(fml, frame.to_pandas(), vcov={"CRV1": "state"}, **pf_tolerance())
         t_ref, tboot = _pf_boot(ref, reps, 3, weights_type=weights_type,
                                 impose_null=impose_null)
     scale = t_ref / ours["t value"]
@@ -272,7 +272,7 @@ def test_rwolf_wyoung_match_pyfixest(frame, pf_ok):
             warnings.simplefilter("ignore")
             rw = rwolf(multi, "x", reps=999, seed=11)["RW Pr(>|t|)"].to_numpy()
             wy = wyoung(multi, "x", reps=999, seed=11)["WY Pr(>|t|)"].to_numpy()
-            ref = pf.feols(fml, frame.to_pandas(), vcov={"CRV1": "state"}, fixef_tol=1e-12)
+            ref = pf.feols(fml, frame.to_pandas(), vcov={"CRV1": "state"}, **pf_tolerance())
         stats = [_pf_boot(m, 999, 11) for m in ref.to_list()]
         df = multi.fetch_model(0)._boot["df"]
     t = np.array([s[0] for s in stats])

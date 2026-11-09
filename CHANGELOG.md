@@ -3,7 +3,8 @@
 ## 0.10.0
 
 Works with pyfixest 0.70 as well as 0.60, and accepts pyfixest 0.70's formula syntax. Fits with many
-variables no longer slow down sharply under a tight memory limit.
+variables no longer slow down sharply under a tight memory limit. The RMSE with analytic weights
+is defined as in fixest.
 
 - **pyfixest 0.60 through 0.70.** Formulas, `etable`, `summary` and `iplot` work with either.
   Install either version with `hdfe-stream[formula]`.
@@ -20,6 +21,12 @@ variables no longer slow down sharply under a tight memory limit.
 - **For packages built on `hdfe_stream.core`:** `hdfe_stream.core.formula.parse_formula` returns
   the models of a formula in one form for both pyfixest versions, in place of reading
   pyfixest's parsed formula directly. `pyfixest_formula_api` is unchanged.
+- **The RMSE of a fit with analytic weights no longer depends on the scale of the weights.** It is
+  now the weighted sum of squared residuals divided by the sum of the weights, as in fixest and
+  pyfixest 0.70, where it was divided by the number of rows. The two are the same when the weights
+  average 1, and without weights or with frequency weights. With other analytic weights the RMSE
+  changes: multiplying every weight by `c` used to multiply it by `sqrt(c)`. Coefficients, standard
+  errors and R-squared are unchanged. pyfixest 0.60 still divides by the number of rows.
 - **Fits with more than 8 variables are much faster under a tight memory limit.** The solve needs
   an array with a row for every fixed-effect level and a column for every variable. When that
   array was more than a fifth of the memory left under `max_memory_gb`, the fit instead wrote a
