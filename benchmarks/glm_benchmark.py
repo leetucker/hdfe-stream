@@ -15,9 +15,7 @@ as log_earn (`_harness.glm_data_path`). The models are
 clustered by worker. Results go to benchmarks/results/glm.csv, one row per
 (size, configuration), replacing that size's rows when it is re-run.
 
-pyfixest runs with its LSMR demeaner. Its default, MAP, stops with "Demeaning
-failed after 10000 iterations" on these panels at every size tried, from
-25,000 workers up, for both models. xhdfe fits linear models only.
+pyfixest runs with its default demeaner, LSMR. xhdfe fits linear models only.
 
 Both libraries run at their defaults otherwise, and the script checks that the
 coefficients agree before reporting a size. For logit they agree to the

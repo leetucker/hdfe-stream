@@ -59,7 +59,6 @@ COEFS = ("age_squared", "age_cubed")
 DEFAULT_SIZES = [25_000, 100_000, 400_000, 1_000_000, 5_000_000]
 
 CONFIGS = {
-    "pyfixest (MAP)": ("pyfixest", "map"),
     "pyfixest (LSMR)": ("pyfixest", "lsmr"),
     "xhdfe": ("xhdfe", "default"),
     "hdfe_stream (explicit)": ("hdfe", "explicit"),
@@ -93,7 +92,8 @@ def run_pyfixest(variant, path):
     frame = pd.read_parquet(path)
     t_read = time.perf_counter() - t0
 
-    demeaner = pf.MapDemeaner() if variant == "map" else pf.LsmrDemeaner()
+    # pyfixest 0.70's default demeaner, named so the setting is on record
+    demeaner = pf.LsmrDemeaner()
     t0 = time.perf_counter()
     fit = pf.feols(FML, data=frame, vcov={"CRV1": "worker_id"},
                    fixef_rm="none", demeaner=demeaner)

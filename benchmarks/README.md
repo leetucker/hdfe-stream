@@ -10,9 +10,9 @@ rows) and vary its width: the number of covariates, from 8 to 503.
 
 | script | job | compared with |
 |---|---|---|
-| `akm_benchmark.py` | `log_earn ~ age_squared + age_cubed \| worker_id + firm_id + year`, clustered by worker | pyfixest (MAP and LSMR demeaners), xhdfe, fixest (R), FixedEffectModels.jl (Julia) |
+| `akm_benchmark.py` | `log_earn ~ age_squared + age_cubed \| worker_id + firm_id + year`, clustered by worker | pyfixest, xhdfe, fixest (R), FixedEffectModels.jl (Julia) |
 | `kss_benchmark.py` | the KSS leave-out variance decomposition of `log_earn ~ age_squared + age_cubed \| worker_id + firm_id`, with and without standard errors | xhdfe (its standard errors up to 1,000,000 workers) |
-| `covariates_benchmark.py` | `log_earn ~ i(age_bin) \| worker_id + firm_id`, clustered by worker, with age bins from five years to one month wide | pyfixest (both demeaners), xhdfe, fixest (R), FixedEffectModels.jl (Julia) |
+| `covariates_benchmark.py` | `log_earn ~ i(age_bin) \| worker_id + firm_id`, clustered by worker, with age bins from five years to one month wide | pyfixest, xhdfe, fixest (R), FixedEffectModels.jl (Julia) |
 | `glm_benchmark.py` | Poisson and logit regressions of a count and a binary outcome on `age_squared + age_cubed \| worker_id + firm_id + year`, clustered by worker | pyfixest's `fepois` and `feglm` (LSMR demeaner) |
 | `glm_covariates_benchmark.py` | the same two outcomes on `i(age_bin) \| worker_id + firm_id`, clustered by worker, with the covariates benchmark's age bins | pyfixest's `fepois` and `feglm` (LSMR demeaner) |
 
@@ -102,9 +102,7 @@ Results go to `results/gpu.csv`, with the GPU and package versions in
 `results/gpu_machine.json`, and are drawn as `docs/figures/gpu_*.svg`.
 
 The GLM benchmarks compare with pyfixest alone, since xhdfe fits linear models
-only, and with its LSMR demeaner alone: its default MAP demeaner stops with
-"Demeaning failed after 10000 iterations" on these panels at every size tried,
-for both models. The count and binary outcomes are simulated from the same
+only, and with its default demeaner, LSMR. The count and binary outcomes are simulated from the same
 worker effects, firm effects and age profile as `log_earn`
 (`_harness.glm_data_path`).
 

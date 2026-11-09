@@ -16,7 +16,7 @@ binary outcomes of the GLM benchmark (`_harness.glm_data_path`):
 clustered by worker, on the 1,000,000-worker panel (8.5 million rows), with age
 bins from five years wide (8 indicators) to one month wide (503). hdfe_stream
 runs at its defaults and sized to the design, with the covariates benchmark's
-rule. pyfixest runs with its LSMR demeaner, as in glm_benchmark.py. Results go
+rule. pyfixest runs with its default demeaner, LSMR, as in glm_benchmark.py. Results go
 to benchmarks/results/glm_covariates.csv.
 """
 

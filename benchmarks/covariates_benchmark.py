@@ -64,7 +64,6 @@ N_WORKERS = 1_000_000
 DEFAULT_WIDTHS = [60, 12, 6, 3, 1]
 
 CONFIGS = {
-    "pyfixest (MAP)": ("pyfixest", "map"),
     "pyfixest (LSMR)": ("pyfixest", "lsmr"),
     "xhdfe": ("xhdfe", "default"),
     "hdfe_stream": ("hdfe", "default"),
@@ -151,7 +150,7 @@ def run_pyfixest(variant, width, path):
     t0 = time.perf_counter()
     frame = pd.read_parquet(path, columns=columns_for(width))
     t_read = time.perf_counter() - t0
-    demeaner = pf.MapDemeaner() if variant == "map" else pf.LsmrDemeaner()
+    demeaner = pf.LsmrDemeaner()      # pyfixest 0.70's default, named so it is on record
     t0 = time.perf_counter()
     fit = pf.feols(fml, data=frame, vcov={"CRV1": "worker_id"}, demeaner=demeaner)
     t_fit = time.perf_counter() - t0

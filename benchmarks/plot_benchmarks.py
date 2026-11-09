@@ -69,7 +69,6 @@ THEMES = {
 # configuration -> (color slot, marker, line style[, name in the legend])
 SERIES = {
     "akm": {
-        "pyfixest (MAP)": ("blue", "o", "-"),
         "pyfixest (LSMR)": ("orange", "s", "-"),
         "xhdfe": ("aqua", "D", "-"),
         "hdfe_stream (explicit)": ("yellow", "^", "-"),
@@ -90,7 +89,6 @@ SERIES = {
         "hdfe_stream (low memory)": ("violet", "X", "-"),
     },
     "covariates": {
-        "pyfixest (MAP)": ("blue", "o", "-"),
         "pyfixest (LSMR)": ("orange", "s", "-"),
         "xhdfe": ("aqua", "D", "-"),
         "hdfe_stream": ("magenta", "v", "-"),

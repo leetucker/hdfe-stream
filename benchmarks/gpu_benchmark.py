@@ -27,8 +27,7 @@ clustered by worker, on the same simulated panels. Seven configurations:
 
 On a machine without an NVIDIA GPU the script says so and exits without
 measuring anything. The other benchmarks are not repeated: each library on
-the CPU is the reference point for itself on the GPU, on this machine, and
-pyfixest's MAP demeaner, which has no GPU version, is in akm_benchmark.py.
+the CPU is the reference point for itself on the GPU, on this machine.
 
 Measured as in the other benchmarks (benchmarks/_harness.py), plus the peak
 GPU memory of the configuration's process (polled from nvidia-smi) and, for
