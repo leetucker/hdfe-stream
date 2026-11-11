@@ -10,7 +10,7 @@ Stable names
     core.formula       compile_design, categorical_vars, numeric_expr,
                        parse_formula, pyfixest_formula_api
     core.feterms       parse_fe
-    core.report        warn
+    core.report        warn, ExperimentalWarning
     core.utils         as_lazy, single_blas
     core.profile       Profile, Component, Request, ScanStats, scan_source,
                        combine_profiles, source_row_group_rows

@@ -27,6 +27,7 @@ are in `hdfe_stream.simulate`.
 | `etable` | regression tables, through pyfixest |
 | `bonferroni`, `holm`, `rwolf`, `wyoung` | multiple-testing corrections across models; the last two from the wild cluster bootstrap |
 | `cleanup` | remove run directories left by killed jobs |
+| `ExperimentalWarning` | the warning for experimental methods, which packages built on `hdfe_stream.core` subclass |
 | `simulate_akm`, `simulate_rich`, `simulate_trends`, `simulate_bottleneck` | simulated panels with known effects |
 
 ```{toctree}

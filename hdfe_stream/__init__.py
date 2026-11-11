@@ -132,6 +132,7 @@ from .leaveout_se import ComponentSE
 from .leaveout_weakid import WeakIdDiagnostics
 from .leaveout import leave_out_kss
 from .core.profile import Profile  # noqa: E402
+from .core.report import ExperimentalWarning  # noqa: E402
 from .core.multcomp import bonferroni, holm, rwolf, wyoung
 from .core.reporting import etable
 from .core.results import HDFEMulti, HDFEResult
@@ -160,6 +161,7 @@ __all__ = [
     "connected_components",
     "ConnectedComponents",
     "cleanup",
+    "ExperimentalWarning",
 ]
 
 def _detect_version():

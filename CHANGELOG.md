@@ -21,6 +21,10 @@ is defined as in fixest.
 - **For packages built on `hdfe_stream.core`:** `hdfe_stream.core.formula.parse_formula` returns
   the models of a formula in one form for both pyfixest versions, in place of reading
   pyfixest's parsed formula directly. `pyfixest_formula_api` is unchanged.
+- **`ExperimentalWarning`** (`hdfe_stream.ExperimentalWarning`, also
+  `hdfe_stream.core.report.ExperimentalWarning`): a warning class for methods that go beyond
+  what their authors developed. Packages built on `hdfe_stream.core` subclass it for their own
+  experimental features, so filtering this class silences all of them.
 - **The RMSE of a fit with analytic weights no longer depends on the scale of the weights.** It is
   now the weighted sum of squared residuals divided by the sum of the weights, as in fixest and
   pyfixest 0.70, where it was divided by the number of rows. The two are the same when the weights

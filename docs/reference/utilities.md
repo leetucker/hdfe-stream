@@ -26,6 +26,23 @@
 .. autofunction:: cleanup
 ```
 
+## Warnings
+
+`ExperimentalWarning` marks a method that goes beyond what its authors developed.
+Packages built on `hdfe_stream.core` raise subclasses of it for their own experimental
+features. To silence all of them:
+
+```python
+import warnings
+import hdfe_stream
+
+warnings.filterwarnings("ignore", category=hdfe_stream.ExperimentalWarning)
+```
+
+```{eval-rst}
+.. autoclass:: ExperimentalWarning
+```
+
 ## Simulated data
 
 ```{eval-rst}

@@ -12,6 +12,17 @@ import time
 import warnings
 
 
+class ExperimentalWarning(UserWarning):
+    """A fit uses a method that goes beyond what its authors developed or validated.
+
+    Packages built on `hdfe_stream.core` subclass it for their own experimental
+    features, so a user can silence one package's warnings or, with this class,
+    all of them::
+
+        warnings.filterwarnings("ignore", category=hdfe_stream.ExperimentalWarning)
+    """
+
+
 def _log(verbose, msg, logger=None, level=None):
     """Progress message: to `logger` if given (its own formatting and
     timestamps apply), else printed to stdout with a timestamp."""
