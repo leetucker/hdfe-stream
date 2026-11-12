@@ -94,9 +94,9 @@ on data).
 The machinery of a bootstrap that resamples whole units, or whole clusters of
 units, with replacement and refits an estimator on each draw, for estimators
 built on `hdfe_stream.core` (diff-stream's `refit_bootstrap` uses it). The
-resamples are written to disk in bounded memory; refits run in the parent
-process or in fresh worker processes, each with its share of the job's threads
-and memory. The consumer supplies the fit and decides what a draw must satisfy.
+resamples are written to disk in bounded memory, one per worker at a time;
+refits run in the parent process or in worker processes, each with its share of
+the job's threads and memory. Workers start once and fit one draw after another. The consumer supplies the fit and decides what a draw must satisfy.
 
 ```{eval-rst}
 .. autofunction:: hdfe_stream.core.refit.refit_draws

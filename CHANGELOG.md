@@ -24,8 +24,9 @@ is defined as in fixest.
 - **A refit bootstrap for packages built on `hdfe_stream.core`** (`core.refit`). It
   resamples whole units, or whole clusters of units (each copy's units with IDs of their
   own), with replacement, writes each draw to disk in bounded memory, and refits a
-  consumer's estimator on it, in the same process or in fresh worker processes with their
-  share of the job's threads and memory. Failed draws are recorded, never redrawn;
+  consumer's estimator on it, in the same process or in worker processes with their share
+  of the job's threads and memory. The workers start once and fit one draw after another
+  (restarted every 200 draws), with one resample per worker on disk at a time. Failed draws are recorded, never redrawn;
   `RefitBootstrapResult` gives bootstrap standard errors and percentile, basic and normal
   intervals. Its parts are stable names too: `core.partition` (whole-group partitions on
   disk), `core.resample` (`DiskGroupResampler`) and `core.process` (`ProcessBatch`). They
