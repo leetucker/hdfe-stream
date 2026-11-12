@@ -17,13 +17,16 @@ from __future__ import annotations
 
 import json
 import pickle
+import shutil
+import struct
+import subprocess
 import sys
+import threading
 import warnings
-from concurrent.futures import as_completed
-from contextlib import closing, nullcontext
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import numpy as np
 import polars as pl
@@ -234,6 +237,8 @@ def refit_draws(
     expected_rows=None,
     worker_minimum_gb=0.5,
     preload=(),
+    persistent_workers=True,
+    worker_draws=200,
 ):
     """Draw ``reps`` resamples of the groups of ``snapshot`` and refit each with ``fit``.
 
@@ -249,9 +254,13 @@ def refit_draws(
     Groups are ``key`` (with ``within``: clusters of ``within`` units), sorted by
     ``sort_columns`` and filtered by ``select(frame)``; ``expected_groups`` and
     ``expected_rows`` check the staging against the original fit. ``seed`` fixes
-    the draws for a given group order. ``workers`` > 1 runs refits in fresh
+    the draws for a given group order. ``workers`` > 1 runs refits in worker
     processes, which first import the modules in ``preload`` (a package's
-    scheduler defaults) and need ``worker_minimum_gb`` each.
+    scheduler defaults) and need ``worker_minimum_gb`` each. They are started once
+    and given one draw after another, each restarted after ``worker_draws`` draws
+    (so that memory a runtime keeps cannot accumulate); with
+    ``persistent_workers=False`` each draw has a fresh process instead. Either way
+    the draws are the same, and only one resample per worker is on disk at a time.
     """
     if seed is not None and (
         isinstance(seed, bool) or not isinstance(seed, int) or seed < 0
@@ -291,42 +300,63 @@ def refit_draws(
         )
     draws = np.full((reps, width), np.nan)
     failures, captured, hashes, batches, worker_resources = [], [], [], [], []
-    for start in range(0, reps, active):
-        with TemporaryDirectory(prefix="batch-", dir=scratch) as batch_root:
-            tasks = []
-            for b in range(start, min(start + active, reps)):
-                attempt = Path(batch_root) / f"draw-{b}"
-                attempt.mkdir()
-                path, dates, rows, identity = sampler.materialize(
-                    rng, attempt / "data", time_column=time_column
-                )
-                hashes.append(identity)
-                tasks.append(
-                    dict(
-                        task,
-                        draw=b,
-                        path=path,
-                        unit_column=draw_column,
-                        workdir=attempt / "fit",
-                        dates=dates,
-                        rows=rows,
-                        threads=threads,
-                        memory_gb=memory_gb,
-                    )
-                )
-            if active == 1:
-                completed = [(start, _attempt(fit, tasks[0], width), None)]
-            else:
-                pa.default_memory_pool().release_unused()
-                # The parent's staging is idle while children fit. Reserve its
-                # current memory plus the job reserve; workers share the rest and
-                # keep their own MemoryBudget reserve.
-                worker_memory = budget.headroom_gb() / active
-                if worker_memory * (1 - budget.reserve) < worker_minimum_gb:
-                    raise MemoryError(
-                        "insufficient whole-job memory for parallel refits including worker runtimes; "
-                        "reduce n_workers/preprocess_mb or increase max_memory_gb"
-                    )
+
+    def prepare(b):
+        """Write draw b (in draw order, so the plan is the same whatever the workers do)."""
+        attempt = scratch / f"draw-{b}"
+        attempt.mkdir()
+        path, dates, rows, identity = sampler.materialize(
+            rng, attempt / "data", time_column=time_column
+        )
+        hashes.append(identity)
+        return _task_for(
+            task, b, path, draw_column, attempt, dates, rows, threads, memory_gb
+        )
+
+    def record(b, outcome, resources):
+        values, failure, notes = outcome
+        if values is not None:
+            draws[b] = values
+        if failure is not None:
+            failures.append(failure)
+        captured.extend(notes)
+        if resources is not None:
+            worker_resources.append(dict(draw=b, **resources))
+        shutil.rmtree(scratch / f"draw-{b}", ignore_errors=True)
+
+    worker_memory = None
+    if active > 1:
+        pa.default_memory_pool().release_unused()
+        worker_memory = _worker_memory_gb(budget, active)
+        if worker_memory * (1 - budget.reserve) < worker_minimum_gb:
+            raise MemoryError(
+                "insufficient whole-job memory for parallel refits including worker runtimes; "
+                "reduce n_workers/preprocess_mb or increase max_memory_gb"
+            )
+    try:
+        if active == 1:
+            for b in range(reps):
+                record(b, _attempt(fit, prepare(b), width), None)
+        elif persistent_workers:
+            starts = _persistent_refits(
+                prepare,
+                record,
+                reps,
+                active,
+                worker_threads,
+                worker_memory,
+                scratch=scratch,
+                fit=fit,
+                width=width,
+                preload=tuple(preload),
+                restart_after=worker_draws,
+            )
+            batches.append(
+                {"worker_processes": starts, "worker_memory_gb": worker_memory}
+            )
+        else:
+            for start in range(0, reps, active):
+                tasks = [prepare(b) for b in range(start, min(start + active, reps))]
                 batches.append(
                     {
                         "first_draw": start,
@@ -343,19 +373,14 @@ def refit_draws(
                     width=width,
                     preload=tuple(preload),
                 )
-            # Closing the generator stops and reaps workers before the batch's
-            # temporary directory is removed, including on interruption.
-            with (
-                closing(completed) if active > 1 else nullcontext(completed) as results
-            ):
-                for b, (values, failure, notes), resources in results:
-                    if values is not None:
-                        draws[b] = values
-                    if failure is not None:
-                        failures.append(failure)
-                    captured.extend(notes)
-                    if resources is not None:
-                        worker_resources.append(dict(draw=b, **resources))
+                # Closing the generator stops and reaps workers before the draws'
+                # directories are removed, including on interruption.
+                with closing(completed) as results:
+                    for b, outcome, resources in results:
+                        record(b, outcome, resources)
+    finally:
+        for leftover in scratch.glob("draw-*"):
+            shutil.rmtree(leftover, ignore_errors=True)
     failures.sort(key=lambda x: x["draw"])
     captured.sort(key=lambda x: x["draw"])
     worker_resources.sort(key=lambda x: x["draw"])
@@ -365,6 +390,7 @@ def refit_draws(
         "job_threads": job_threads,
         "worker_threads": worker_threads if active > 1 else threads,
         "parallel_batches": batches,
+        "persistent_workers": bool(persistent_workers) if active > 1 else None,
         "worker_resources": worker_resources,
         "seed": seed,
         "seed_entropy": seed_sequence.entropy,
@@ -380,6 +406,213 @@ def refit_draws(
         "preprocess_mb": preprocess_mb,
     }
     return RefitDraws(draws, failures, captured, diagnostics)
+
+
+def _task_for(task, b, path, unit_column, attempt, dates, rows, threads, memory_gb):
+    """The task of draw b: the consumer's task and what the draw is."""
+    return dict(
+        task,
+        draw=b,
+        path=path,
+        unit_column=unit_column,
+        workdir=attempt / "fit",
+        dates=dates,
+        rows=rows,
+        threads=threads,
+        memory_gb=memory_gb,
+    )
+
+
+def _worker_memory_gb(budget, active):
+    """Each worker's memory: the job's headroom (its staging is idle while children
+    fit, and the job reserve is kept) shared among the workers, which also keep
+    their own MemoryBudget reserve."""
+    return budget.headroom_gb() / active
+
+
+def _send(stream, message):
+    data = pickle.dumps(message, protocol=pickle.HIGHEST_PROTOCOL)
+    stream.write(struct.pack("<Q", len(data)) + data)
+    stream.flush()
+
+
+def _receive(stream):
+    """The next message, or None at the end of the stream."""
+    head = stream.read(8)
+    if len(head) < 8:
+        return None
+    (size,) = struct.unpack("<Q", head)
+    data = stream.read(size)
+    if len(data) < size:
+        return None
+    return pickle.loads(data)  # Private channel to our own worker.
+
+
+class _WorkerPool:
+    """Persistent refit workers, each fed one draw at a time over its own pipe."""
+
+    def __init__(self, count, threads, memory_gb, *, scratch, preload, restart_after):
+        self.count, self.threads, self.memory_gb = count, threads, memory_gb
+        self.scratch, self.preload, self.restart_after = (
+            Path(scratch),
+            preload,
+            restart_after,
+        )
+        self.children, self.served, self.logs = (
+            [None] * count,
+            [0] * count,
+            [None] * count,
+        )
+        self.starts = 0
+        self._lock = threading.Lock()
+        self._closing = False
+
+    def __enter__(self):
+        for i in range(self.count):
+            self._start(i)
+        return self
+
+    def _start(self, i):
+        with self._lock:
+            if self._closing:
+                raise RuntimeError("the worker pool is closing")
+            root = self.scratch / f"worker-{self.starts}"
+            root.mkdir()
+            header = root / "worker.json"
+            header.write_text(
+                json.dumps({"sys_path": sys.path, "preload": list(self.preload)})
+            )
+            log = root / "worker.log"
+            command = [
+                sys.executable,
+                str(_WORKER),
+                "--serve",
+                str(header),
+                str(self.threads),
+                repr(self.memory_gb),
+            ]
+            with log.open("wb") as output:
+                self.children[i] = subprocess.Popen(
+                    command,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=output,
+                )
+            self.logs[i], self.served[i] = log, 0
+            self.starts += 1
+
+    def run(self, i, message):
+        """Send one draw to worker i and return its reply (in a waiting thread)."""
+        if self.served[i] >= self.restart_after:
+            self._stop(i)
+            self._start(i)
+        child = self.children[i]
+        try:
+            _send(child.stdin, message)
+            reply = _receive(child.stdout)
+        except (BrokenPipeError, OSError):
+            reply = None
+        if reply is None:
+            child.wait()
+            detail = self.logs[i].read_bytes()[-4000:].decode(errors="replace")
+            raise RuntimeError(
+                f"bootstrap worker for draw {message['task']['draw']} exited "
+                f"{child.returncode}: {detail}"
+            )
+        self.served[i] += 1
+        return reply
+
+    def _stop(self, i):
+        child = self.children[i]
+        if child is None:
+            return
+        try:
+            _send(child.stdin, None)
+            child.stdin.close()
+            child.wait(timeout=30)
+        except (BrokenPipeError, OSError, subprocess.TimeoutExpired):
+            child.kill()
+            child.wait()
+        self.children[i] = None
+
+    def __exit__(self, exc_type, exc, tb):
+        with self._lock:
+            self._closing = True
+        for child in self.children:
+            if child is None or child.poll() is not None:
+                continue
+            if exc_type is None:
+                try:
+                    _send(child.stdin, None)
+                    child.stdin.close()
+                except (BrokenPipeError, OSError):
+                    pass
+            else:
+                child.terminate()
+        for child in self.children:
+            if child is None:
+                continue
+            try:
+                child.wait(timeout=30 if exc_type is None else 2)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+
+
+def _persistent_refits(
+    prepare,
+    record,
+    reps,
+    workers,
+    threads,
+    memory_gb,
+    *,
+    scratch,
+    fit,
+    width,
+    preload,
+    restart_after,
+):
+    """Fit draws 0..reps-1 with persistent workers; return how many processes started.
+
+    Draws are prepared in order, each when a worker is free, so the plan is the
+    serial one and at most one resample per worker is on disk. A worker's error
+    stops the run: the workers are stopped (the pool closes first) before the
+    threads waiting on them finish and the consumer removes the scratch.
+    """
+    with (
+        ThreadPoolExecutor(max_workers=workers) as waiting,
+        _WorkerPool(
+            workers,
+            threads,
+            memory_gb,
+            scratch=scratch,
+            preload=preload,
+            restart_after=restart_after,
+        ) as pool,
+    ):
+        idle, in_flight, next_draw = list(range(workers)), {}, 0
+        while next_draw < reps or in_flight:
+            while idle and next_draw < reps:
+                worker = idle.pop()
+                # each refit runs within its worker's share of threads and memory
+                task = dict(prepare(next_draw), threads=threads, memory_gb=memory_gb)
+                message = {"fit": fit, "task": task, "width": width}
+                in_flight[waiting.submit(pool.run, worker, message)] = (
+                    worker,
+                    next_draw,
+                )
+                next_draw += 1
+            done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+            for future in done:
+                worker, b = in_flight.pop(future)
+                reply = future.result()
+                if "error" in reply:
+                    # Keep the exception type (notably MemoryError) and the remote trace.
+                    raise reply["error"] from RuntimeError(reply["traceback"])
+                record(b, reply["result"], reply["resources"])
+                idle.append(worker)
+        return pool.starts
 
 
 def _attempt(fit, task, width):
