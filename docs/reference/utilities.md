@@ -88,3 +88,36 @@ on data).
 
 .. autofunction:: hdfe_stream.core.ivtests.c_statistic
 ```
+
+## Refit bootstrap
+
+The machinery of a bootstrap that resamples whole units, or whole clusters of
+units, with replacement and refits an estimator on each draw, for estimators
+built on `hdfe_stream.core` (diff-stream's `refit_bootstrap` uses it). The
+resamples are written to disk in bounded memory; refits run in the parent
+process or in fresh worker processes, each with its share of the job's threads
+and memory. The consumer supplies the fit and decides what a draw must satisfy.
+
+```{eval-rst}
+.. autofunction:: hdfe_stream.core.refit.refit_draws
+
+.. autofunction:: hdfe_stream.core.refit.refit_workers
+
+.. autoclass:: hdfe_stream.core.refit.RefitDraws
+
+.. autoclass:: hdfe_stream.core.refit.RefitBootstrapResult
+   :members: standard_errors, confint, tidy, draws, failures, refit_warnings, summary_json
+
+.. autoclass:: hdfe_stream.core.refit.BootstrapFailureWarning
+
+.. autoclass:: hdfe_stream.core.resample.DiskGroupResampler
+   :members: materialize
+
+.. autoclass:: hdfe_stream.core.partition.GroupPartitions
+
+.. autofunction:: hdfe_stream.core.partition.whole_group_batches
+
+.. autofunction:: hdfe_stream.core.partition.preprocess_budget_mb
+
+.. autoclass:: hdfe_stream.core.process.ProcessBatch
+```

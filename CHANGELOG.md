@@ -21,6 +21,15 @@ is defined as in fixest.
 - **For packages built on `hdfe_stream.core`:** `hdfe_stream.core.formula.parse_formula` returns
   the models of a formula in one form for both pyfixest versions, in place of reading
   pyfixest's parsed formula directly. `pyfixest_formula_api` is unchanged.
+- **A refit bootstrap for packages built on `hdfe_stream.core`** (`core.refit`). It
+  resamples whole units, or whole clusters of units (each copy's units with IDs of their
+  own), with replacement, writes each draw to disk in bounded memory, and refits a
+  consumer's estimator on it, in the same process or in fresh worker processes with their
+  share of the job's threads and memory. Failed draws are recorded, never redrawn;
+  `RefitBootstrapResult` gives bootstrap standard errors and percentile, basic and normal
+  intervals. Its parts are stable names too: `core.partition` (whole-group partitions on
+  disk), `core.resample` (`DiskGroupResampler`) and `core.process` (`ProcessBatch`). They
+  were diff-stream's, and diff-stream's `refit_bootstrap` now uses them.
 - **`ExperimentalWarning`** (`hdfe_stream.ExperimentalWarning`, also
   `hdfe_stream.core.report.ExperimentalWarning`): a warning class for methods that go beyond
   what their authors developed. Packages built on `hdfe_stream.core` subclass it for their own
