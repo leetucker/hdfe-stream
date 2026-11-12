@@ -159,6 +159,12 @@ def mean_fit(task):
         raise ValueError("draw mean too small")
     if task.get("crash"):
         raise KeyError("programming error")
+    if task.get("report_limits"):
+        return np.array([float(task["threads"]), float(task["memory_gb"] or 0.0)])
+    if task.get("die") and task["draw"] == 3:
+        import os
+
+        os._exit(7)  # a worker that dies partway through the run
     per_unit = frame.group_by(task["unit_column"]).agg(pl.col("y").mean())
     return np.array([per_unit["y"].mean(), float(frame.height)])
 
@@ -214,10 +220,25 @@ def test_refits_are_reproducible_and_the_same_in_workers(tmp_path):
         parallel.diagnostics["unit_order_sha256"]
         == serial.diagnostics["unit_order_sha256"]
     )
-    assert [b["refits"] for b in parallel.diagnostics["parallel_batches"]] == [2, 2, 2]
-    assert all(
-        r["polars_threads"] == 1 for r in parallel.diagnostics["worker_resources"]
+    # two persistent workers served all six draws
+    resources = parallel.diagnostics["worker_resources"]
+    assert parallel.diagnostics["persistent_workers"] is True
+    assert parallel.diagnostics["parallel_batches"][0]["worker_processes"] == 2
+    assert len({r["pid"] for r in resources}) == 2 and len(resources) == 6
+    assert all(r["polars_threads"] == 1 for r in resources)
+    # one process per draw, and workers restarted after two draws: the same draws
+    fresh = _run(
+        tmp_path, "fresh", workers=2, worker_minimum_gb=0.05, persistent_workers=False
     )
+    assert_allclose(fresh.draws, serial.draws, rtol=1e-13)
+    assert [b["refits"] for b in fresh.diagnostics["parallel_batches"]] == [2, 2, 2]
+    assert len({r["pid"] for r in fresh.diagnostics["worker_resources"]}) == 6
+    restarted = _run(
+        tmp_path, "restarted", workers=2, worker_minimum_gb=0.05, worker_draws=2
+    )
+    assert_allclose(restarted.draws, serial.draws, rtol=1e-13)
+    assert restarted.diagnostics["parallel_batches"][0]["worker_processes"] >= 3
+    assert not list(tmp_path.rglob("draw-*"))
     assert (
         np.isfinite(serial.draws).all() and serial.draws[:, 1].tolist() == [120.0] * 6
     )
@@ -256,6 +277,8 @@ def test_failed_draws_are_recorded_not_redrawn_and_errors_propagate(tmp_path):
             workers=2,
             worker_minimum_gb=0.05,
         )
+    with pytest.raises(RuntimeError, match="exited 7"):
+        _run(tmp_path, "die", task={"die": True}, workers=2, worker_minimum_gb=0.05)
     with pytest.raises(RuntimeError, match="differs from the original"):
         _run(tmp_path, "mismatch", expected_rows=119)
 
@@ -290,3 +313,27 @@ def test_process_batch_stops_running_sibling_on_failure_or_interrupt(error, tmp_
                 raise RuntimeError("worker failed")
     assert time.monotonic() - start < 15
     assert processes and all(p.poll() is not None for p in processes)
+
+
+@pytest.mark.parametrize("persistent", [True, False])
+def test_refits_get_their_workers_share_of_threads_and_memory(persistent, tmp_path):
+    out = _run(
+        tmp_path,
+        "limits",
+        task={"report_limits": True},
+        workers=2,
+        threads=2,
+        memory_gb=8.0,
+        worker_minimum_gb=0.05,
+        persistent_workers=persistent,
+    )
+    share = out.diagnostics["parallel_batches"][0]["worker_memory_gb"]
+    assert out.draws[:, 0].tolist() == [1.0] * 6  # 2 job threads over 2 workers
+    assert_allclose(out.draws[:, 1], share)
+    serial = _run(
+        tmp_path, "limits_serial", task={"report_limits": True}, memory_gb=8.0
+    )
+    assert (
+        serial.draws[:, 0].tolist() == [2.0] * 6
+        and serial.draws[:, 1].tolist() == [8.0] * 6
+    )
