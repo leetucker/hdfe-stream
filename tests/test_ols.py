@@ -168,7 +168,9 @@ def test_exact_fe_dof_differs_from_pyfixest_only_through_dof(akm, workdir, refer
     exact = fit_stream(akm, fe, workdir / "exact", fe_dof="exact")
     loose = fit_stream(akm, fe, workdir / "pf", fe_dof=FE_DOF_PF)
 
-    assert rel(exact.beta, loose.beta) < 1e-12
+    # the same fit twice differs by up to about 1e-12 (the solver's tolerance, and the
+    # order of sums over cells), so the bound sits well above that and below TOL_BETA
+    assert rel(exact.beta, loose.beta) < 1e-10
     assert rel(loose.se, ref.se().to_numpy()) < TOL_SE
 
     ratio = exact.se / ref.se().to_numpy()
