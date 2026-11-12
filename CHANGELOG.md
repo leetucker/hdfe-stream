@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.11.0
+
+Adds a refit bootstrap and a warning class for experimental methods to `hdfe_stream.core`, for
+the packages built on it. Fits are unchanged.
+
+- **A refit bootstrap for packages built on `hdfe_stream.core`** (`core.refit`). It
+  resamples whole units, or whole clusters of units (each copy's units with IDs of their
+  own), with replacement, writes each draw to disk in bounded memory, and refits a
+  consumer's estimator on it, in the same process or in worker processes with their share
+  of the job's threads and memory. The workers start once and fit one draw after another
+  (restarted every 200 draws), with one resample per worker on disk at a time. Failed draws
+  are recorded, never redrawn; `RefitBootstrapResult` gives bootstrap standard errors and
+  percentile, basic and normal intervals. Its parts are stable names too: `core.partition` (whole-group partitions on
+  disk), `core.resample` (`DiskGroupResampler`) and `core.process` (`ProcessBatch`). They
+  were diff-stream's, and diff-stream's `refit_bootstrap` now uses them.
+- **`ExperimentalWarning`** (`hdfe_stream.ExperimentalWarning`, also
+  `hdfe_stream.core.report.ExperimentalWarning`): a warning class for methods that go beyond
+  what their authors developed. Packages built on `hdfe_stream.core` subclass it for their own
+  experimental features, so filtering this class silences all of them.
+
 ## 0.10.0
 
 Works with pyfixest 0.70 as well as 0.60, and accepts pyfixest 0.70's formula syntax. Fits with many
@@ -21,20 +41,6 @@ is defined as in fixest.
 - **For packages built on `hdfe_stream.core`:** `hdfe_stream.core.formula.parse_formula` returns
   the models of a formula in one form for both pyfixest versions, in place of reading
   pyfixest's parsed formula directly. `pyfixest_formula_api` is unchanged.
-- **A refit bootstrap for packages built on `hdfe_stream.core`** (`core.refit`). It
-  resamples whole units, or whole clusters of units (each copy's units with IDs of their
-  own), with replacement, writes each draw to disk in bounded memory, and refits a
-  consumer's estimator on it, in the same process or in worker processes with their share
-  of the job's threads and memory. The workers start once and fit one draw after another
-  (restarted every 200 draws), with one resample per worker on disk at a time. Failed draws are recorded, never redrawn;
-  `RefitBootstrapResult` gives bootstrap standard errors and percentile, basic and normal
-  intervals. Its parts are stable names too: `core.partition` (whole-group partitions on
-  disk), `core.resample` (`DiskGroupResampler`) and `core.process` (`ProcessBatch`). They
-  were diff-stream's, and diff-stream's `refit_bootstrap` now uses them.
-- **`ExperimentalWarning`** (`hdfe_stream.ExperimentalWarning`, also
-  `hdfe_stream.core.report.ExperimentalWarning`): a warning class for methods that go beyond
-  what their authors developed. Packages built on `hdfe_stream.core` subclass it for their own
-  experimental features, so filtering this class silences all of them.
 - **The RMSE of a fit with analytic weights no longer depends on the scale of the weights.** It is
   now the weighted sum of squared residuals divided by the sum of the weights, as in fixest and
   pyfixest 0.70, where it was divided by the number of rows. The two are the same when the weights

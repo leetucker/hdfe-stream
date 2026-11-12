@@ -7,8 +7,8 @@ authors:
   - family-names: Tucker
     given-names: Lee
     email: lee.c.tucker@census.gov
-version: 0.10.0
-date-released: 2026-11-08
+version: 0.11.0
+date-released: 2026-11-12
 license: MIT
 repository-code: "https://github.com/leetucker/hdfe-stream"
 url: "https://github.com/leetucker/hdfe-stream"
