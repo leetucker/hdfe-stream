@@ -35,6 +35,12 @@ Stable names
     core.ipw           ipw_weight, ipw_weights, trim_bounds, IPWEstimate,
                        ipw_mean_difference
     core.balance       weighted_balance, effective_sizes, GroupSizes, EPS_DIFF
+    core.partition     GroupPartitions, Part, whole_group_batches,
+                       preprocess_budget_mb
+    core.resample      DiskGroupResampler, ResampleLeaf
+    core.process       ProcessBatch
+    core.refit         refit_draws, refit_workers, RefitDraws,
+                       RefitBootstrapResult, BootstrapFailureWarning
 
     The hooks a `RegressionResult` subclass implements (its docstring) are
     stable too.
@@ -95,4 +101,10 @@ Treatment effects (first written for match-stream and diff-stream)
     ipw.py             inverse-probability weights and the Hajek IPW
                        difference in means
     balance.py         a weighted two-group balance table (MatchIt's conventions)
+Resampling and refits (first written for diff-stream)
+    partition.py       whole-group hash partitions of a Parquet file on disk
+    resample.py        disk-backed resampling of whole groups (units or clusters)
+    process.py         a batch of worker processes, stopped if the parent fails
+    refit.py           the refit bootstrap: draws, refits, failures, intervals
+    _refit_worker.py   the refit bootstrap's worker script
 """
