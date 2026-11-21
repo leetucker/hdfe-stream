@@ -428,15 +428,10 @@ class TrendSensitivityResult:
         left, as in R's createSensitivityPlot. Needs matplotlib (not a
         dependency of this package: ``pip install hdfe-stream[plot]``).
         Draws on `ax` if given; returns the figure."""
-        try:
-            import matplotlib.pyplot as plt
-        except ImportError as exc:
-            raise ImportError(
-                "TrendSensitivityResult.plot needs matplotlib, which is not installed; "
-                "install it with `pip install matplotlib` (or the `plot` extra, "
-                "`pip install hdfe-stream[plot]`)") from exc
+        from .plots import require_matplotlib
+        plt = require_matplotlib("TrendSensitivityResult.plot")
         if ax is None:
-            fig, ax = plt.subplots(figsize=(6, 4))
+            fig, ax = plt.subplots(figsize=(6, 4), layout="constrained")
         else:
             fig = ax.figure
         M = self.M
@@ -626,7 +621,17 @@ def trend_sensitivity(beta: Sequence[float], vcov: Any, n_pre: int, *,
     original = {"estimate": estimate, "se": sd_theta,
                 "lower": estimate - z * sd_theta, "upper": estimate + z * sd_theta}
     family = restriction
+    # the programs are tiny: BLAS threads only contend with the pieces' threads
+    from .utils import single_blas
+    with single_blas():
+        return _run(beta, sigma, n_pre, n_post, l, Ms, restriction, bias, monotonicity,
+                    ci_method, alpha, kappa, grid_points, grid_bounds, simulations, seed,
+                    n_threads, pre, post, sd_theta, estimate, original, family)
 
+
+def _run(beta, sigma, n_pre, n_post, l, Ms, restriction, bias, monotonicity, ci_method, alpha,
+         kappa, grid_points, grid_bounds, simulations, seed, n_threads, pre, post, sd_theta,
+         estimate, original, family):
     rows_out, grids, extended, grid_accept = [], [], [], []
     if ci_method == "fixed_length":
         for m in Ms:

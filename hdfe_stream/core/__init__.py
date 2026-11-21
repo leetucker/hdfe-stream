@@ -44,6 +44,7 @@ Stable names
     core.sensitivity   trend_sensitivity, event_study_sensitivity,
                        event_study_inputs, default_M, TrendSensitivityResult,
                        TrendSensitivityWarning
+    core.plots         event_study_plot, require_matplotlib
 
     The hooks a `RegressionResult` subclass implements (its docstring) are
     stable too.

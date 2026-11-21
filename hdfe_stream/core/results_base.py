@@ -332,7 +332,18 @@ class RegressionResult:
             The robust interval at each M (``.table``), the original
             interval, the breakdown value and a plot.
         """
-        from .sensitivity import _event_time, event_study_sensitivity
+        from .sensitivity import event_study_sensitivity
+
+        idx, times = self._event_time_coefs(keep, drop, exact_match)
+        return event_study_sensitivity(
+            times, self.beta[idx], self.vcov[np.ix_(idx, idx)], reference=reference,
+            target=target, restriction=restriction, M=M, bias=bias, monotonicity=monotonicity,
+            ci_method=ci_method, alpha=alpha, **options)
+
+    def _event_time_coefs(self, keep, drop, exact_match):
+        """Indices and event times of the coefficients named '<variable>::<event
+        time>' (all, from one variable, or those `keep` and `drop` select)."""
+        from .sensitivity import _event_time
 
         if keep is None and drop is None:
             idx = [i for i, nm in enumerate(self.coefnames)
@@ -350,10 +361,48 @@ class RegressionResult:
         if any(t is None for t in times):
             bad = [self.coefnames[i] for i, t in zip(idx, times) if t is None]
             raise ValueError(f"coefficient names must end in '::<integer event time>'; got {bad}")
-        return event_study_sensitivity(
-            times, self.beta[idx], self.vcov[np.ix_(idx, idx)], reference=reference,
-            target=target, restriction=restriction, M=M, bias=bias, monotonicity=monotonicity,
-            ci_method=ci_method, alpha=alpha, **options)
+        return idx, times
+
+    def plot_event_study(self, keep: str | list | None = None, *, reference: int | None = -1,
+                         alpha: float = 0.05, joint: bool = False, ax: Any = None,
+                         title: str | None = None, drop: str | list | None = None,
+                         exact_match: bool = False, **joint_options: Any):
+        """Plot an event study: the coefficients named ``<variable>::<event time>``
+        (as ``i(event_time, ref=-1)`` names them) against their event times, with
+        their confidence intervals, the omitted reference period at zero, and a
+        dashed line after it (pyfixest's `iplot`). Needs matplotlib (not a
+        dependency: ``pip install hdfe-stream[plot]``).
+
+        Parameters
+        ----------
+        keep, drop, exact_match
+            Select the coefficients, as in `confint` (by default every one named
+            ``<variable>::<event time>``, from one variable).
+        reference : int or None, default -1
+            The omitted reference event time; None draws none.
+        alpha : float, default 0.05
+            One minus the coverage.
+        joint : bool, default False
+            Simultaneous intervals over the plotted coefficients (`confint`'s
+            ``joint=True``, with its ``reps`` and ``seed`` in `joint_options`)
+            instead of pointwise ones.
+        ax : matplotlib.axes.Axes, optional
+            Draw here instead of on a new figure.
+        title : str, optional
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        from .plots import event_study_plot
+
+        idx, times = self._event_time_coefs(keep, drop, exact_match)
+        names = [self.coefnames[i] for i in idx]
+        ci = self.confint(alpha=alpha, keep=names, exact_match=True, joint=joint, **joint_options)
+        level = f"{(1 - alpha) * 100:g}% {'simultaneous' if joint else ''} interval".replace("  ", " ")
+        return event_study_plot(times, self.beta[idx], ci[:, 1].to_numpy(), ci[:, 2].to_numpy(),
+                                reference=reference, ax=ax, title=title,
+                                ylabel=f"Estimate and {level}")
 
     def with_vcov(self, vcov: Vcov) -> "RegressionResult":
         """A copy of this result with another of the vcovs computed at fit

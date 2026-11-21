@@ -479,3 +479,24 @@ def test_plot_without_matplotlib(monkeypatch):
     with pytest.raises(ImportError, match="hdfe-stream\\[plot\\]"):
         r.plot()
     assert isinstance(r.table, pl.DataFrame)
+
+
+def test_plot_event_study(tmp_path, monkeypatch):
+    pytest.importorskip("matplotlib")
+    import matplotlib
+    matplotlib.use("Agg")
+    rng = np.random.default_rng(14)
+    beta, sigma = _small_event_study(rng)
+    names = ["rel::-4", "rel::-3", "rel::-2", "rel::0", "rel::1", "rel::2"]
+    res = _result(names, beta, sigma)
+    fig = res.plot_event_study()
+    ax = fig.axes[0]
+    xs = np.concatenate([line.get_xdata() for line in ax.lines if len(line.get_xdata())])
+    assert -1 in set(np.round(xs).tolist())          # the reference, drawn at zero
+    fig.savefig(tmp_path / "event_study.png")
+    fig = res.plot_event_study(joint=True, seed=1, reference=None)
+    assert fig.axes[0].get_ylabel().endswith("95% simultaneous interval")
+    monkeypatch.setitem(sys.modules, "matplotlib", None)
+    monkeypatch.setitem(sys.modules, "matplotlib.pyplot", None)
+    with pytest.raises(ImportError, match="hdfe-stream\\[plot\\]"):
+        res.plot_event_study()
