@@ -194,6 +194,32 @@ def test_matches_r_on_every_grid_point(ref, job, monkeypatch):
             assert near.min() != near.max(), f"M={M}: grid point {i} differs inside a run"
 
 
+def test_hybrid_tests_its_first_stage_boundary():
+    """The FLCI hybrid's grid is its first-stage interval, so the grid's ends are
+    on the first stage's boundary, where the truncation bound is the statistic
+    itself. Rounding put the statistic just outside it at M = 0 here, R's rule
+    then accepted the end of the grid, and the interval reached it ([0.085, 0.350]
+    for R's [0.085, 0.238]). The end is tested on the bound instead."""
+    rng = np.random.default_rng(1004)
+    n = 8
+    F = rng.normal(size=(n, 2))
+    C = F @ F.T + np.eye(n)
+    d = np.sqrt(np.diag(C))
+    se = 0.05 * np.exp(rng.normal(scale=0.3, size=n))
+    sigma = (C / np.outer(d, d)) * np.outer(se, se)
+    times = np.concatenate([-np.arange(4, 0, -1), np.arange(1, 5)])
+    beta = 0.005 * times + np.concatenate([np.zeros(4), 0.15 + 0.02 * np.arange(1, 5)])
+    beta = beta + np.linalg.cholesky(sigma) @ rng.normal(size=n)
+    r = S.trend_sensitivity(beta, sigma, 4, restriction="smoothness",
+                            ci_method="hybrid_fixed_length", M=[0.0, 1e-6])
+    (_, lo0, hi0), (_, lo1, hi1) = r.table.rows()
+    grid_lb, grid_ub = r.diagnostics["grid_bounds"][0]
+    assert hi0 < grid_ub - 0.1
+    # HonestDiD 0.2.8: [0.08487657, 0.2380951] at M = 0
+    assert_allclose([lo0, hi0], [0.08487657, 0.2380951], atol=5e-4)
+    assert_allclose([lo0, hi0], [lo1, hi1], atol=(grid_ub - grid_lb) / 999 * 1.01)
+
+
 def test_duplicate_moments_do_not_change_the_test(monkeypatch):
     """Relative magnitudes at M = 0 with a sign restriction repeat moments; the
     decisions are those of the restriction without the repeats."""

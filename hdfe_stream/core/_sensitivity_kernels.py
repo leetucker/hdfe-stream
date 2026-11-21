@@ -41,6 +41,111 @@ _MAX_ITER = 5000
 _PIVOT_TOL = 1e-9
 
 
+# The systems below have at most a few dozen rows. They are solved here rather than
+# by LAPACK: OpenBLAS's LAPACK takes a process-wide lock for its work buffers on
+# every call, even with one BLAS thread, and with several threads solving their
+# own small programs the lock, not the arithmetic, set the time (eight threads
+# were slower than one).
+
+@nb.njit(cache=True, nogil=True, error_model="numpy")
+def _solve(B, rhs, transpose):
+    """B x = rhs (or B' x = rhs), by Gaussian elimination with partial pivoting.
+    B is not changed."""
+    r = B.shape[0]
+    L = np.empty((r, r))
+    for i in range(r):
+        for j in range(r):
+            L[i, j] = B[j, i] if transpose else B[i, j]
+    x = rhs.copy()
+    for col in range(r):
+        piv = col
+        big = abs(L[col, col])
+        for i in range(col + 1, r):
+            if abs(L[i, col]) > big:
+                big = abs(L[i, col])
+                piv = i
+        if piv != col:
+            for j in range(r):
+                t = L[col, j]
+                L[col, j] = L[piv, j]
+                L[piv, j] = t
+            t = x[col]
+            x[col] = x[piv]
+            x[piv] = t
+        p = L[col, col]
+        for i in range(col + 1, r):
+            f = L[i, col] / p
+            if f != 0.0:
+                for j in range(col + 1, r):
+                    L[i, j] -= f * L[col, j]
+                x[i] -= f * x[col]
+    for i in range(r - 1, -1, -1):
+        s = x[i]
+        for j in range(i + 1, r):
+            s -= L[i, j] * x[j]
+        x[i] = s / L[i, i]
+    return x
+
+
+@nb.njit(cache=True, nogil=True, error_model="numpy")
+def _inverse(B):
+    r = B.shape[0]
+    out = np.empty((r, r))
+    e = np.zeros(r)
+    for j in range(r):
+        e[:] = 0.0
+        e[j] = 1.0
+        col = _solve(B, e, False)
+        for i in range(r):
+            out[i, j] = col[i]
+    return out
+
+
+@nb.njit(cache=True, nogil=True, error_model="numpy")
+def _singular_values(Mx):
+    """The singular values of a small matrix, largest first, by one-sided
+    Jacobi rotations of its columns (of its transpose's, when it is wide)."""
+    m, n = Mx.shape
+    if n > m:
+        U = Mx.T.copy()
+        m, n = n, m
+    else:
+        U = Mx.copy()
+    eps = 2.220446049250313e-16
+    for _ in range(80):
+        rotated = False
+        for p in range(n - 1):
+            for q in range(p + 1, n):
+                alpha = 0.0
+                beta = 0.0
+                gamma = 0.0
+                for i in range(m):
+                    alpha += U[i, p] * U[i, p]
+                    beta += U[i, q] * U[i, q]
+                    gamma += U[i, p] * U[i, q]
+                if gamma == 0.0 or abs(gamma) <= eps * np.sqrt(alpha * beta):
+                    continue
+                rotated = True
+                zeta = (beta - alpha) / (2.0 * gamma)
+                t = (1.0 if zeta >= 0 else -1.0) / (abs(zeta) + np.sqrt(1.0 + zeta * zeta))
+                c = 1.0 / np.sqrt(1.0 + t * t)
+                s = c * t
+                for i in range(m):
+                    up = U[i, p]
+                    uq = U[i, q]
+                    U[i, p] = c * up - s * uq
+                    U[i, q] = s * up + c * uq
+        if not rotated:
+            break
+    sv = np.empty(n)
+    for j in range(n):
+        acc = 0.0
+        for i in range(m):
+            acc += U[i, j] * U[i, j]
+        sv[j] = np.sqrt(acc)
+    return np.sort(sv)[::-1]
+
+
 @nb.njit(cache=True, nogil=True, error_model="numpy")
 def _gather_basis(WT, basis, B):
     r = basis.shape[0]
@@ -75,8 +180,8 @@ def simplex(WT, b, c, basis, max_iter):
         _gather_basis(WT, basis, B)
         for i in range(r):
             cB[i] = c[basis[i]]
-        xB = np.linalg.solve(B, b)
-        pi = np.linalg.solve(B.T.copy(), cB)
+        xB = _solve(B, b, False)
+        pi = _solve(B, cB, True)
         bland = degenerate > 20
         enter = -1
         best = tol_d
@@ -96,7 +201,7 @@ def simplex(WT, b, c, basis, max_iter):
                     enter = j
         if enter < 0:
             return OPTIMAL, xB
-        u = np.linalg.solve(B, WT[enter].copy())
+        u = _solve(B, WT[enter], False)
         leave = -1
         tmin = np.inf
         for i in range(r):
@@ -151,7 +256,7 @@ def phase_one(WT, b):
         _gather_basis(W1T, basis, B)
         e = np.zeros(r)
         e[i] = 1.0
-        rho = np.linalg.solve(B.T.copy(), e)
+        rho = _solve(B, e, True)
         best = 1e-9
         enter = -1
         for j in range(n):
@@ -360,7 +465,7 @@ def _rank(Mx):
     max(dim) * eps * the largest."""
     if Mx.shape[0] == 0 or Mx.shape[1] == 0:
         return 0
-    s = np.linalg.svd(Mx.copy())[1]
+    s = _singular_values(Mx)
     tol = max(Mx.shape[0], Mx.shape[1]) * 2.220446049250313e-16 * s[0]
     k = 0
     for v in s:
@@ -480,7 +585,7 @@ def arp_path(Y0, a, rows, X, SY, thetas, hybrid, lf_cv, vbar, half, vbar_d, vbar
             gamma = lam
             sB = np.sqrt(s2)
         else:
-            MBinv = np.linalg.inv(MB)
+            MBinv = _inverse(MB)
             gamma = np.zeros(mA)
             for q in range(k + 1):
                 gamma[Bidx[q]] = MBinv[0, q]
@@ -556,9 +661,18 @@ def arp_path(Y0, a, rows, X, SY, thetas, hybrid, lf_cv, vbar, half, vbar_d, vbar
         else:
             lo = vlo / sB
             up = vup / sB
-        if not (lo <= ms and ms <= up):
+        # The observed statistic lies in its truncation interval by construction.
+        # R does not reject when it falls outside; within rounding of a bound (a
+        # theta on the boundary of the hybrid's first stage, where the bound is
+        # the statistic itself) it is on the bound, and is tested there.
+        tol = 1e-9 * max(1.0, abs(ms))
+        if not (lo - tol <= ms and ms <= up + tol):
             kind[g] = ACCEPT
             continue
+        if ms > up:
+            ms = up
+        if ms < lo:
+            ms = lo
         kind[g] = QUANTILE
         maxstat[g] = ms
         zlo[g] = lo

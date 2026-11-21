@@ -22,6 +22,7 @@ over the R package comes from.
 
 from __future__ import annotations
 
+import functools
 import math
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -212,11 +213,21 @@ def _truncnorm_quantile(p, lo, up):
     return out
 
 
+@functools.lru_cache(maxsize=64)
+def _normal_draws(simulations, dim, seed):
+    """The least-favorable critical value's standard normal draws, the same for
+    every polyhedron of a size: drawn once, not once per polyhedron in each
+    thread (NumPy's generator holds the GIL)."""
+    draws = np.random.default_rng(seed).standard_normal((simulations, dim))
+    draws.flags.writeable = False
+    return draws
+
+
 def _lf_cv_plain(SA, kappa, simulations, seed):
     """The least-favorable critical value without nuisance parameters (R's
     .compute_least_favorable_cv with X_T = NULL): the 1 - kappa quantile of
     the largest standardized moment under the null, from simulated draws."""
-    draws = np.random.default_rng(seed).standard_normal((simulations, len(SA))) @ _psd_root(SA)
+    draws = _normal_draws(simulations, len(SA), seed) @ _psd_root(SA)
     draws /= np.sqrt(np.diag(SA))
     return float(np.quantile(draws.max(axis=1), 1 - kappa))
 
@@ -226,7 +237,7 @@ def _lf_cv_arp(SA, XA, dual, kappa, simulations, seed):
     1 - kappa quantile of eta under the least-favorable null, one linear
     program per simulated draw (failed programs dropped, as in R)."""
     WT, b, scale, basis = dual
-    draws = np.random.default_rng(seed).standard_normal((simulations, len(SA))) @ _psd_root(SA)
+    draws = _normal_draws(simulations, len(SA), seed) @ _psd_root(SA)
     etas = K.lf_etas(WT, b, np.ascontiguousarray(draws), scale, basis)
     return float(np.nanquantile(etas, 1 - kappa))
 
@@ -294,33 +305,58 @@ def _setup_piece(piece, beta, sigma, n_pre, n_post, l, family, method, alpha, ka
     return _Setup(True, hybrid, size, pay)
 
 
-def _test_grid(setup, thetas, beta, sigma, n_pre):
-    """1 where the test accepts theta, 0 where it rejects."""
+def _test_raw(setup, thetas, beta, sigma, n_pre):
+    """The compiled part of the test at each theta (it runs without the GIL, in
+    the worker threads): the decisions it reaches, and for the rest the
+    statistic and its truncation bounds. `_decide` finishes the test."""
     p = setup.payload
     if not setup.nuisance:
-        kind, stat, mu, sd, zlo, zup = K.plain_path(
-            beta, sigma, p["A"], p["d"], n_pre, thetas, setup.hybrid, p["lf_cv"], p["fs_l"], p["fs_h"])
-        accept = kind == K.ACCEPT
-        q = kind == K.QUANTILE
-        if q.any():
-            z = _truncnorm_quantile(1 - setup.size, zlo[q], zup[q])
-            with np.errstate(invalid="ignore"):
-                cv = np.maximum(0, mu[q] + sd[q] * z)
-                accept[q] = ~(stat[q] > cv)
-        return accept
+        return ("plain",) + tuple(K.plain_path(
+            beta, sigma, p["A"], p["d"], n_pre, thetas, setup.hybrid, p["lf_cv"], p["fs_l"],
+            p["fs_h"]))
     if p["dual"] is None:
-        return np.ones(len(thetas), bool)
+        return ("accept", len(thetas))
     WT, b, scale, basis = p["dual"]
-    kind, ms, zlo, zup = K.arp_path(
+    return ("arp",) + tuple(K.arp_path(
         p["Y0"], p["a"], p["rows"], p["X"], p["SY"], thetas, setup.hybrid, p["lf_cv"],
-        p["vbar"], p["half"], p["vbar_d"], p["vbar_a"], WT, b, scale, basis)
-    accept = kind == K.ACCEPT
-    q = kind == K.QUANTILE
-    if q.any():
-        z = _truncnorm_quantile(1 - setup.size, zlo[q], zup[q])
-        with np.errstate(invalid="ignore"):
-            accept[q] = ~(ms[q] > np.maximum(0, z))
-    return accept
+        p["vbar"], p["half"], p["vbar_d"], p["vbar_a"], WT, b, scale, basis))
+
+
+def _decide(items):
+    """Accept (True) or reject each theta, for a list of (setup, `_test_raw`
+    output): the truncated-normal quantiles of all of them in one vectorized
+    call per test size, in the calling thread."""
+    out, want = [], {}
+    for n, (setup, raw) in enumerate(items):
+        if raw[0] == "accept":
+            out.append(np.ones(raw[1], bool))
+            continue
+        kind = raw[1]
+        out.append(kind == K.ACCEPT)
+        q = np.flatnonzero(kind == K.QUANTILE)
+        if len(q):
+            zlo, zup = (raw[5], raw[6]) if raw[0] == "plain" else (raw[3], raw[4])
+            want.setdefault(setup.size, []).append((n, q, zlo[q], zup[q]))
+    for size, parts in want.items():
+        z_all = _truncnorm_quantile(1 - size, np.concatenate([p[2] for p in parts]),
+                                    np.concatenate([p[3] for p in parts]))
+        at = 0
+        for n, q, _lo, _up in parts:
+            z = z_all[at:at + len(q)]
+            at += len(q)
+            raw = items[n][1]
+            with np.errstate(invalid="ignore"):
+                if raw[0] == "plain":
+                    stat, mu, sd = raw[2][q], raw[3][q], raw[4][q]
+                    out[n][q] = ~(stat > np.maximum(0, mu + sd * z))
+                else:
+                    out[n][q] = ~(raw[2][q] > np.maximum(0, z))
+    return out
+
+
+def _test_grid(setup, thetas, beta, sigma, n_pre):
+    """1 where the test accepts theta, 0 where it rejects."""
+    return _decide([(setup, _test_raw(setup, thetas, beta, sigma, n_pre))])[0]
 
 
 # --------------------------------------------------------------------------
@@ -684,12 +720,17 @@ def _run(beta, sigma, n_pre, n_post, l, Ms, restriction, bias, monotonicity, ci_
         with ThreadPoolExecutor(max_workers=threads) as ex:
             prepared = dict(ex.map(prepare, list(setups)))
 
-            def run(args):
-                key, thetas = args
-                return key, _test_grid(prepared[key], thetas, beta, sigma, n_pre)
+            def run(items):
+                """{key: accepted} for (key, thetas) items: the compiled test in
+                the threads, the quantiles here."""
+                raws = list(ex.map(
+                    lambda it: _test_raw(prepared[it[0]], it[1], beta, sigma, n_pre), items))
+                return dict(zip([key for key, _ in items],
+                                _decide([(prepared[key], raw)
+                                         for (key, _), raw in zip(items, raws)])))
 
             grid_of = {mi: np.linspace(lb, ub, grid_points) for mi, _, _, _, lb, ub in jobs}
-            accepted = dict(ex.map(run, [(key, grid_of[key[0]]) for key in prepared]))
+            accepted = run([(key, grid_of[key[0]]) for key in prepared])
 
             for mi, m, pieces, _, lb, ub in jobs:
                 thetas = grid_of[mi]
@@ -705,9 +746,9 @@ def _run(beta, sigma, n_pre, n_post, l, Ms, restriction, bias, monotonicity, ci_
                     # the estimate before reporting an empty interval
                     half_w = (thetas[-1] - thetas[0]) / 2
                     thetas = np.linspace(estimate - half_w, estimate + half_w, len(thetas))
-                    res = list(ex.map(run, [((mi, pj), thetas) for pj in range(len(pieces))]))
+                    res = run([((mi, pj), thetas) for pj in range(len(pieces))])
                     acc = np.zeros(len(thetas), bool)
-                    for _, a_ in res:
+                    for a_ in res.values():
                         acc |= a_
                     ext = True
                 lower_open = upper_open = False
@@ -721,9 +762,9 @@ def _run(beta, sigma, n_pre, n_post, l, Ms, restriction, bias, monotonicity, ci_
                             new = edge + side * step * np.arange(1, grid_points + 1)
                             if side < 0:
                                 new = new[::-1]
-                            res = list(ex.map(run, [((mi, pj), new) for pj in range(len(pieces))]))
+                            res = run([((mi, pj), new) for pj in range(len(pieces))])
                             add = np.zeros(len(new), bool)
-                            for _, a in res:
+                            for a in res.values():
                                 add |= a
                             thetas = np.concatenate([new, thetas]) if side < 0 else np.concatenate([thetas, new])
                             acc = np.concatenate([add, acc]) if side < 0 else np.concatenate([acc, add])

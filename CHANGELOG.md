@@ -12,7 +12,7 @@ Adds Rambachan and Roth's sensitivity analysis for parallel trends. Fits are unc
   intervals (FLCI, conditional, and the two hybrids) and their defaults are those of the
   authors' R package HonestDiD 0.2.8, and the intervals agree with it at every point of
   its grid. The linear programs of the conditional tests are solved in compiled code,
-  each from the previous solution, which makes a relative-magnitudes analysis about a
+  each from the previous solution, which makes a relative-magnitudes analysis a few
   hundred times faster than the R package, in a few megabytes of memory. See
   [Sensitivity to parallel trends](https://leetucker.github.io/hdfe-stream/reference/sensitivity.html) for the few deliberate
   differences.
