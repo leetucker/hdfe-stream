@@ -15,6 +15,11 @@ fit to the other folds' rows alone. When the folds are whole groups of the
 streamed dimension and it is the only fixed effect, the two are the same: a
 group's mean comes from its own rows, all in one fold.
 
+Without fixed effects nothing is grouped or partialled out, so the rows are
+not copied to the run directory as a fit copies them: the one pass after
+pass 0 reads the source itself, through the same filter and the same
+evaluated design.
+
 With ``save_rows=True`` the residualized rows are also written to Parquet,
 for estimators that need more passes over them than the cross-products
 give (penalty loadings computed from residuals, say), without partialling
@@ -142,6 +147,38 @@ class CrossProducts:
             self._run.cleanup()
 
 
+class _Estimator(_StreamingBase):
+    """The estimator `cross_products` drives. Without fixed effects it keeps
+    pass 0's rows as the query that would have written them (the source,
+    filtered and with the design evaluated) instead of writing them, and the
+    rows pass reads that query: one pass over the source in place of a
+    write and a read of a copy. With fixed effects it is the estimator
+    unchanged."""
+
+    _direct = None
+
+    def _sink(self, lf, target, what, before_retry=None, **kw):
+        if self.no_fe and what == "pass 0 write rows":
+            self._direct = lf
+            return None
+        return super()._sink(lf, target, what, before_retry=before_retry, **kw)
+
+    def _row_chunks(self, cols):
+        if self._direct is None:
+            yield from super()._row_chunks(cols)
+            return
+        pieces = 8 * nb.get_num_threads()
+        for frame in self._direct.select(cols).collect_batches(chunk_size=self.batch_rows,
+                                                                engine="streaming"):
+            n = frame.height
+            if n == 0:
+                continue
+            ch = {c: frame.get_column(c).to_numpy() for c in cols}
+            del frame
+            starts = np.unique(np.linspace(0, n, min(n, pieces) + 1).astype(np.int64))
+            yield ch, starts, np.zeros((n, 0), np.int64)
+
+
 @nb.njit(cache=True)
 def _split_bounds(s, n_splits):
     counts = np.zeros(n_splits + 1, np.int64)
@@ -250,7 +287,7 @@ def cross_products(source: Source, variables: Variables, fe: Sequence[str] = (),
     variables = list(variables)
     if not variables:
         raise ValueError("variables must name at least one variable")
-    est = _StreamingBase(variables[:1], variables[1:], list(fe), weights=weights,
+    est = _Estimator(variables[:1], variables[1:], list(fe), weights=weights,
                          weights_type=weights_type, assembly="rows", save_resid=False,
                          keep=list(dict.fromkeys(
                              ([split_by] if split_by is not None else []) + carry)),

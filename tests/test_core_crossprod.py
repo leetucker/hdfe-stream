@@ -159,3 +159,42 @@ def test_rows_not_saved_by_default(tmp_path):
     with pytest.raises(ValueError, match="carry needs"):
         cross_products(_panel(), ["y", "x1"], carry=["firm"], workdir=tmp_path,
                        verbose=False)
+
+
+def test_no_fixed_effects_reads_the_source_without_copying_it(tmp_path, monkeypatch):
+    """Without fixed effects the rows pass reads pass 0's query, so no copy of
+    the rows is written; the sums are those of the source's rows."""
+    from hdfe_stream.core import crossprod
+    written = []
+    orig = crossprod._StreamingBase._sink
+
+    def spy(self, lf, target, what, *a, **kw):
+        written.append(what)
+        return orig(self, lf, target, what, *a, **kw)
+
+    monkeypatch.setattr(crossprod._StreamingBase, "_sink", spy)
+    df = _panel(missing=True)
+    path = tmp_path / "panel.parquet"
+    df.write_parquet(path, row_group_size=700)
+    lf = pl.scan_parquet(path).filter(pl.col("year") != 2)
+    cp = cross_products(lf, ["y", "x1", "x2"], weights="w", split_by="fold", n_splits=4,
+                        workdir=tmp_path, verbose=False, batch_rows=1000)
+    assert "pass 0 write rows" not in written
+    kept = df.filter((pl.col("year") != 2) & pl.col("x2").is_not_null())
+    V = kept.select("y", "x1", "x2").to_numpy()
+    w = kept["w"].to_numpy()
+    s = kept["fold"].to_numpy()
+    for j in range(4):
+        r = s == j
+        np.testing.assert_allclose(cp.gram[j], (V[r] * w[r, None]).T @ V[r], rtol=1e-12)
+    assert cp.n_obs == kept.height == cp.counts.sum()
+    assert cp.sample().collect()["in_sample"].sum() == cp.n_obs
+
+
+def test_saved_rows_without_fixed_effects(tmp_path):
+    df = _panel()
+    cp = cross_products(df, ["y", "x1"], split_by="fold", n_splits=4, save_rows=True,
+                        carry=["firm"], workdir=tmp_path, verbose=False)
+    rows = cp.rows().collect().sort(cp.row_id)
+    np.testing.assert_allclose(rows["x1"].to_numpy(), df["x1"].to_numpy())
+    assert (rows["firm"].to_numpy() == df["firm"].to_numpy()).all()
