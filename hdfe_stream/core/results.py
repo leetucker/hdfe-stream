@@ -25,6 +25,53 @@ if TYPE_CHECKING:
 # results
 # --------------------------------------------------------------------------
 
+def sample_frame(spec, check: bool = True) -> pl.LazyFrame:
+    """The source of a fit, lazily, with ``row_id``, ``in_sample`` and
+    ``dropped_because`` added: what `HDFEResult.sample` returns, from the
+    sample spec that pass 0 records (``_sample_spec``). Shared with the
+    other results built on the same passes (`core.crossprod`)."""
+    if spec is None:
+        raise ValueError("this result holds no reference to its source (it was "
+                         "converted, or fitted without one)")
+    source, row_id = spec["source"], spec["row_id"]
+    check_source(source.collect_schema().names())
+    names = ("in_sample", "dropped_because")
+    clash = [c for c in (row_id, *names) if c in source.collect_schema()]
+    if clash:
+        raise ValueError(f"the source has columns named {clash}, which sample() adds; "
+                         "rename them")
+    if check:
+        n = source.select(pl.len()).collect(engine="streaming").item()
+        if n != spec["n_raw"]:
+            raise ValueError(
+                f"the source has {n:,} rows, and had {spec['n_raw']:,} when the model "
+                "was fitted, so row_id would no longer line up with the residuals")
+    frame = row_index(source, row_id)
+    flags = {}
+    for kind, tables in spec["tables"].items():
+        for d, table in tables.items():
+            flag = f"{PREFIX}{kind}_{len(flags.get(kind, []))}"
+            # the source's own order, which a join keeps only when asked
+            frame = frame.join(table.lazy().with_columns(pl.lit(True).alias(flag)),
+                               on=spec["fe_cols"][d], how="left",
+                               maintain_order="left")
+            flags.setdefault(kind, []).append(flag)
+    reason = pl.when(~spec["usable"]).then(pl.lit("missing"))
+    for kind in ("min_degree", "disconnected", "leave_one_out", "singleton",
+                 "separation"):
+        if kind in flags:
+            reason = reason.when(pl.any_horizontal(
+                [pl.col(f).is_not_null() for f in flags[kind]])).then(pl.lit(kind))
+    levels = ["missing", "min_degree", "disconnected", "leave_one_out", "singleton",
+              "separation"]
+    return (frame.with_columns(reason.otherwise(None).cast(pl.Enum(levels))
+                               .alias("dropped_because"))
+                 .with_columns(pl.col("dropped_because").is_null().alias("in_sample"))
+                 .drop([f for fs in flags.values() for f in fs])
+                 .select(row_id, *source.collect_schema().names(), "in_sample",
+                         "dropped_because"))
+
+
 @dataclass(kw_only=True)
 class HDFEResult(RegressionResult):
     """The result of one model: coefficients, standard errors, fit statistics,
@@ -446,47 +493,7 @@ class HDFEResult(RegressionResult):
         -------
         polars.LazyFrame
         """
-        spec = self._sample
-        if spec is None:
-            raise ValueError("this result holds no reference to its source (it was "
-                             "converted, or fitted without one)")
-        source, row_id = spec["source"], spec["row_id"]
-        check_source(source.collect_schema().names())
-        names = ("in_sample", "dropped_because")
-        clash = [c for c in (row_id, *names) if c in source.collect_schema()]
-        if clash:
-            raise ValueError(f"the source has columns named {clash}, which sample() adds; "
-                             "rename them")
-        if check:
-            n = source.select(pl.len()).collect(engine="streaming").item()
-            if n != spec["n_raw"]:
-                raise ValueError(
-                    f"the source has {n:,} rows, and had {spec['n_raw']:,} when the model "
-                    "was fitted, so row_id would no longer line up with the residuals")
-        frame = row_index(source, row_id)
-        flags = {}
-        for kind, tables in spec["tables"].items():
-            for d, table in tables.items():
-                flag = f"{PREFIX}{kind}_{len(flags.get(kind, []))}"
-                # the source's own order, which a join keeps only when asked
-                frame = frame.join(table.lazy().with_columns(pl.lit(True).alias(flag)),
-                                   on=spec["fe_cols"][d], how="left",
-                                   maintain_order="left")
-                flags.setdefault(kind, []).append(flag)
-        reason = pl.when(~spec["usable"]).then(pl.lit("missing"))
-        for kind in ("min_degree", "disconnected", "leave_one_out", "singleton",
-                     "separation"):
-            if kind in flags:
-                reason = reason.when(pl.any_horizontal(
-                    [pl.col(f).is_not_null() for f in flags[kind]])).then(pl.lit(kind))
-        levels = ["missing", "min_degree", "disconnected", "leave_one_out", "singleton",
-                  "separation"]
-        return (frame.with_columns(reason.otherwise(None).cast(pl.Enum(levels))
-                                   .alias("dropped_because"))
-                     .with_columns(pl.col("dropped_because").is_null().alias("in_sample"))
-                     .drop([f for fs in flags.values() for f in fs])
-                     .select(row_id, *source.collect_schema().names(), "in_sample",
-                             "dropped_because"))
+        return sample_frame(self._sample, check)
 
     def solve_normal_equations(self, data: Any, columns: Any, block: int = 16):
         """Solve the fit's normal equations for right-hand sides built from
