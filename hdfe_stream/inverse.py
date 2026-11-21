@@ -26,6 +26,7 @@ import numpy as np
 
 from .core._columns import GCODE, WCOL, vcol
 from .core.kernels_groups import _nb_rademacher
+from .core.solve import _RHS_ZERO_TOL
 from .core.utils import iter_group_chunks
 from .kernels_inverse import (_nb_center_rows, _nb_project_coef, _nb_project_rows,
                               _nb_reduce_rows, _nb_spread_groups)
@@ -82,6 +83,25 @@ class _InverseMixin:
             self._reduced_solver = self._make_block_solver()
         return self._reduced_solver
 
+    def _solve_reduced(self, rhs, scale):
+        """(U, iterations, converged, rel, info): the reduced system solved for `rhs`.
+
+        `scale` is each column's size before the streamed dimension was partialled
+        out. A column whose reduced right-hand side is negligible next to it
+        (`_RHS_ZERO_TOL`) is spanned by the streamed dimension, and is solved by
+        zero without iterating, as in the fit: when another dimension is nested in
+        the streamed one, the whole reduced system is zero up to rounding, and the
+        solver would otherwise chase the rounding to its iteration limit. With a
+        single fixed effect there is no reduced system.
+        """
+        rhs = np.ascontiguousarray(rhs)
+        if rhs.shape[0] == 0:
+            return np.zeros_like(rhs), 0, True, 0.0, {"solver": "none (one fixed effect)"}
+        solve, info = self._reduced()
+        zero = np.linalg.norm(rhs, axis=0) <= _RHS_ZERO_TOL * np.asarray(scale)
+        U, iterations, converged, rel = solve(rhs, zero)
+        return U, iterations, converged, rel, info
+
     def _row_columns(self):
         weighted = self.weights is not None
         cols = [GCODE, *self.ccols] + ([WCOL] if weighted else [])
@@ -101,13 +121,19 @@ class _InverseMixin:
             return np.zeros((n_rows, 0))
         return np.column_stack([chunk[c] for c in columns]).astype(np.float64)
 
+    def _level_codes(self, chunk, n_rows):
+        """The rows' level codes in the non-streamed dimensions (none with one)."""
+        if not self.ccols:
+            return np.zeros((n_rows, 0), dtype=np.int64)
+        return np.column_stack([chunk[c] for c in self.ccols]).astype(np.int64)
+
     def _chunk_layout(self, chunk):
         """(starts, codes, w) for a chunk already in hand."""
         gcode = chunk[GCODE]
         n_rows = len(gcode)
         starts = np.concatenate(
             ([0], np.flatnonzero(gcode[1:] != gcode[:-1]) + 1, [n_rows]))
-        codes = np.column_stack([chunk[c] for c in self.ccols]).astype(np.int64)
+        codes = self._level_codes(chunk, n_rows)
         w = (np.ascontiguousarray(chunk[WCOL], dtype=np.float64)
              if self.weights is not None else np.ones(n_rows))
         return starts, codes, w
@@ -127,7 +153,7 @@ class _InverseMixin:
             n_rows = len(gcode)
             starts = np.concatenate(
                 ([0], np.flatnonzero(gcode[1:] != gcode[:-1]) + 1, [n_rows]))
-            codes = np.column_stack([chunk[c] for c in self.ccols]).astype(np.int64)
+            codes = self._level_codes(chunk, n_rows)
             w = (np.ascontiguousarray(chunk[WCOL], dtype=np.float64) if weighted
                  else np.ones(n_rows))
             yield ordinal, chunk, starts, codes, w
@@ -141,6 +167,7 @@ class _InverseMixin:
         n_threads = self._acc_copies(total_levels, n_vectors)
         acc = np.zeros((n_threads, total_levels, n_vectors))
         acc_x = np.zeros((n_threads, n_cov, n_vectors))
+        squares = np.zeros(n_vectors)
         for ordinal, chunk, starts, codes, w in self._chunks(
                 tuple(extra_columns) + tuple(covariate_columns)):
             R = np.ascontiguousarray(vectors(ordinal, len(w), n_vectors),
@@ -149,7 +176,8 @@ class _InverseMixin:
                 R = np.ascontiguousarray(R * self._sqrt_scale(w)[1][:, None])
             X = self._covariate_matrix(chunk, covariate_columns, len(w))
             _nb_center_rows(starts, codes, self.offs, w, X, R, acc, acc_x)
-        return acc.sum(axis=0), acc_x.sum(axis=0)
+            squares += w @ (R * R)
+        return acc.sum(axis=0), acc_x.sum(axis=0), np.sqrt(squares)
 
     def _border(self, covariates):
         """Precompute the covariate border of the reduced system, once.
@@ -178,14 +206,13 @@ class _InverseMixin:
             cache[key] = (columns, None, None)
             return cache[key]
 
-        solve, _ = self._reduced()
         _, total_levels = self._offsets()
         n_threads = nb.get_num_threads()
 
         # feeding the covariates themselves through the reduction gives
         # T_dx = D_o'W M_0 X and T_xx = X'W M_0 X in one pass
-        T_dx, T_xx = self._reduce_design(columns, total_levels, n_threads)
-        Z, _, _, _ = solve(np.ascontiguousarray(T_dx))
+        T_dx, T_xx, scale = self._reduce_design(columns, total_levels, n_threads)
+        Z, _, _, _, _ = self._solve_reduced(T_dx, scale)
         schur = T_xx - T_dx.T @ Z
         cache[key] = (columns, Z, np.linalg.pinv(schur, hermitian=True))
         return cache[key]
@@ -196,10 +223,12 @@ class _InverseMixin:
         n_threads = self._acc_copies(total_levels, n_cov)
         acc = np.zeros((n_threads, total_levels, n_cov))
         acc_x = np.zeros((n_threads, n_cov, n_cov))
+        squares = np.zeros(n_cov)
         for _, chunk, starts, codes, w in self._chunks(tuple(columns)):
             X = self._covariate_matrix(chunk, columns, len(w))
             _nb_center_rows(starts, codes, self.offs, w, X, X, acc, acc_x)
-        return acc.sum(axis=0), acc_x.sum(axis=0)
+            squares += w @ (X * X)
+        return acc.sum(axis=0), acc_x.sum(axis=0), np.sqrt(squares)
 
     @staticmethod
     def _sqrt_scale(w):
@@ -237,14 +266,13 @@ class _InverseMixin:
 
         Returns the solver info dict for the reduced solve.
         """
-        solve, info = self._reduced()
         _, total_levels = self._offsets()
         n_threads = nb.get_num_threads()
         columns, Z, schur_inv = self._border(covariates)
 
         # pass 1: reduce the rows to the right-hand side of the reduced system
-        rhs, rhs_x = self._reduce(vectors, n_vectors, columns, extra_columns,
-                                  total_levels, n_threads, sqrt_weights)
+        rhs, rhs_x, scale = self._reduce(vectors, n_vectors, columns, extra_columns,
+                                         total_levels, n_threads, sqrt_weights)
 
         # No normalization of the solution. S is singular -- the fixed effects
         # are identified only up to the usual shifts -- so `solve` returns one
@@ -253,7 +281,7 @@ class _InverseMixin:
         # annihilates exactly the null space, so the row-level projection is the
         # same whichever solution came back. `_normalize` exists to make the
         # *reported* fixed effects comparable, which is not what this is for.
-        U, iterations, converged, rel = solve(rhs)
+        U, iterations, converged, rel, info = self._solve_reduced(rhs, scale)
 
         if columns:
             # Schur complement on the small covariate corner
@@ -301,13 +329,13 @@ class _InverseMixin:
         bounded by the block size. `project_rows` avoids it entirely; a
         coefficient-space right-hand side cannot.
         """
-        solve, info = self._reduced()
         _, total_levels = self._offsets()
         n_threads = nb.get_num_threads()
         columns, Z, schur_inv = self._border(covariates)
         n_vectors = levels.shape[1]
         levels, streamed, _ = self._drop_null_component(
             levels, covariate_values, streamed)
+        scale = np.sqrt((levels * levels).sum(axis=0) + (streamed * streamed).sum(axis=0))
 
         # pass 1: rho = P^-1 v_0 spread over rows, reduced onto [X, D_o]
         n_threads = self._acc_copies(total_levels, n_vectors)
@@ -323,7 +351,7 @@ class _InverseMixin:
         rhs_x = covariate_values - acc_x.sum(axis=0)
         del acc, acc_x
 
-        U, iterations, converged, rel = solve(np.ascontiguousarray(rhs))
+        U, iterations, converged, rel, _ = self._solve_reduced(rhs, scale)
         if columns:
             C = schur_inv @ (rhs_x - Z.T @ rhs)
             U = U - Z @ C
@@ -369,6 +397,10 @@ class _InverseMixin:
 
         off, total_levels = self._offsets()
         n_groups = self.n_levels[self.g_fe]
+        if not self.o_fe:
+            # one fixed effect: its levels are all identified
+            self._null_basis = (np.zeros((n_groups, 0)), np.zeros((total_levels, 0)))
+            return self._null_basis
         first = self.o_fe[0]
         comp = np.asarray(self.comp)
         n_components = int(comp.max()) + 1 if len(comp) else 0
