@@ -16,6 +16,14 @@ memory and peak GPU memory instead of disk: gpu_{time,memory,gpu_memory}.
 The GLM figures have two panels, Poisson and logit, with one legend: a setting
 has the same color in both.
 
+The event-study benchmark (event_study.csv) has one figure, time split into the
+event study's estimation and its sensitivity analysis, one bar per library, in two
+panels (relative magnitudes and smoothness): event_study_time.{light,dark}.svg. Its
+numbers, and the sensitivity benchmark's (sensitivity.csv), are also written as
+Markdown tables that the documentation includes:
+
+    docs/benchmarks/event_study_table.md, docs/benchmarks/sensitivity_table.md
+
 Only this file needs changing to restyle them; the numbers stay in the CSVs.
 
 Colors follow the library, not the rank of the line, so a library looks the
@@ -51,6 +59,7 @@ from _settings import LOW_MEMORY_NOTE, SIZED_NOTE, limit_note  # noqa: E402
 HERE = Path(__file__).resolve().parent
 RESULTS = HERE / "results"
 FIGURES = HERE.parent / "docs" / "figures"
+TABLES = HERE.parent / "docs" / "benchmarks"
 
 # the reference categorical palette, in its fixed slot order, light and dark
 SLOTS = {
@@ -452,6 +461,218 @@ def _memory_limit(bench):
     return None
 
 
+# --------------------------------------------------------------------------
+# the sensitivity analysis: the event-study figure and the two tables
+# --------------------------------------------------------------------------
+
+# event_study.csv configuration -> name on the figure, in the order drawn (top first)
+EVENT_STUDY = {
+    "hdfe_stream": "hdfe_stream",
+    "fixest + HonestDiD (R)": "R: fixest, HonestDiD",
+    "fixest + HonestDiD (R, parallel)": "R: fixest, HonestDiD (parallel)",
+    "diff-diff": "diff-diff",
+}
+SENSITIVITY_JOBS = {
+    "relative_magnitudes": "relative magnitudes, C-LF",
+    "smoothness_relative_magnitudes": "smoothness and relative magnitudes, C-LF",
+    "smoothness": "smoothness, FLCI",
+    "smoothness_hybrid": "smoothness, C-F",
+}
+SENSITIVITY_COLUMNS = ["HonestDiD (R)", "HonestDiD (R, parallel)", "hdfe_stream (1 thread)",
+                       "hdfe_stream (all threads)", "diff-diff"]
+
+
+def _sensitivity_machine():
+    try:
+        return json.loads((RESULTS / "sensitivity_machine.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _seconds(v):
+    """3 significant figures, at most 3 decimals."""
+    v = float(v)
+    return f"{v:.3g}" if v >= 0.001 else f"{v:.1g}"
+
+
+def _status_cell(r):
+    why = r["status"].split(":")[0]
+    if why.startswith("timeout after"):
+        return f"> {float(why.split()[2]) / 3600:g} h"
+    if why.startswith("killed") or why.startswith("out of memory"):
+        return "out of memory"
+    return "failed"
+
+
+def event_study_figure(theme_name, rows):
+    theme = THEMES[theme_name]
+    plt.rcParams.update({"svg.fonttype": "none", "svg.hashsalt": "hdfe-stream",
+                         "font.family": "sans-serif", "font.size": 10})
+    by = {r["configuration"]: r for r in rows}
+    labels = [label for label in EVENT_STUDY if label in by]
+    n_units = int(rows[0]["n_units"])
+    n_rows = int(rows[0]["n_rows"])
+    est_color = SLOTS["blue"][theme["slot"]]
+    sens_color = SLOTS["orange"][theme["slot"]]
+    panels = [("Relative magnitudes (C-LF)", "relative_magnitudes_s"),
+              ("Smoothness (FLCI)", "smoothness_s")]
+    # one time scale for both panels, so that their bars compare
+    fig, axes = plt.subplots(1, 2, sharey=True, sharex=True, figsize=(10.4, 3.9))
+    fig.patch.set_facecolor(theme["surface"])
+    y = list(range(len(labels)))[::-1]
+    notes = []
+    totals = []
+    for ax, (panel, column) in zip(axes, panels):
+        ax.set_facecolor(theme["surface"])
+        for yi, label in zip(y, labels):
+            r = by[label]
+            if r["status"] != "ok":
+                ax.text(0, yi, f"  {_status_cell(r)}", va="center", fontsize=8.5,
+                        color=theme["muted"])
+                continue
+            if not r.get(column):
+                # diff-diff's relative-magnitudes interval is not the method's
+                ax.text(0, yi, "  not computed: its interval is a different one",
+                        va="center", fontsize=8.5, color=theme["muted"])
+                continue
+            est, sens = float(r["estimation_s"]), float(r[column])
+            totals.append(est + sens)
+            # a 2px surface gap between the two segments: the surface-colored edge
+            ax.barh(yi, est, height=0.56, color=est_color, edgecolor=theme["surface"],
+                    linewidth=1.5, zorder=3)
+            ax.barh(yi, sens, left=est, height=0.56, color=sens_color,
+                    edgecolor=theme["surface"], linewidth=1.5, zorder=3)
+            ax.annotate(f"{_seconds(est)} s + {_seconds(sens)} s",
+                        xy=(est + sens, yi), xytext=(5, 0), textcoords="offset points",
+                        va="center", fontsize=8.5, color=theme["text"])
+        ax.set_title(panel, color=theme["text"], loc="left", fontsize=10, pad=6)
+        ax.set_xlabel("seconds", color=theme["muted"])
+        ax.grid(True, axis="x", color=theme["grid"], linewidth=0.8, zorder=0)
+        for side in ("top", "right", "left"):
+            ax.spines[side].set_visible(False)
+        ax.spines["bottom"].set_color(theme["axis"])
+        ax.tick_params(colors=theme["muted"], which="both", left=False)
+        ax.set_yticks(y)
+        ax.set_yticklabels([EVENT_STUDY[label] for label in labels], color=theme["text"])
+    axes[0].set_xlim(0, max(totals or [1]) * 1.32)
+    from matplotlib.patches import Patch
+    legend = fig.legend(
+        [Patch(color=est_color), Patch(color=sens_color)],
+        ["the event study (reading the data and fitting)",
+         "the sensitivity analysis (10 values of M)"],
+        loc="upper left", bbox_to_anchor=(0.005, 0.93), ncol=2, frameon=False, fontsize=9,
+        handlelength=1.4)
+    for text in legend.get_texts():
+        text.set_color(theme["text"])
+    fig.suptitle(f"An event study and its sensitivity analysis, {n_units:,} units "
+                 f"({n_rows / 1e6:g} million rows): time", color=theme["text"], x=0.01,
+                 ha="left", fontsize=11)
+    workers = (_sensitivity_machine().get("logical_cpus"))
+    notes.append("Every library is given the same values of M. R's parallel run uses "
+                 "HonestDiD's parallel = TRUE"
+                 + (f", with {workers} forked workers" if workers else "") + ".")
+    lines = [line for note in notes for line in textwrap.wrap(note, 175)]
+    fig.text(0.01, 0.01, "\n".join(lines), color=theme["muted"], fontsize=8, ha="left",
+             va="bottom")
+    fig.tight_layout(rect=(0, 0.035 * len(lines) + 0.01, 1, 0.86))
+    return fig
+
+
+def _machine_line(info):
+    ec2 = info.get("ec2") or {}
+    where = (f"an EC2 {ec2['instance_type']}" if ec2.get("instance_type")
+             else f"one {info.get('cpu', 'machine')}")
+    versions = [f"{name} {info[key]}" for name, key in
+                (("R", "R"), ("HonestDiD", "HonestDiD"), ("fixest", "fixest"),
+                 ("diff-diff", "diff-diff"), ("hdfe-stream", "hdfe-stream")) if info.get(key)]
+    return (f"Measured on {where} ({info.get('logical_cpus', '?')} logical CPUs, "
+            f"{info.get('memory_gb', '?')} GB), {info.get('measured', '')}"
+            + (f"; {', '.join(versions)}" if versions else "") + ".")
+
+
+def sensitivity_table(rows):
+    info = _sensitivity_machine()
+    threads = info.get("logical_cpus")
+    names = {"HonestDiD (R)": "R HonestDiD",
+             "HonestDiD (R, parallel)": "R HonestDiD, parallel",
+             "hdfe_stream (1 thread)": "hdfe-stream, 1 thread",
+             "hdfe_stream (all threads)": "hdfe-stream, "
+             + (f"{threads} threads" if threads else "all threads"),
+             "diff-diff": "diff-diff"}
+    cell = {(int(r["n_pre"]), r["job"], r["grid"], r["configuration"]): r for r in rows}
+    pre = sorted({int(r["n_pre"]) for r in rows})
+    lines = [_machine_line(info), ""]
+    for grid, heading in (("one", "One value of M"), ("default", "R's default grid of 10 values of M")):
+        cols = [c for c in SENSITIVITY_COLUMNS
+                if any(k[2] == grid and k[3] == c for k in cell)]
+        if not cols:
+            continue
+        lines += [f"**{heading}**, seconds:", "",
+                  "| Pre-treatment periods | Restriction, interval | "
+                  + " | ".join(names[c] for c in cols) + " |",
+                  "|---:|---|" + "---:|" * len(cols)]
+        for n in pre:
+            for job, job_name in SENSITIVITY_JOBS.items():
+                if not any((n, job, grid, c) in cell for c in cols):
+                    continue
+                vals = []
+                for c in cols:
+                    r = cell.get((n, job, grid, c))
+                    vals.append("–" if r is None else
+                                _seconds(r["seconds"]) if r["status"] == "ok" else _status_cell(r))
+                lines.append(f"| {n} | {job_name} | " + " | ".join(vals) + " |")
+        lines.append("")
+    lines += ["Largest increase in peak memory over the process's value after loading "
+              "the packages:", ""]
+    for c in SENSITIVITY_COLUMNS:
+        extra = [float(r["extra_memory_mb"]) for r in rows
+                 if r["configuration"] == c and r["status"] == "ok" and r.get("extra_memory_mb")]
+        if extra:
+            lines.append(f"- {names[c]}: {max(extra):,.0f} MB")
+    return "\n".join(lines) + "\n"
+
+
+def event_study_table(rows):
+    lines = [_machine_line(_sensitivity_machine()), "",
+             "| | Event study (s) | Relative magnitudes, C-LF (s) | Smoothness, FLCI (s) "
+             "| Peak memory (GB) |", "|---|---:|---:|---:|---:|"]
+    by = {r["configuration"]: r for r in rows}
+    for label, name in EVENT_STUDY.items():
+        r = by.get(label)
+        if r is None:
+            continue
+        if r["status"] != "ok":
+            lines.append(f"| {name} | {_status_cell(r)} | | | |")
+            continue
+        rm = _seconds(r["relative_magnitudes_s"]) if r.get("relative_magnitudes_s") else "–"
+        lines.append(f"| {name} | {_seconds(r['estimation_s'])} | {rm} | "
+                     f"{_seconds(r['smoothness_s'])} | {float(r['peak_memory_mb']) / 1000:.1f} |")
+    return "\n".join(lines) + "\n"
+
+
+def sensitivity_outputs():
+    TABLES.mkdir(parents=True, exist_ok=True)
+    if (RESULTS / "event_study.csv").exists():
+        rows = read("event_study")
+        largest = max(int(r["n_units"]) for r in rows)
+        rows = [r for r in rows if int(r["n_units"]) == largest]
+        for theme in THEMES:
+            fig = event_study_figure(theme, rows)
+            path = FIGURES / f"event_study_time.{theme}.svg"
+            fig.savefig(path, facecolor=fig.get_facecolor(), metadata={"Date": None})
+            plt.close(fig)
+            print(path.relative_to(HERE.parent))
+        (TABLES / "event_study_table.md").write_text(event_study_table(rows))
+        print((TABLES / "event_study_table.md").relative_to(HERE.parent))
+    else:
+        print("no results for event_study; run benchmarks/event_study_benchmark.py")
+    if (RESULTS / "sensitivity.csv").exists():
+        (TABLES / "sensitivity_table.md").write_text(sensitivity_table(read("sensitivity")))
+        print((TABLES / "sensitivity_table.md").relative_to(HERE.parent))
+    else:
+        print("no results for sensitivity; run benchmarks/sensitivity_benchmark.py")
+
+
 def main():
     FIGURES.mkdir(parents=True, exist_ok=True)
     for bench in ("akm", "kss", "covariates", "glm", "glm_covariates", "gpu",
@@ -468,6 +689,7 @@ def main():
                             metadata={"Date": None})
                 plt.close(fig)
                 print(f"{path.relative_to(HERE.parent)} ({drawn} series)")
+    sensitivity_outputs()
 
 
 if __name__ == "__main__":

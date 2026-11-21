@@ -18,11 +18,11 @@ restrictions, intervals and defaults, and it gives the same intervals. It is
 much faster: the R package solves hundreds of thousands of small linear
 programs for a relative-magnitudes analysis, building each one in R; here they
 are solved in compiled code, each starting from the previous solution. A
-relative-magnitudes interval takes about a hundred times less time than in R
-(0.06 second instead of 6.6 with 4 pre-treatment periods, 0.45 instead of 51
-with 32), and a smoothness FLCI a few hundredths of a second instead of 4 (see
-[the benchmark](#speed)). It also uses next to no memory: a few megabytes,
-where the R package's smoothness intervals use about a gigabyte.
+relative-magnitudes interval takes a few hundred times less time than in R
+(0.02 second instead of 6.6 with 4 pre-treatment periods, 0.18 instead of 51
+with 32, on one thread), and a smoothness FLCI hundredths of a second instead
+of 4 (see [the benchmarks](#speed)). It also uses next to no memory: about ten
+megabytes, where the R package's smoothness intervals use about a gigabyte.
 
 ## Use it
 
@@ -149,22 +149,47 @@ languages. The differences that remain are deliberate:
 
 ## Speed
 
-Seconds for one value of M (the default grid of 1,000 points), on simulated
-event studies with 4 post-treatment periods, on one laptop (8 cores; R 4.5.3,
-HonestDiD 0.2.8, diff-diff 4.0.0). diff-diff is shown for the FLCI only: its
-relative-magnitudes interval is not the method's (it widens the estimated
-identified set by z standard errors, its conditional test being disabled), so
-its time is not comparable. `benchmarks/sensitivity_benchmark.py` reproduces
-the table.
+The analysis uses only the event study's coefficients and their covariance,
+so its time does not depend on the size of the panel, only on the number of
+event times. Two benchmarks compare it with R's HonestDiD and with diff-diff
+(`benchmarks/sensitivity_benchmark.py` and `event_study_benchmark.py`; each
+table says what it was measured on). diff-diff is timed for the smoothness
+FLCI only: its relative-magnitudes interval is not the method's (it widens the
+estimated identified set by z standard errors, its conditional test being
+disabled).
+
+**An event study, then its sensitivity analysis.** On a simulated panel of
+1,000,000 units observed for 13 years, with one treatment date, the event study
+`y ~ i(rel_time, ref=-1) | unit + year` is fitted and its first post-treatment
+effect analyzed at 10 values of M, the same in every library. With hdfe-stream,
+fitting the event study takes nearly all the time; in R, the sensitivity
+analysis does.
+
+```{image} ../figures/event_study_time.light.svg
+:class: only-light benchmark
+:alt: Time to fit an event study on 1,000,000 units and run its sensitivity analysis, split into the two, for hdfe-stream, R (fixest, then HonestDiD, sequentially and in parallel) and diff-diff
+```
+```{image} ../figures/event_study_time.dark.svg
+:class: only-dark benchmark
+:alt: Time to fit an event study on 1,000,000 units and run its sensitivity analysis, split into the two, for hdfe-stream, R (fixest, then HonestDiD, sequentially and in parallel) and diff-diff
+```
+
+```{include} ../benchmarks/event_study_table.md
+```
+
+**More event times.** Seconds for one value of M and for R's default grid of
+10, on simulated event studies with 4 post-treatment periods (1,000 grid points
+for the conditional tests). R's `parallel = TRUE` runs the values of M on forked
+worker processes, one per logical CPU, so it is measured for the grid only; it
+shortens the grid's time, at several times the memory.
 
 ```{include} ../benchmarks/sensitivity_table.md
 ```
 
 The work is linear in the number of pre-treatment periods for the
 relative-magnitudes restrictions (one polyhedron per pre-treatment period and
-sign). The polyhedra and the values of M run in parallel (`n_threads=`), which
-pays off for a grid of M values more than for one. Memory is negligible:
-everything is of the size of the event study.
+sign). The polyhedra and the values of M run in parallel (`n_threads=`).
+Memory is negligible: everything is of the size of the event study.
 
 ## Reference
 

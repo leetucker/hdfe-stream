@@ -1,9 +1,14 @@
-# R and fixest for the benchmarks' "fixest (R)" configurations, from
-# conda-forge, at the versions the published results were measured with:
+# R for the benchmarks' R configurations, from conda-forge, at the versions the
+# published results were measured with:
 #
 #   micromamba create -p benchmarks/external/.r -f benchmarks/external/environment.yml
+#   benchmarks/external/.r/bin/Rscript benchmarks/external/install_honestdid.R
 #
-# (or conda/mamba with the same arguments). See benchmarks/README.md.
+# (or conda/mamba with the same arguments). See benchmarks/README.md. fixest is for
+# the regression benchmarks; the rest is for HonestDiD (sensitivity_benchmark.py and
+# event_study_benchmark.py). HonestDiD and TruncatedNormal are not on conda-forge:
+# install_honestdid.R builds them from a dated CRAN snapshot, with the compilers
+# below, on top of these packages.
 name: hdfe-stream-benchmarks-r
 channels:
   - conda-forge
@@ -12,3 +17,29 @@ dependencies:
   - r-fixest=0.14.2
   - r-arrow=25.0.0
   - r-jsonlite=2.0.0
+  # HonestDiD's dependencies
+  - r-cvxr=1.9.3
+  - r-clarabel=0.11.3
+  - r-ecosolver=0.6.2
+  - r-rglpk=0.6_5.1
+  - r-lpsolveapi=5.5.2.0_17.15
+  - r-foreach=1.5.2
+  - r-doparallel=1.0.17
+  - r-matrixstats=1.5.0
+  - r-latex2exp=0.9.8
+  - r-pracma=2.4.4
+  - r-mvtnorm=1.4_2
+  - r-ggplot2=4.0.4
+  - r-dplyr=1.2.1
+  - r-purrr=1.2.2
+  - r-tibble=3.3.1
+  # TruncatedNormal's
+  - r-nleqslv=3.3.7
+  - r-qrng=0.0_11
+  - r-spacefillr=0.4.0
+  - r-alabama=2025.1.0
+  - r-rcpp=1.1.2
+  - r-rcpparmadillo=15.6.2_1
+  - c-compiler
+  - cxx-compiler
+  - make

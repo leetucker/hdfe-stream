@@ -222,6 +222,7 @@ __marimo__/
 examples/output/
 benchmarks/data/
 benchmarks/external/.r/
+benchmarks/external/.diff_diff/
 prototypes/.ref-venv/
 prototypes/.xhdfe-venv/
 
