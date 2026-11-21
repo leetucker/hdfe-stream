@@ -13,7 +13,7 @@ Adds Rambachan and Roth's sensitivity analysis for parallel trends. Fits are unc
   authors' R package HonestDiD 0.2.8, and the intervals agree with it at every point of
   its grid. The linear programs of the conditional tests are solved in compiled code,
   each from the previous solution, which makes a relative-magnitudes analysis a few
-  hundred times faster than the R package, in a few megabytes of memory. See
+  hundred times faster than the R package. See
   [Sensitivity to parallel trends](https://leetucker.github.io/hdfe-stream/reference/sensitivity.html) for the few deliberate
   differences.
 - **`core.sensitivity`** (stable names): the same from any event study's coefficients and

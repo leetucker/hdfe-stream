@@ -19,10 +19,12 @@ much faster: the R package solves hundreds of thousands of small linear
 programs for a relative-magnitudes analysis, building each one in R; here they
 are solved in compiled code, each starting from the previous solution. A
 relative-magnitudes interval takes a few hundred times less time than in R
-(0.02 second instead of 6.6 with 4 pre-treatment periods, 0.18 instead of 51
+(0.03 second instead of 7.6 with 4 pre-treatment periods, 0.19 instead of 52
 with 32, on one thread), and a smoothness FLCI hundredths of a second instead
-of 4 (see [the benchmarks](#speed)). It also uses next to no memory: about ten
-megabytes, where the R package's smoothness intervals use about a gigabyte.
+of about 3 (see [the benchmarks](#speed)). The smoothness intervals use a few
+megabytes of memory, where the R package uses about half a gigabyte; the
+relative-magnitudes intervals use more as the event study grows (a few hundred
+megabytes for 10 values of M with 64 pre-treatment periods).
 
 ## Use it
 
@@ -189,7 +191,9 @@ shortens the grid's time, at several times the memory.
 The work is linear in the number of pre-treatment periods for the
 relative-magnitudes restrictions (one polyhedron per pre-treatment period and
 sign). The polyhedra and the values of M run in parallel (`n_threads=`).
-Memory is negligible: everything is of the size of the event study.
+Memory grows with the event study, not the panel. The smoothness intervals
+stay under 5 MB. The relative-magnitudes intervals use about 40 MB per value
+of M with 64 pre-treatment periods (R: about 170 MB in all).
 
 ## Reference
 

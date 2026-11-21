@@ -492,6 +492,8 @@ def _sensitivity_machine():
 def _seconds(v):
     """3 significant figures, at most 3 decimals."""
     v = float(v)
+    if v >= 1000:
+        return f"{v:,.0f}"
     return f"{v:.3g}" if v >= 0.001 else f"{v:.1g}"
 
 
