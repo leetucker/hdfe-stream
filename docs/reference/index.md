@@ -14,6 +14,10 @@ are in `hdfe_stream.simulate`.
 | `HDFEMulti` | a formula that expands to several models |
 | `HDFEResult.predict`, `.confint`, `.wald_test`, `.wildboottest` | predictions on new data, confidence intervals (pointwise or simultaneous), Wald tests, the wild cluster bootstrap |
 | `HDFEResult.solve_normal_equations`, `NormalEquationsSolution` | the fit's normal equations solved for right-hand sides built from rows: how a weighted sum of predictions depends on each observation's outcome |
+| **[Sensitivity to parallel trends](sensitivity.md)** | |
+| `HDFEResult.trend_sensitivity` | confidence intervals for an event study's effect when parallel trends may fail (Rambachan and Roth; R's HonestDiD) |
+| `core.sensitivity.trend_sensitivity` | the same from any event study's coefficients and covariance |
+| `HDFEResult.plot_event_study` | plot an event study: estimates and intervals by event time, with the reference period (needs matplotlib) |
 | **[Leave-out variance components](kss.md)** | |
 | `leave_out_kss` | the Kline–Saggio–Sølvsten decomposition, end to end |
 | `LeaveOutComponents`, `ComponentSE`, `WeakIdDiagnostics` | its result, standard errors and weak-identification diagnostic |
@@ -35,6 +39,7 @@ are in `hdfe_stream.simulate`.
 
 estimation
 results
+sensitivity
 kss
 connected
 lowlevel
