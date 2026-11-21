@@ -1,6 +1,6 @@
 # Benchmarks
 
-Eight benchmarks compare hdfe_stream with in-memory libraries. Five use the
+Ten benchmarks compare hdfe_stream with other libraries. Five use the
 simulated AKM panel that ships with the package. Three vary the height of the data, at
 five sizes from 25,000 to 5,000,000 workers (212,000 to 42.5 million rows); the
 number of firms is always workers / 15, so the number of workers is the only
@@ -11,7 +11,9 @@ GPU options and the other libraries' GPU paths. A seventh and an eighth leave
 fixed effects behind: [OLS, IV, logit and probit](regression.md), with zero or
 one fixed effect, on simulated rows from 100,000 to 20 million, against
 scikit-learn, polars-ols, polars-ds, statsmodels, linearmodels, glum, pyfixest
-and R; and the same models on a GPU.
+and R; and the same models on a GPU. Two more measure the [sensitivity analysis
+for parallel trends](../reference/sensitivity.md#speed) against R's HonestDiD and
+diff-diff.
 
 | benchmark | job | compared with |
 |---|---|---|
@@ -22,6 +24,7 @@ and R; and the same models on a GPU.
 | [KSS](kss.md) | the leave-out variance decomposition of `log_earn ~ age_squared + age_cubed \| worker_id + firm_id`, with and without standard errors | xhdfe |
 | [OLS, IV, logit and probit](regression.md) | OLS, 2SLS, logit and probit on 10 covariates, with no fixed effects and with one, on simulated rows (100,000 to 20 million) | scikit-learn, polars-ols, polars-ds, statsmodels, linearmodels, glum, pyfixest, fixest and `lm`/`glm` (R), NumPy |
 | [CPU and GPU](gpu.md) | the AKM regression on a machine with an NVIDIA H100, with hdfe_stream's experimental GPU options | pyfixest (LSMR, on PyTorch on the GPU), xhdfe (CUDA backend), each also on the CPU |
+| [Sensitivity analysis](../reference/sensitivity.md#speed) | Rambachan and Roth's sensitivity analysis for parallel trends, on event studies with 4 to 64 pre-treatment periods, and after fitting `y ~ i(rel_time, ref=-1) \| unit + year` on 1,000,000 units | R's HonestDiD (after fixest), diff-diff |
 | [CPU and GPU, plain regressions](gpu.md#plain-regressions-ols-iv-and-logit) | the OLS, 2SLS and logit models above, with no fixed effects, on the same H100 machine | cuML, CuPy, polars-ols, polars-ds |
 
 In brief: hdfe_stream uses a fraction of the memory at scale, and is not slower

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hdfe-stream"
-version = "0.11.1"
+version = "0.12.0"
 description = "Out-of-core regression with several high-dimensional fixed effects: OLS, Poisson, logit and probit, with AKM/KSS variance decompositions"
 readme = "README.md"
 license = "MIT"
@@ -51,7 +51,9 @@ formula = [
     "formulaic>=1.0",
     "pandas>=2.0",
 ]
-all = ["hdfe-stream[within,amg,formula]"]
+# TrendSensitivityResult.plot
+plot = ["matplotlib>=3.7"]
+all = ["hdfe-stream[within,amg,formula,plot]"]
 # benchmarks/: pyfixest to compare against and matplotlib for the figures.
 # xhdfe is compared too, but installs from source (see benchmarks/README.md)
 benchmark = [

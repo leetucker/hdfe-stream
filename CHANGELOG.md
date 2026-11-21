@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.12.0
+
+Adds Rambachan and Roth's sensitivity analysis for parallel trends, and studentized intervals
+to the refit bootstrap for the packages built on `hdfe_stream.core`. Fits are unchanged.
+
+- **`HDFEResult.trend_sensitivity`**: confidence intervals for an event study's
+  post-treatment effect that remain valid when parallel trends fails by up to M, measured
+  against the pre-treatment coefficients (Rambachan and Roth, 2023), for a regression with
+  leads and lags named by `i()`. The restrictions (relative magnitudes, smoothness, and
+  both together, each with an optional sign or monotonicity restriction), the four
+  intervals (FLCI, conditional, and the two hybrids) and their defaults are those of the
+  authors' R package HonestDiD 0.2.8, and the intervals agree with it at every point of
+  its grid. The linear programs of the conditional tests are solved in compiled code,
+  each from the previous solution, which makes a relative-magnitudes analysis a few
+  hundred times faster than the R package. See
+  [Sensitivity to parallel trends](https://leetucker.github.io/hdfe-stream/reference/sensitivity.html) for the few deliberate
+  differences.
+- **`core.sensitivity`** (stable names): the same from any event study's coefficients and
+  covariance (`trend_sensitivity`, `event_study_sensitivity`), for the packages built on
+  `hdfe_stream.core`; diff-stream's estimators use it.
+- **`core.crossprod`** (stable names `cross_products`, `CrossProducts`): the
+  cross-products of a set of variables with the fixed effects partialled out, as a fit
+  partials them out, summed separately for each value of an integer column, such as a fold
+  or shard number. One pass over the rows after the solve gives every fold's
+  cross-products, which is what K-fold cross-validation of a lasso, ridge or elastic net
+  needs without reading the data again. Without fixed effects the pass reads the
+  source itself rather than a copy of it. `save_rows=True` also writes the residualized
+  rows to Parquet, with any `carry=` columns, for estimators that need more passes over
+  them. `CrossProducts.sample()` reports the sample as `HDFEResult.sample()` does.
+- **`HDFEResult.plot_event_study`**: an event study's coefficients and intervals
+  (pointwise or simultaneous) by event time, with the omitted reference period at zero,
+  as pyfixest's `iplot` draws it (`core.plots.event_study_plot` for any event study).
+- **Studentized bootstrap intervals** (`core.refit`). A `RefitBootstrapResult` given each
+  refit's standard errors (`original_se` and `_se_draws`) gives bootstrap-t intervals,
+  `confint(method="studentized")` (equal-tailed) and `method="symmetric"`, and
+  `standard_error_draws()`. A draw with a finite estimate but no finite standard error counts
+  as failed for these intervals only, so they then need `allow_incomplete=True`.
+- **Each copy of a resampled cluster has a cluster ID of its own** (`core.refit`,
+  `core.resample`). When `refit_draws` resamples clusters (`within=`), the task's
+  `group_column` names a column holding the copy's ID, so that a refit whose estimates depend
+  on the clusters (a clustered weight matrix, say) counts two copies of one cluster as two
+  clusters. The original cluster column is unchanged.
+- **Plots need matplotlib**, which is not a dependency: install it, or the new `plot`
+  extra (`pip install hdfe-stream[plot]`). Everything else works without it.
+
 ## 0.11.1
 
 Two fixes to `HDFEResult.solve_normal_equations`, which packages built on hdfe-stream use

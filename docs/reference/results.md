@@ -14,6 +14,8 @@
    .. automethod:: confint
    .. automethod:: wald_test
    .. automethod:: wildboottest
+   .. automethod:: trend_sensitivity
+   .. automethod:: plot_event_study
    .. automethod:: coef
    .. automethod:: with_vcov
    .. automethod:: fixef

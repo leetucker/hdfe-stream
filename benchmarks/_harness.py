@@ -116,6 +116,68 @@ class DiskPoller:
         self.peak = max(self.peak, allocated_bytes(self.root))
 
 
+def _children(pid):
+    out = []
+    try:
+        for task in os.listdir(f"/proc/{pid}/task"):
+            with open(f"/proc/{pid}/task/{task}/children") as handle:
+                out.extend(int(c) for c in handle.read().split())
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def tree_pss_mb(pid):
+    """The proportional set size (Pss) of a process and all its descendants, in
+    MB: their memory with each shared page divided among the processes that share
+    it, so that forked workers are not counted for what they share with their
+    parent."""
+    total, todo, seen = 0, [pid], set()
+    while todo:
+        p = todo.pop()
+        if p in seen:
+            continue
+        seen.add(p)
+        try:
+            with open(f"/proc/{p}/smaps_rollup") as handle:
+                for line in handle:
+                    if line.startswith("Pss:"):
+                        total += int(line.split()[1])
+                        break
+        except OSError:
+            continue
+        todo.extend(_children(p))
+    return total / 1024
+
+
+class TreePoller:
+    """Samples `tree_pss_mb` of a process every `interval` seconds in a
+    background thread and keeps the maximum: the peak memory of a process that
+    runs its work in worker processes (R's doParallel), which the process's own
+    high-water mark does not include. A peak shorter than the interval can be
+    missed, so the process's own VmHWM is reported too, and the larger counts."""
+
+    def __init__(self, pid, interval=0.05):
+        self.pid = pid
+        self.interval = interval
+        self.peak = 0.0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        while not self._stop.is_set():
+            self.peak = max(self.peak, tree_pss_mb(self.pid))
+            self._stop.wait(self.interval)
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join()
+
+
 def data_path(n_workers):
     """The simulated panel for `n_workers`, generated once and cached."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -252,18 +314,40 @@ def run_child(runner, kind, variant, path, workdir):
 OUT_OF_MEMORY = ("cannot allocate vector of size", "OutOfMemoryError", "MemoryError")
 
 
-def measure(script, kind, variant, path, workdir, timeout=None, command=None):
+def measure(script, kind, variant, path, workdir, timeout=None, command=None,
+            tree=False):
     """Run one configuration in a subprocess and return its report: the
-    script's own child, or `command` (from `external_command`) instead."""
+    script's own child, or `command` (from `external_command`) instead. With
+    `tree`, the peak memory of the process and its descendants (`TreePoller`) is
+    added to the report as `peak_tree_mb`."""
     workdir = Path(workdir)
     if workdir.exists():
         shutil.rmtree(workdir)
     command = command or [sys.executable, str(script), "--child", kind, variant,
                           str(path), str(workdir)]
     env = dict(os.environ, PYTHONWARNINGS="ignore")
+    tree_peak = None
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, env=env,
-                              timeout=timeout)
+        if tree:
+            with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, env=env) as child:
+                with TreePoller(child.pid) as poller:
+                    try:
+                        stdout, stderr = child.communicate(timeout=timeout)
+                    except subprocess.TimeoutExpired:
+                        for pid in _children(child.pid):
+                            try:
+                                os.kill(pid, 9)
+                            except OSError:
+                                pass
+                        child.kill()
+                        child.communicate()
+                        raise
+                tree_peak = poller.peak
+            proc = subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+        else:
+            proc = subprocess.run(command, capture_output=True, text=True, env=env,
+                                  timeout=timeout)
     except subprocess.TimeoutExpired:
         return {"status": f"timeout after {timeout:.0f} s"}
     finally:
@@ -284,6 +368,8 @@ def measure(script, kind, variant, path, workdir, timeout=None, command=None):
         if line.startswith("RESULT "):
             report = json.loads(line[len("RESULT "):])
             report["status"] = "ok"
+            if tree_peak is not None:
+                report["peak_tree_mb"] = tree_peak
             return report
     return {"status": "failed: no result line"}
 
@@ -298,6 +384,10 @@ EXTERNAL = {
     "fem": ("Julia", "julia", "HDFE_BENCH_JULIA", "fixedeffectmodels.jl"),
     # the OLS, IV and binary-outcome benchmarks: fixest, and base R's lm and glm
     "regr": ("R", "Rscript", "HDFE_BENCH_RSCRIPT", "regression.R"),
+    # the sensitivity benchmarks: HonestDiD on an event study, and fixest then
+    # HonestDiD on a panel
+    "honestdid": ("R", "Rscript", "HDFE_BENCH_RSCRIPT", "honestdid_benchmark.R"),
+    "event_study_r": ("R", "Rscript", "HDFE_BENCH_RSCRIPT", "event_study.R"),
 }
 
 
@@ -346,6 +436,17 @@ def external_command(kind, **spec):
     return [executable, script, json.dumps(spec)]
 
 
+def diff_diff_python():
+    """The Python of the environment that has diff-diff: HDFE_BENCH_DIFF_DIFF_PYTHON
+    if set, else benchmarks/external/.diff_diff (benchmarks/README.md), else None.
+    diff-diff is not installed beside hdfe_stream: its pins on NumPy and pandas
+    are its own."""
+    if os.environ.get("HDFE_BENCH_DIFF_DIFF_PYTHON"):
+        return os.environ["HDFE_BENCH_DIFF_DIFF_PYTHON"]
+    local = EXTERNAL_DIR / ".diff_diff" / "bin" / "python"
+    return str(local) if local.exists() else None
+
+
 def external_missing(kind):
     language, name, variable, _script = EXTERNAL[kind]
     return (f"skipped: {language} is not installed (no {name} on PATH; or set "
@@ -376,6 +477,26 @@ def external_versions():
             continue
         if len(words) == 2:
             out.update(zip(names[kind], words))
+    rscript = external_executable("fixest")
+    if rscript is not None:
+        try:
+            words = subprocess.run(
+                [rscript, "-e", 'cat(as.character(packageVersion("HonestDiD")))'],
+                capture_output=True, text=True, timeout=300).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            words = []
+        if len(words) == 1:
+            out["HonestDiD"] = words[0]
+    python = diff_diff_python()
+    if python is not None:
+        try:
+            words = subprocess.run(
+                [python, "-c", "import importlib.metadata as m; print(m.version('diff-diff'))"],
+                capture_output=True, text=True, timeout=300).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            words = []
+        if len(words) == 1:
+            out["diff-diff"] = words[0]
     return out
 
 

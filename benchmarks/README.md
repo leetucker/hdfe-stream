@@ -2,7 +2,8 @@
 
 Five benchmarks compare hdfe_stream with in-memory libraries on the simulated
 AKM panel that ships with the package (three more, on simulated rows with no
-panel structure, are below the table). Three vary the height of the data, at
+panel structure, and two of the sensitivity analysis for parallel trends are
+below the table). Three vary the height of the data, at
 five sizes from 25,000 to 5,000,000 workers; the number of firms is always
 workers / 15, so the number of workers is the only thing that changes along
 their x axis. The other two hold the data at 1,000,000 workers (8.5 million
@@ -110,6 +111,40 @@ pytwoway was also considered. Version 0.3.21 needs numpy < 2 (it uses
 `np.bool8`) and a scipy old enough to accept `minres(tol=)`, so it cannot run
 alongside hdfe_stream's dependencies and is not included.
 
+### The sensitivity analysis
+
+Two benchmarks measure the sensitivity analysis for parallel trends
+(`core.sensitivity.trend_sensitivity`, the method of R's HonestDiD) against R's
+HonestDiD 0.2.8 and the Python package diff-diff 4.0.0:
+
+| script | job | compared with |
+|---|---|---|
+| `sensitivity_benchmark.py` | four restriction and interval pairs, for one value of M and for R's default grid of 10, on simulated event studies with 4 to 64 pre-treatment periods | HonestDiD, sequentially and with `parallel = TRUE`; diff-diff (smoothness FLCI) |
+| `event_study_benchmark.py` | `y ~ i(rel_time, ref=-1) \| unit + year` on a simulated panel of 1,000,000 units, then its sensitivity analysis for relative magnitudes and smoothness | fixest then HonestDiD (R); diff-diff's `TwoWayFixedEffects` then its `HonestDiD` |
+
+The sensitivity analysis takes the event study's coefficients and covariance,
+so its cost depends on the number of event times, not on the size of the panel:
+the first benchmark varies the event times, the second shows how the time
+divides between fitting an event study and analyzing it. Results go to
+`results/sensitivity.csv` and `results/event_study.csv`, with the versions in
+`results/sensitivity_machine.json`; `plot_benchmarks.py` draws
+`docs/figures/event_study_time.*.svg` and writes the tables the documentation
+includes (`docs/benchmarks/sensitivity_table.md`, `event_study_table.md`).
+
+HonestDiD needs the R environment below, then its own install (it and
+TruncatedNormal are not on conda-forge; the script builds them from a dated CRAN
+snapshot). diff-diff goes in a virtual environment of its own, as its pins on NumPy
+and pandas are its own:
+
+```bash
+benchmarks/external/.r/bin/Rscript benchmarks/external/install_honestdid.R
+uv venv -p 3.12 benchmarks/external/.diff_diff
+VIRTUAL_ENV=benchmarks/external/.diff_diff uv pip install "diff-diff==4.0.0" pyarrow
+```
+
+(`HDFE_BENCH_DIFF_DIFF_PYTHON` points at another diff-diff environment.) Without
+them, their configurations are skipped.
+
 ### R and Julia
 
 The regression and covariates benchmarks also compare with R's
@@ -121,7 +156,8 @@ The versions are pinned in [`external/`](external/), R's in a conda
 environment file and Julia's in a manifest:
 
 ```bash
-# R 4.5.3 and fixest 0.14.2, from conda-forge (micromamba, mamba or conda)
+# R 4.5.3, fixest 0.14.2 and HonestDiD's dependencies, from conda-forge
+# (micromamba, mamba or conda)
 micromamba create -p benchmarks/external/.r -f benchmarks/external/environment.yml
 
 # Julia 1.13.2 (e.g. `juliaup add 1.13.2`), then FixedEffectModels.jl 2.1.0

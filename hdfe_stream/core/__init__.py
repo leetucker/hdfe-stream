@@ -41,6 +41,11 @@ Stable names
     core.process       ProcessBatch
     core.refit         refit_draws, refit_workers, RefitDraws,
                        RefitBootstrapResult, BootstrapFailureWarning
+    core.sensitivity   trend_sensitivity, event_study_sensitivity,
+                       event_study_inputs, default_M, TrendSensitivityResult,
+                       TrendSensitivityWarning
+    core.plots         event_study_plot, require_matplotlib
+    core.crossprod     cross_products, CrossProducts
 
     The hooks a `RegressionResult` subclass implements (its docstring) are
     stable too.
@@ -76,6 +81,7 @@ Engine
     passes.py          pass 0/1      (mixin)
     solve.py           step 2        (mixin)
     inference.py       steps 3/4     (mixin)
+    crossprod.py       within cross-products by fold or shard (`cross_products`)
     irls.py            `_IRLSMixin`: the weighted least-squares steps of IRLS
     connected.py       connected components, the largest connected set
     families.py        GLM families: Poisson, logit, probit
