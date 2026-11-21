@@ -96,6 +96,7 @@ def test_cluster_resamples_copy_whole_clusters_with_new_unit_ids(tmp_path):
         index_column="source_index",
         draw_column="boot",
         within="id",
+        group_column="copy",
     )
     assert (sampler.n_units, sampler.n_within, sampler.max_within) == (3, 4, 2)
     expected = np.random.default_rng(1).integers(0, 3, size=3, dtype=np.int64)
@@ -108,8 +109,12 @@ def test_cluster_resamples_copy_whole_clusters_with_new_unit_ids(tmp_path):
     for copy, cluster in enumerate(expected):
         rows = result.filter(pl.col("boot") // 2 == copy)
         source = data.filter(pl.col("state") == states[cluster])
+        # each copy is a cluster of its own, whatever cluster it copies
+        assert rows["copy"].unique().to_list() == [copy]
         # the copy is the whole cluster, each unit with its own ID in this copy
-        assert rows.drop("boot").sort("id", "time").equals(source.sort("id", "time"))
+        assert (
+            rows.drop("boot", "copy").sort("id", "time").equals(source.sort("id", "time"))
+        )
         assert rows.group_by("boot").agg(pl.col("id").n_unique())["id"].max() == 1
         assert rows["boot"].n_unique() == source["id"].n_unique()
     # a cluster drawn twice gives distinct unit IDs in each copy
@@ -147,9 +152,78 @@ def test_pointwise_interval_definitions_and_no_implicit_inference():
         )
         assert_allclose(tab["Lower"], expected[0])
         assert_allclose(tab["Upper"], expected[1])
-    for method in ["bca", "studentized"]:
-        with pytest.raises(ValueError, match="method"):
+    with pytest.raises(ValueError, match="method"):
+        r.confint(method="bca")
+    for method in ["studentized", "symmetric"]:
+        with pytest.raises(ValueError, match="standard errors"):
             r.confint(method=method)
+
+
+def test_studentized_intervals():
+    """Bootstrap-t intervals from each refit's standard errors; a draw whose
+    standard error is not finite counts as failed for them."""
+    draws = np.array([[0.0, 1.0], [1.0, 3.0], [4.0, 5.0], [9.0, 9.0], [16.0, 11.0]])
+    se_draws = np.array([[1.0, 2.0], [2.0, 1.0], [1.0, 1.0], [3.0, 2.0], [4.0, 3.0]])
+    beta, se = np.array([3.0, 4.0]), np.array([2.0, 1.5])
+    r = RefitBootstrapResult(
+        fml="y~1",
+        estimator="test",
+        coefnames=["a", "b"],
+        beta=beta,
+        diagnostics={},
+        _draws=draws,
+        _failures=[],
+        _warnings=[],
+        original_se=se,
+        _se_draws=se_draws,
+    )
+    t = (draws - beta) / se_draws
+    q = np.quantile(t, [0.1, 0.9], axis=0, method="linear")
+    tab = r.confint(0.2, method="studentized")
+    assert_allclose(tab["Lower"], beta - q[1] * se)
+    assert_allclose(tab["Upper"], beta - q[0] * se)
+    c = np.quantile(np.abs(t), 0.8, axis=0, method="linear")
+    tab = r.confint(0.2, method="symmetric")
+    assert_allclose(tab["Lower"], beta - c * se)
+    assert_allclose(tab["Upper"], beta + c * se)
+    assert r.tidy(0.2, method="symmetric")["Successful Reps"].to_list() == [5, 5]
+    assert r.standard_error_draws()["a"].to_list() == se_draws[:, 0].tolist()
+    assert r.summary_dict()["original_standard_errors"] == {"a": 2.0, "b": 1.5}
+    # percentile intervals do not need the standard errors
+    bad = se_draws.copy()
+    bad[2, 1] = np.nan
+    r2 = RefitBootstrapResult(
+        fml="y~1",
+        estimator="test",
+        coefnames=["a", "b"],
+        beta=beta,
+        diagnostics={},
+        _draws=draws,
+        _failures=[],
+        _warnings=[],
+        original_se=se,
+        _se_draws=bad,
+    )
+    r2.confint(method="percentile")
+    with pytest.raises(ValueError, match="allow_incomplete"):
+        r2.confint(method="studentized")
+    keep = [0, 1, 3, 4]
+    t = (draws[keep] - beta) / se_draws[keep]
+    q = np.quantile(t, [0.1, 0.9], axis=0, method="linear")
+    tab = r2.confint(0.2, method="studentized", allow_incomplete=True)
+    assert_allclose(tab["Lower"], beta - q[1] * se)
+    with pytest.raises(ValueError, match="go together"):
+        RefitBootstrapResult(
+            fml="y~1",
+            estimator="test",
+            coefnames=["a", "b"],
+            beta=beta,
+            diagnostics={},
+            _draws=draws,
+            _failures=[],
+            _warnings=[],
+            original_se=se,
+        )
 
 
 def mean_fit(task):
@@ -259,6 +333,24 @@ def test_cluster_refits_draw_whole_clusters(tmp_path):
     )
     # every cluster has 5 units of 3 rows, so every draw has 120 rows
     assert out.draws[:, 1].tolist() == [120.0] * 6
+    # each copy of a cluster is a cluster of its own in the refit
+    groups = _run(
+        tmp_path,
+        "groups",
+        fit=group_fit,
+        key="state",
+        within="id",
+        sort_columns=["state", "id", "time"],
+        expected_groups=40,
+    )
+    assert groups.draws.tolist() == [[8.0, 1.0]] * 6
+
+
+def group_fit(task):
+    """The number of clusters in the draw, and whether each has 5 units."""
+    frame = pl.read_parquet(task["path"])
+    sizes = frame.group_by(task["group_column"]).agg(pl.col(task["unit_column"]).n_unique())
+    return np.array([float(sizes.height), float((sizes[task["unit_column"]] == 5).all())])
 
 
 def test_failed_draws_are_recorded_not_redrawn_and_errors_propagate(tmp_path):

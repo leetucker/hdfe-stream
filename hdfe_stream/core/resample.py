@@ -43,6 +43,8 @@ class DiskGroupResampler(GroupPartitions):
     drawn, and in each copy every unit gets an ID of its own: ``draw_column`` is
     then the copy times the largest number of units in a cluster plus the unit's
     rank within its cluster, so that it can serve as the unit ID of a refit.
+    ``group_column`` (when given, with ``within``) is each copy's cluster ID: the
+    copy, so that two copies of one cluster are two clusters in a refit.
     ``n_within`` counts the units.
     """
 
@@ -59,11 +61,13 @@ class DiskGroupResampler(GroupPartitions):
         index_column,
         draw_column,
         within=None,
+        group_column=None,
     ):
         super().__init__(root, budget, preprocess_mb, key=key)
         self.sort_columns, self.select = sort_columns, select
         self.index_column, self.draw_column = index_column, draw_column
         self.within = within
+        self.group_column = group_column if within is not None else None
         self.ordinal_column = index_column + "_within"
         self.max_within = 1
         self.n_within = 0
@@ -185,6 +189,10 @@ class DiskGroupResampler(GroupPartitions):
                     frame = data.join(
                         selection, on=self.index_column, how="inner"
                     ).drop(self.index_column)
+                    if self.group_column is not None:
+                        frame = frame.with_columns(
+                            pl.col(self.draw_column).alias(self.group_column)
+                        )
                     if self.within is not None:
                         frame = frame.with_columns(
                             (

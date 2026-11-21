@@ -2,7 +2,8 @@
 
 ## 0.12.0
 
-Adds Rambachan and Roth's sensitivity analysis for parallel trends. Fits are unchanged.
+Adds Rambachan and Roth's sensitivity analysis for parallel trends, and studentized intervals
+to the refit bootstrap for the packages built on `hdfe_stream.core`. Fits are unchanged.
 
 - **`HDFEResult.trend_sensitivity`**: confidence intervals for an event study's
   post-treatment effect that remain valid when parallel trends fails by up to M, measured
@@ -30,6 +31,16 @@ Adds Rambachan and Roth's sensitivity analysis for parallel trends. Fits are unc
 - **`HDFEResult.plot_event_study`**: an event study's coefficients and intervals
   (pointwise or simultaneous) by event time, with the omitted reference period at zero,
   as pyfixest's `iplot` draws it (`core.plots.event_study_plot` for any event study).
+- **Studentized bootstrap intervals** (`core.refit`). A `RefitBootstrapResult` given each
+  refit's standard errors (`original_se` and `_se_draws`) gives bootstrap-t intervals,
+  `confint(method="studentized")` (equal-tailed) and `method="symmetric"`, and
+  `standard_error_draws()`. A draw with a finite estimate but no finite standard error counts
+  as failed for these intervals only, so they then need `allow_incomplete=True`.
+- **Each copy of a resampled cluster has a cluster ID of its own** (`core.refit`,
+  `core.resample`). When `refit_draws` resamples clusters (`within=`), the task's
+  `group_column` names a column holding the copy's ID, so that a refit whose estimates depend
+  on the clusters (a clustered weight matrix, say) counts two copies of one cluster as two
+  clusters. The original cluster column is unchanged.
 - **Plots need matplotlib**, which is not a dependency: install it, or the new `plot`
   extra (`pip install hdfe-stream[plot]`). Everything else works without it.
 

@@ -52,6 +52,11 @@ class RefitBootstrapResult:
     No source or fit scratch survives. Failed attempts remain in the ledger and
     are never redrawn. Inference on successful draws requires allow_incomplete
     when any attempt failed; such inference is conditional on successful fits.
+
+    With ``original_se`` (the fit's standard errors) and ``_se_draws`` (each refit's,
+    reps by coefficients), studentized (bootstrap-t) intervals are available too. A
+    draw whose estimates are finite but whose standard errors are not counts as a
+    failed draw for those intervals.
     """
 
     fml: str
@@ -62,6 +67,17 @@ class RefitBootstrapResult:
     _draws: np.ndarray = field(repr=False)
     _failures: list = field(repr=False)
     _warnings: list = field(repr=False)
+    original_se: np.ndarray | None = None
+    _se_draws: np.ndarray | None = field(default=None, repr=False)
+
+    def __post_init__(self):
+        if (self.original_se is None) != (self._se_draws is None):
+            raise ValueError("original_se and _se_draws go together")
+        if self._se_draws is not None and (
+            self._se_draws.shape != self._draws.shape
+            or np.shape(self.original_se) != np.shape(self.beta)
+        ):
+            raise ValueError("standard error draws must have the shape of the draws")
 
     @property
     def successful_reps(self):
@@ -72,32 +88,72 @@ class RefitBootstrapResult:
         """Sample SD of refitted estimates; refuses incomplete bootstrap runs."""
         return self.standard_errors()
 
-    def _valid(self, allow_incomplete):
-        if self._failures and not allow_incomplete:
+    def _valid(self, allow_incomplete, studentized=False):
+        """The successful draws (with ``studentized``: and their standard errors)."""
+        ok = np.isfinite(self._draws).all(axis=1)
+        if studentized:
+            if self._se_draws is None:
+                raise ValueError(
+                    "studentized intervals need the refits' standard errors, which "
+                    "this bootstrap did not keep"
+                )
+            ok &= (np.isfinite(self._se_draws) & (self._se_draws > 0)).all(axis=1)
+        incomplete = bool(self._failures) or (
+            studentized and ok.sum() < np.isfinite(self._draws).all(axis=1).sum()
+        )
+        if incomplete and not allow_incomplete:
             raise ValueError(
                 "some refits failed; inspect failures() and explicitly set allow_incomplete=True for inference conditional on success"
             )
-        data = self._draws[np.isfinite(self._draws).all(axis=1)]
-        if len(data) < 2:
+        if ok.sum() < 2:
             raise ValueError(
                 "at least two successful refits are required for bootstrap inference"
             )
-        return data
+        if studentized:
+            return self._draws[ok], self._se_draws[ok]
+        return self._draws[ok]
 
     def standard_errors(self, *, allow_incomplete=False):
         return np.std(self._valid(allow_incomplete), axis=0, ddof=1)
 
     def confint(self, alpha=0.05, *, method="percentile", allow_incomplete=False):
-        """Pointwise percentile/type-7, basic, or uncorrected normal intervals.
+        """Pointwise percentile/type-7, basic, uncorrected normal, studentized or
+        symmetric studentized intervals.
 
         Normal intervals are point estimate +/- normal critical value times
-        bootstrap SD, without boot.ci's normal bias correction. No simultaneous,
-        studentized or BCa intervals are supplied.
+        bootstrap SD, without boot.ci's normal bias correction. Studentized
+        (bootstrap-t) intervals use t* = (b* - b) / se* from each refit:
+        [b - q(1 - alpha/2) se, b - q(alpha/2) se], with q the quantiles of t*
+        and se the fit's standard error; symmetric ones are b +/- q|t*|(1 - alpha)
+        se. Both need the refits' standard errors. No simultaneous or BCa
+        intervals are supplied.
         """
         if isinstance(alpha, bool) or not np.isfinite(alpha) or not 0 < alpha < 1:
             raise ValueError("alpha must be between zero and one")
-        if method not in ("percentile", "basic", "normal"):
-            raise ValueError("method must be percentile, basic or normal")
+        methods = ("percentile", "basic", "normal", "studentized", "symmetric")
+        if method not in methods:
+            raise ValueError("method must be percentile, basic, normal, studentized or symmetric")
+        if method in ("studentized", "symmetric"):
+            draws, se_draws = self._valid(allow_incomplete, studentized=True)
+            t = (draws - self.beta) / se_draws
+            if method == "studentized":
+                low, high = np.quantile(
+                    t, [alpha / 2, 1 - alpha / 2], axis=0, method="linear"
+                )
+                lower = self.beta - high * self.original_se
+                upper = self.beta - low * self.original_se
+            else:
+                c = np.quantile(np.abs(t), 1 - alpha, axis=0, method="linear")
+                lower = self.beta - c * self.original_se
+                upper = self.beta + c * self.original_se
+            return pl.DataFrame(
+                {
+                    "Coefficient": self.coefnames,
+                    "Estimate": self.beta,
+                    "Lower": lower,
+                    "Upper": upper,
+                }
+            )
         draws = self._valid(allow_incomplete)
         if method == "normal":
             spread = norm.ppf(1 - alpha / 2) * np.std(draws, axis=0, ddof=1)
@@ -141,6 +197,17 @@ class RefitBootstrapResult:
             }
         )
 
+    def standard_error_draws(self):
+        """Copy each refit's standard errors (None if the bootstrap kept none)."""
+        if self._se_draws is None:
+            return None
+        return pl.DataFrame(
+            {
+                "draw": np.arange(len(self._se_draws)),
+                **{n: self._se_draws[:, j].copy() for j, n in enumerate(self.coefnames)},
+            }
+        )
+
     def failures(self):
         return pl.DataFrame(
             self._failures,
@@ -158,6 +225,11 @@ class RefitBootstrapResult:
             "fml": self.fml,
             "estimator": self.estimator,
             "coefficients": dict(zip(self.coefnames, self.beta.tolist(), strict=True)),
+            "original_standard_errors": (
+                None
+                if self.original_se is None
+                else dict(zip(self.coefnames, self.original_se.tolist(), strict=True))
+            ),
             "requested_reps": len(self._draws),
             "successful_reps": self.successful_reps,
             "failures": self.failures().to_dicts(),
@@ -261,6 +333,8 @@ def refit_draws(
     (so that memory a runtime keeps cannot accumulate); with
     ``persistent_workers=False`` each draw has a fresh process instead. Either way
     the draws are the same, and only one resample per worker is on disk at a time.
+    With ``within``, the task also has ``group_column``: each copy's cluster ID, so
+    that two copies of one cluster are two clusters (None without ``within``).
     """
     if seed is not None and (
         isinstance(seed, bool) or not isinstance(seed, int) or seed < 0
@@ -272,6 +346,11 @@ def refit_draws(
         names = set(pf.schema_arrow.names)
     index_column = _free_name(names, "__refit_source_group")
     draw_column = _free_name(names | {index_column}, "__refit_draw_unit")
+    group_column = (
+        _free_name(names | {index_column, draw_column}, "__refit_draw_group")
+        if within is not None
+        else None
+    )
     seed_sequence = np.random.SeedSequence(seed)
     rng = np.random.default_rng(seed_sequence)
     stage = scratch / "groups"
@@ -287,6 +366,7 @@ def refit_draws(
         index_column=index_column,
         draw_column=draw_column,
         within=within,
+        group_column=group_column,
     )
     groups = sampler.n_within if within is not None else sampler.n_units
     if (expected_groups is not None and groups != expected_groups) or (
@@ -310,7 +390,16 @@ def refit_draws(
         )
         hashes.append(identity)
         return _task_for(
-            task, b, path, draw_column, attempt, dates, rows, threads, memory_gb
+            task,
+            b,
+            path,
+            draw_column,
+            attempt,
+            dates,
+            rows,
+            threads,
+            memory_gb,
+            group_column=group_column,
         )
 
     def record(b, outcome, resources):
@@ -408,13 +497,16 @@ def refit_draws(
     return RefitDraws(draws, failures, captured, diagnostics)
 
 
-def _task_for(task, b, path, unit_column, attempt, dates, rows, threads, memory_gb):
+def _task_for(
+    task, b, path, unit_column, attempt, dates, rows, threads, memory_gb, group_column=None
+):
     """The task of draw b: the consumer's task and what the draw is."""
     return dict(
         task,
         draw=b,
         path=path,
         unit_column=unit_column,
+        group_column=group_column,
         workdir=attempt / "fit",
         dates=dates,
         rows=rows,
