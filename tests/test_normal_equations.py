@@ -20,7 +20,8 @@ def panel(seed=0, n=400):
     })
     return d.with_columns(
         (pl.col("x") + 0.1 * pl.col("worker") + 0.3 * pl.col("firm") + rng.normal(size=n))
-        .alias("y"))
+        .alias("y"),
+        (pl.col("worker") // 6).alias("team"))     # nested in worker
 
 
 def design(d, fes, covariates):
@@ -31,7 +32,8 @@ def design(d, fes, covariates):
 
 
 @pytest.mark.parametrize("weighted", [False, True])
-@pytest.mark.parametrize("fes", [["worker", "year"], ["worker", "firm", "year"]])
+@pytest.mark.parametrize("fes", [["worker", "year"], ["worker", "firm", "year"], ["worker"],
+                                 ["worker", "team"], ["worker", "team", "year"]])
 def test_matches_dense(weighted, fes):
     d = panel()
     fit, target = d[:300], d[300:]
@@ -54,7 +56,7 @@ def test_matches_dense(weighted, fes):
     W = fit["w"].to_numpy() if weighted else np.ones(fit.height)
     S = A.T @ (W[:, None] * A)
     V = target.select("v0", "v1").to_numpy()
-    U = np.linalg.pinv(S, rcond=1e-10) @ (T.T @ V)
+    U = np.linalg.lstsq(S, T.T @ V, rcond=None)[0]
     # identified: predictions on the estimation rows and on the target rows
     for rows, Z in [(fit, A), (target.drop("v0", "v1"), T)]:
         got = solution.predict(rows).select("v0", "v1").collect().to_numpy()
@@ -79,3 +81,25 @@ def test_requirements():
         r.solve_normal_equations(new, "v")
     with pytest.raises(ValueError, match="lacks"):
         r.solve_normal_equations(d, "v")
+
+
+def test_a_nested_dimension_takes_no_iterations(monkeypatch):
+    """With team nested in worker (the streamed dimension), the reduced system is zero
+    up to rounding: its right-hand sides are solved by zero, as in the fit, rather
+    than iterated on to the solver's limit."""
+    from hdfe_stream.core.solve import _SolveMixin
+
+    iterations = []
+    pcg = _SolveMixin._pcg
+
+    def counted(self, *args, **kwargs):
+        out = pcg(self, *args, **kwargs)
+        iterations.append(out[1])
+        return out
+
+    d = panel()
+    r = feols_stream("y ~ x | worker + team", d, keep_intermediates=True, fixef_rm="none",
+                     verbose=False)
+    monkeypatch.setattr(_SolveMixin, "_pcg", counted)
+    r.solve_normal_equations(d.with_columns(v=pl.col("z")), "v").cleanup()
+    assert iterations and max(iterations) == 0
