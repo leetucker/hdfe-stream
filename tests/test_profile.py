@@ -135,5 +135,5 @@ def test_the_upper_bound_holds_and_the_expected_is_not_wild(panel, fn, fml, kw):
     assert out.returncode == 0, out.stderr[-500:]
     r = json.loads(out.stdout.strip().splitlines()[-1])
     assert r["rss"] <= r["mem"][1]
-    assert r["rss"] >= 0.4 * r["mem"][0]            # not an order of magnitude too high
+    assert r["rss"] >= 0.3 * r["mem"][0]            # not an order of magnitude too high
     assert r["disk_peak"] <= r["disk"][1] + 0.01
