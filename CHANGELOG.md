@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.11.1
+
+Two fixes to `HDFEResult.solve_normal_equations`, which packages built on hdfe-stream use
+for the influence of a fit's rows on what is predicted from it.
+
+- **A model with one fixed effect** (`y ~ x | firm`) raised an `IndexError`. It now solves
+  its normal equations, which with one fixed effect need no iterative solve.
+- **A fixed effect nested in another** (`y ~ x | county + state`, every county in one
+  state) made the solve run to the solver's iteration limit: thousands of iterations,
+  17 to 51 seconds on 2,000 rows against 0.2 seconds for fixed effects that are not
+  nested. Once the first fixed effect is partialled out, the nested one has nothing left
+  to explain, and the solver chased rounding error. Right-hand sides that are negligible
+  after that step are now solved by zero without iterating, as the fit already did. The
+  solutions were and are correct; only the time changes. Fixed effects that are partly
+  nested (a few levels inside one level of another) were not affected.
+
 ## 0.11.0
 
 Adds a refit bootstrap and a warning class for experimental methods to `hdfe_stream.core`, for

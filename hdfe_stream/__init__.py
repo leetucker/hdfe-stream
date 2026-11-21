@@ -169,7 +169,7 @@ def _detect_version():
         from importlib.metadata import version
         return version("hdfe-stream")
     except Exception:                 # source tree without an installed dist
-        return "0.11.0"
+        return "0.11.1"
 
 
 __version__ = _detect_version()
