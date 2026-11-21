@@ -287,6 +287,74 @@ class RegressionResult:
                     "df1": m, "df2": None, "distribution": "chi2"}
         raise ValueError(f"distribution must be 'F' or 'chi2', got {distribution!r}")
 
+    def trend_sensitivity(self, keep: str | list | None = None, *, reference: int = -1,
+                          target: Any = None, restriction: str = "relative_magnitudes",
+                          M: Any = None, bias: str | None = None,
+                          monotonicity: str | None = None, ci_method: str | None = None,
+                          alpha: float = 0.05, drop: str | list | None = None,
+                          exact_match: bool = False, **options: Any):
+        """Sensitivity of an event study to violations of parallel trends
+        (Rambachan and Roth, 2023; the method of R's HonestDiD): confidence
+        intervals for a post-treatment effect that allow the trend difference
+        after treatment to depart from parallel by up to M, measured against
+        the pre-treatment coefficients.
+
+        The event study is the coefficients named ``<variable>::<event
+        time>``, as ``i(event_time, ref=-1)`` names them, under the current
+        vcov (see `with_vcov`): by default every such coefficient, which must
+        come from one variable; `keep`, `drop` and `exact_match` select
+        others, as in `confint`. The reference event time is omitted from
+        the regression, and the event times are consecutive on each side of
+        it.
+
+        Parameters
+        ----------
+        keep, drop, exact_match
+            Select the event-study coefficients by name, as in `confint`.
+        reference : int, default -1
+            The omitted event time: the coefficients before it are the
+            pre-treatment ones.
+        target : int, "average" or dict, optional
+            The effect to bound: one post-reference event time (default 0,
+            or the first after the reference if 0 is not estimated), the
+            average over all post-reference event times, or weights
+            ``{event time: weight}``.
+        restriction, M, bias, monotonicity, ci_method, alpha
+            The restriction on the violations and the interval: see
+            `hdfe_stream.core.sensitivity.trend_sensitivity`.
+        **options
+            ``grid_points``, ``grid_bounds``, ``simulations``, ``seed``,
+            ``n_threads``: see `trend_sensitivity`.
+
+        Returns
+        -------
+        hdfe_stream.core.sensitivity.TrendSensitivityResult
+            The robust interval at each M (``.table``), the original
+            interval, the breakdown value and a plot.
+        """
+        from .sensitivity import _event_time, event_study_sensitivity
+
+        if keep is None and drop is None:
+            idx = [i for i, nm in enumerate(self.coefnames)
+                   if "::" in str(nm) and _event_time(nm) is not None]
+            if not idx:
+                raise ValueError("no coefficient is named '<variable>::<event time>'; select the "
+                                 f"event study with keep=. The coefficients are {self.coefnames}")
+            prefixes = sorted({str(self.coefnames[i]).rsplit("::", 1)[0] for i in idx})
+            if len(prefixes) > 1:
+                raise ValueError(f"event-time coefficients of several variables ({prefixes}); "
+                                 "select one with keep=")
+        else:
+            idx = _select_coefs(self.coefnames, keep, drop, exact_match)
+        times = [_event_time(self.coefnames[i]) for i in idx]
+        if any(t is None for t in times):
+            bad = [self.coefnames[i] for i, t in zip(idx, times) if t is None]
+            raise ValueError(f"coefficient names must end in '::<integer event time>'; got {bad}")
+        return event_study_sensitivity(
+            times, self.beta[idx], self.vcov[np.ix_(idx, idx)], reference=reference,
+            target=target, restriction=restriction, M=M, bias=bias, monotonicity=monotonicity,
+            ci_method=ci_method, alpha=alpha, **options)
+
     def with_vcov(self, vcov: Vcov) -> "RegressionResult":
         """A copy of this result with another of the vcovs computed at fit
         time: ``"iid"``, ``"hetero"``, or a clustering given as

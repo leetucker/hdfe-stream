@@ -41,6 +41,9 @@ Stable names
     core.process       ProcessBatch
     core.refit         refit_draws, refit_workers, RefitDraws,
                        RefitBootstrapResult, BootstrapFailureWarning
+    core.sensitivity   trend_sensitivity, event_study_sensitivity,
+                       event_study_inputs, default_M, TrendSensitivityResult,
+                       TrendSensitivityWarning
 
     The hooks a `RegressionResult` subclass implements (its docstring) are
     stable too.
