@@ -185,20 +185,33 @@ def stored_rows():
         return list(csv.DictReader(handle))
 
 
-def difference(row, reference):
+def difference(row, reference, edge=None):
     """The largest difference between two sets of intervals, as a share of the
-    reference's widest interval."""
+    reference's widest interval, and the number of values of M left out.
+
+    With `edge`, values of M at which the reference's interval reaches +/- edge
+    are left out: R's grid for the relative-magnitudes restrictions ends at 20
+    standard deviations of the target, and where the accepted set reaches it R
+    reports the grid's end (with a warning), while hdfe_stream extends the grid
+    until the set closes."""
     try:
-        a = np.array(json.loads(row["lower"]) + json.loads(row["upper"]), dtype=float)
-        b = np.array(json.loads(reference["lower"]) + json.loads(reference["upper"]),
-                     dtype=float)
+        # R writes a single value as a number, not a list of one
+        lo, up = (np.atleast_1d(np.array(json.loads(row[k]), dtype=float))
+                  for k in ("lower", "upper"))
+        rlo, rup = (np.atleast_1d(np.array(json.loads(reference[k]), dtype=float))
+                    for k in ("lower", "upper"))
     except (KeyError, TypeError, ValueError):
-        return None
-    if a.shape != b.shape:
-        return None
-    width = np.nanmax(np.array(json.loads(reference["upper"]), dtype=float)
-                      - np.array(json.loads(reference["lower"]), dtype=float))
-    return float(np.nanmax(np.abs(a - b)) / width) if width > 0 else None
+        return None, 0
+    if lo.shape != rlo.shape:
+        return None, 0
+    keep = np.ones(rlo.shape, dtype=bool)
+    if edge is not None:
+        keep = (rlo > -edge * (1 - 1e-6)) & (rup < edge * (1 - 1e-6))
+    width = np.nanmax(rup - rlo)
+    if not keep.any() or not width > 0:
+        return None, int((~keep).sum())
+    gap = np.maximum(np.abs(lo - rlo), np.abs(up - rup))[keep]
+    return float(np.nanmax(gap) / width), int((~keep).sum())
 
 
 def main():
@@ -270,13 +283,20 @@ def main():
                           if int(r["n_pre"]) == n_pre and r["job"] == job
                           and r["grid"] == grid and r["status"] == "ok"}
                 reference = stored.get("HonestDiD (R)")
+                edge = (None if job in ("smoothness", "smoothness_hybrid") else
+                        20 * float(np.sqrt(es["sigma"][n_pre][n_pre])))
                 if reference is not None:
                     for label, row in stored.items():
                         if label != "HonestDiD (R)":
-                            diff = difference(row, reference)
+                            diff, skipped = difference(row, reference, edge)
+                            note = (f" ({skipped} value{'s' * (skipped != 1)} of M left "
+                                    "out, where R's interval stops at its grid's end)"
+                                    if skipped else "")
                             if diff is not None:
                                 print(f"    {label}: intervals differ from R's by up to "
-                                      f"{diff:.1%} of R's widest", flush=True)
+                                      f"{diff:.1%} of R's widest{note}", flush=True)
+                            elif skipped:
+                                print(f"    {label}: not compared{note}", flush=True)
 
 
 if __name__ == "__main__":
