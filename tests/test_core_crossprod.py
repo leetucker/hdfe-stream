@@ -191,6 +191,34 @@ def test_no_fixed_effects_reads_the_source_without_copying_it(tmp_path, monkeypa
     assert cp.sample().collect()["in_sample"].sum() == cp.n_obs
 
 
+@pytest.mark.parametrize("fe", [[], ["worker"]])
+def test_expression_design_and_its_fallback(fe, tmp_path):
+    """A design of expressions (indicators, an interaction) is evaluated a
+    batch at a time without fixed effects, and aggregated as expressions by
+    pass 0's scan; one that is not row-wise (it centers on the source's
+    mean) is evaluated before the rows are filtered, as always. Both give
+    the cross-products of the expressions on the rows kept."""
+    df = _panel(missing=True)
+    path = tmp_path / "panel.parquet"
+    df.write_parquet(path, row_group_size=700)
+    row_wise = [("y", pl.col("y"))] + [(f"f{v}", (pl.col("firm") == v).cast(pl.Float64))
+                                       for v in range(1, 6)]
+    row_wise += [("x1x2", pl.col("x1") * pl.col("x2"))]
+    centered = row_wise + [("x1c", pl.col("x1") - pl.col("x1").mean())]
+    kept = df.filter(pl.col("x2").is_not_null())
+    for variables in (row_wise, centered):
+        cp = cross_products(str(path), variables, fe=fe, workdir=tmp_path, verbose=False,
+                            batch_rows=1000)
+        # the expressions on the source (the centering's mean is the source's),
+        # then the rows with every variable present
+        V = (df.select([e.alias(nm) for nm, e in variables])
+               .filter(pl.col("x1x2").is_not_null()).to_numpy())
+        if fe:
+            V = _residualize(V, [kept["worker"].to_numpy()], np.ones(len(V)))
+        np.testing.assert_allclose(cp.total(), V.T @ V, rtol=1e-9, atol=1e-8)
+        assert cp.n_obs == kept.height
+
+
 def test_saved_rows_without_fixed_effects(tmp_path):
     df = _panel()
     cp = cross_products(df, ["y", "x1"], split_by="fold", n_splits=4, save_rows=True,
