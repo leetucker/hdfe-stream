@@ -217,3 +217,32 @@ def test_device_glm_rows_that_do_not_fit_are_streamed(tmp_path, numpy_device):
         dev = hdfe_stream.feglm_stream("yb ~ x1 + x2", str(path), family="logit",
                                        workdir=tmp_path / "dev", device="cuda", **opts)
     assert rel(list(dev.coef().values()), list(cpu.coef().values())) < 1e-9
+
+
+@pytest.mark.parametrize("family", ["logit", "probit", "poisson"])
+def test_device_newton_with_one_fixed_effect(tmp_path, numpy_device, family):
+    """The Newton steps on the device (with one fixed effect, through the
+    groups' indicator) give the CPU's fit."""
+    import hdfe_stream
+    r = np.random.default_rng(4)
+    n = 3000
+    g = r.integers(0, 40, n)
+    x1, x2 = r.normal(size=n), r.normal(size=n)
+    eta = 0.4 * x1 - 0.3 * x2 + 0.5 * np.sin(g)
+    if family == "poisson":
+        y = r.poisson(np.exp(eta))
+    else:
+        from scipy import special
+        p = special.expit(eta) if family == "logit" else special.ndtr(eta)
+        y = (r.random(n) < p).astype(int)
+    path = tmp_path / "d.parquet"
+    pl.DataFrame({"y": y, "x1": x1, "x2": x2, "g": g, "w": r.uniform(.5, 2, n)}) \
+      .write_parquet(path)
+    fn = (hdfe_stream.fepois_stream if family == "poisson"
+          else lambda *a, **k: hdfe_stream.feglm_stream(*a, family=family, **k))
+    opts = dict(verbose=False, vcov="hetero", weights="w")
+    cpu = fn("y ~ x1 + x2 | g", str(path), workdir=tmp_path / "cpu", **opts)
+    dev = fn("y ~ x1 + x2 | g", str(path), workdir=tmp_path / "dev", device="cuda", **opts)
+    assert dev.diagnostics["newton"]["device"] == "numpy stand-in"
+    assert rel(list(dev.coef().values()), list(cpu.coef().values())) < 1e-9
+    assert rel(dev.se, cpu.se) < 1e-8

@@ -94,6 +94,20 @@ cells). The disk needed is therefore no more than an OLS fit of the same data
 needs. A fit usually needs 6 to 10 steps, so it takes several times as long as
 OLS on the same data: 4 to 7 times, in the benchmarks.
 
+**No fixed effect, or one.** Then none of the above is needed: the fixed
+effect can be profiled out exactly. Pass 0 writes the rows once as compact
+blocks (0/1 columns one byte each), and the fit is Newton's method on them:
+each step forms the log-likelihood, gradient and information in one read,
+for a design of indicators from each row's nonzeros only. One more read gives
+the standard errors and writes the residual file. The result, its sample,
+standard errors and files are those IRLS would give, and the estimates those
+of IRLS run to a tight tolerance (closer to the maximum than IRLS at its
+default tolerance, by about 1e-6 relative at most). On a logit of 1 million
+people on 153 indicators, this took about 15 s without a fixed effect and
+21 s with 2,462 PUMA fixed effects, against about 30 s and 65 s by IRLS.
+Two or more fixed effects, multiple estimation, `bias_correction` and
+`separation_check=False` take the IRLS path.
+
 **Memory.** One difference from OLS: the streamed dimension's effects are
 held in memory during the iterations, one float per group for each of the
 two or three coefficient sets alive at once (for 5 million workers, about

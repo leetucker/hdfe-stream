@@ -1,11 +1,36 @@
 # Changelog
 
-## 0.12.2
+## 0.13.0
 
-Lower peak memory for regressions without fixed effects whose design has many columns,
-such as a categorical expanded into hundreds or thousands of indicators. Estimates are
-unchanged.
+Faster logit, probit and Poisson fits with no fixed effect or one, a public Newton pass
+for packages built on `hdfe_stream.core`, and lower peak memory for wide designs without
+fixed effects.
 
+- **`feglm_stream` and `fepois_stream` with no fixed effect or one** fit by Newton's
+  method on compact stored rows instead of IRLS on partitioned Parquet files. Each step is
+  one read of the rows. The fixed effect is profiled out exactly, and for a design of
+  indicators the products run over each row's nonzeros only. The result is the same
+  `HDFEResult` as before: the same sample (singletons, then separated levels), coefficient
+  names, collinearity rule, vcov flavors and small-sample factors, fit statistics, and
+  `fixef`, `resid`, `predict` and `sample`.
+  - On a logit of 1 million people on 153 indicators, the fit takes about 15 s without a
+    fixed effect (about 30 s before) and about 21 s with 2,462 PUMA fixed effects (about
+    65 s before).
+  - The estimates move slightly, toward the maximum: Newton's method stops on the
+    decrement, IRLS on the change in deviance, which at its default tolerance can leave
+    the coefficients about 1e-6 (relative) from the maximum.
+  - With `device="cuda"` (experimental) the Newton steps run on the GPU, with one fixed
+    effect as well as without; before, a GPU did nothing for a GLM with one fixed effect.
+  - Two or more fixed effects, multiple estimation, `bias_correction` and the separation
+    check switched off still fit by IRLS. With multiple estimation or the check switched
+    off, a model with no fixed effect or one gets Newton's method first, and IRLS takes
+    the final step.
+- **`core.newton`** (`glm_design`, `GLMDesign`, `NewtonMoments`): the stored design of a
+  logit, probit or Poisson model with no fixed effect or one, and a pass that gives the
+  log-likelihood, gradient and information of several models in one read, each on its
+  own splits (cross-validation folds, say), with the fixed effect profiled out exactly.
+  It is a stable API for estimators that run their own iteration, such as a penalized
+  GLM's path.
 - **Pass 0's row write without fixed effects** reads the source's own columns a batch at
   a time, evaluates the design on each batch and writes it with a Parquet writer. It
   previously sank the evaluated design through Polars' streaming engine, which buffers up

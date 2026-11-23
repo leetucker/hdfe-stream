@@ -25,6 +25,7 @@ from types import SimpleNamespace
 import numpy as np
 
 _INV_SQRT_2PI = 0.3989422804014327
+_LOG_2PI_HALF = 0.9189385332046727       # log(2 pi) / 2
 _CUPY_HINT = ("device='cuda' needs CuPy built for your CUDA version, e.g. "
               "`pip install cupy-cuda13x` (or cupy-cuda12x), and an NVIDIA GPU")
 
@@ -106,6 +107,72 @@ def glm_rows_plain(be, family, init, ybar, y, X, f, off, beta):
         scal = xp.stack([(fw * dev).sum(), (fw * ll).sum(), (fw * y).sum(), fw.sum(),
                          (fw * lg).sum() if lg is not None else xp.zeros(()), w.sum()])
         return be.asnumpy(scal), be.asnumpy(w @ Z), be.asnumpy(V.T @ V)
+
+
+def group_indicator(be, f, G):
+    """The (G, n) 0/1 matrix of each row's group, on the device (sparse), for
+    the groups' sums of a chunk whose group codes `f` (host) are 0..G-1."""
+    import scipy.sparse as sps
+    n = len(f)
+    S = sps.csr_matrix((np.ones(n), (np.asarray(f, np.int64), np.arange(n))), shape=(G, n))
+    return be.csr(S)
+
+
+def newton_rows(be, family, X, y, w, off, f, F, beta, effects, info, G, observed=False):
+    """One model's sums of `core.newton`'s pass on the device, for a chunk
+    whose arrays are there (`X`, `y`, and `w`, `off` or None; `f` the group
+    codes and `F` their indicator, `group_indicator`, both None without a
+    fixed effect): the log-likelihood, the gradient for b and for the
+    effects, and with `info` the information for b, for each effect, and
+    between them. The terms are those of `kernels_newton.row_terms`.
+
+    Returns host arrays: (ll, gb (k,), ga (G,), H (k, k), D (G,), C (G, k)),
+    the last three None without `info`."""
+    xp = be.xp
+    sp = getattr(be, "special", None)
+    if sp is None:
+        import scipy.special as sp
+    with np.errstate(all="ignore"):         # the stand-in evaluates both branches of where
+        eta = X @ xp.asarray(beta)
+        a = xp.asarray(effects)
+        eta = eta + (a[xp.asarray(f)] if f is not None else a[0])
+        if off is not None:
+            eta = eta + off
+        pos = y > 0
+        if family == "logit":
+            p, q = sp.expit(eta), sp.expit(-eta)
+            ll = xp.where(pos, sp.log_expit(eta), sp.log_expit(-eta))
+            r = xp.where(pos, q, -p)
+            h = p * q
+        elif family == "probit":
+            lp, lq = sp.log_ndtr(eta), sp.log_ndtr(-eta)
+            lphi = -0.5 * eta * eta - _LOG_2PI_HALF
+            ll = xp.where(pos, lp, lq)
+            r = xp.where(pos, xp.exp(lphi - lp), -xp.exp(lphi - lq))
+            h = (r * (r + eta) if observed
+                 else xp.exp(2.0 * lphi - lp - lq))
+        else:
+            mu = xp.exp(eta)
+            ll = y * eta - mu - sp.gammaln(y + 1.0)
+            r = y - mu
+            h = mu
+        if w is not None:
+            ll, r, h = w * ll, w * r, w * h
+        gb = X.T @ r
+        if F is None:
+            ga = r.sum()[None]
+        else:
+            ga = F @ r
+        out = [float(be.asnumpy(ll.sum())), be.asnumpy(gb), be.asnumpy(ga)]
+        if not info:
+            return (*out, None, None, None)
+        Xh = X * h[:, None]
+        H = X.T @ Xh
+        if F is None:
+            D, C = h.sum()[None], Xh.sum(axis=0)[None, :]
+        else:
+            D, C = F @ h, F @ Xh
+        return (*out, be.asnumpy(H), be.asnumpy(D), be.asnumpy(C))
 
 
 def check_polars_gpu():

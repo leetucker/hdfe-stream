@@ -151,7 +151,9 @@ def fepois_stream(fml: str, data: Source, workdir: PathLike | None = None,
     effects, from a pyfixest-style formula.
 
     Estimated by iteratively reweighted least squares; each step is one read
-    of the rows and one solve of the fixed effects (see `StreamingGLM`).
+    of the rows and one solve of the fixed effects (see `StreamingGLM`). With
+    no fixed effect or one, it is fitted instead by Newton's method on compact
+    stored rows, with the same result (see `hdfe_stream.glm_fast`).
 
     Parameters
     ----------
@@ -204,7 +206,9 @@ def feglm_stream(fml: str, data: Source, family: str, workdir: PathLike | None =
     effects, from a pyfixest-style formula.
 
     Estimated by iteratively reweighted least squares, with step-halving, as
-    pyfixest's ``feglm`` (see `StreamingGLM`).
+    pyfixest's ``feglm`` (see `StreamingGLM`). With no fixed effect or one, it
+    is fitted instead by Newton's method on compact stored rows, with the same
+    result (see `hdfe_stream.glm_fast`).
 
     Parameters
     ----------
@@ -253,6 +257,19 @@ def _fit_glm(fml, data, family, workdir, vcov, cluster, fe_dof, options, profile
     key = vcov_key(vcov)
     if key is not None and key.startswith("CRV3:"):
         raise ValueError("CRV3 standard errors are not available for GLMs; use CRV1")
+    from . import glm_fast
+    rest = {k: v for k, v in options.items()
+            if k not in ("offset", "iwls_tol", "iwls_maxiter", "separation_check")}
+    if workdir is not None:
+        rest["workdir"] = workdir
+    if glm_fast.ENABLED and glm_fast.eligible(
+            fml, data, vcov=vcov, cluster=cluster, fe_dof=fe_dof,
+            separation_check=options.get("separation_check", True), profile=profile,
+            options=rest):
+        return glm_fast.fit(fml, data, family, vcov=vcov, cluster=cluster, fe_dof=fe_dof,
+                            iwls_tol=options.get("iwls_tol", 1e-8),
+                            iwls_maxiter=options.get("iwls_maxiter", 25),
+                            offset=options.get("offset"), options=rest)
 
     def estimators(fe, g):
         by_y = {}
