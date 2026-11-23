@@ -22,6 +22,12 @@ fixed effects.
     matrix products beyond, which are 1.3 to 2 times faster there. The
     heteroskedasticity-robust variance's sums come from the same kernel, so without
     clustering the final read makes no copy of the design.
+  - The fit follows `max_memory_gb` as the other fits do: each thread's copy of a pass's
+    sums takes its share of at most half the headroom (fewer threads on a pass when
+    memory is tight), a pass whose sums do not fit raises `MemoryError` before it reads
+    the rows, the information kept for logit-stream's draws is left off the result when
+    it would take more than half the headroom, and `diagnostics["peak_rss_gb"]` records
+    the peak.
   - The estimates move slightly, toward the maximum: Newton's method stops on the
     decrement, IRLS on the change in deviance, which at its default tolerance can leave
     the coefficients about 1e-6 (relative) from the maximum.

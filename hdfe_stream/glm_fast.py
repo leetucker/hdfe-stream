@@ -63,7 +63,8 @@ _OPTIONS = {"weights", "weights_type", "workdir", "verbose", "logger", "max_memo
             "memory_reserve", "polars_engine", "n_threads", "storage", "dtype", "device",
             "block_mb", "chunk_mb"}
 # the most memory the information kept for a one-way fixed effect may take
-# (`HDFEResult._newton_information`, for packages that draw its levels)
+# (`HDFEResult._newton_information`, for packages that draw its levels): at
+# most this, and at most half the memory budget's headroom
 INFORMATION_GB = 2.0
 _MAX_HALVINGS = 30
 # whether feglm_stream and fepois_stream take this path when they can (tests
@@ -170,10 +171,11 @@ def fit(fml, data, family, *, vcov, cluster, fe_dof, iwls_tol, iwls_maxiter, off
         options):
     """The fast path's fit (call `eligible` first)."""
     from .core.newton import glm_design, newton_direction
-    from .core.resources import thread_scope
+    from .core.resources import peak_rss_gb, reset_peak_rss, thread_scope
     from .core.workspace import Run, _base_dir
 
     t0 = time.time()
+    reset_peak_rss()
     options = dict(options)
     weights = options.pop("weights", None)
     weights_type = options.pop("weights_type", "aweights")
@@ -194,6 +196,8 @@ def fit(fml, data, family, *, vcov, cluster, fe_dof, iwls_tol, iwls_maxiter, off
                        Run, _base_dir, options.get("workdir"), newton_direction, device)
         finally:
             ld.cleanup()
+    rss = peak_rss_gb()
+    out.diagnostics["peak_rss_gb"] = None if rss is None else round(rss, 3)
     return out
 
 
@@ -547,7 +551,9 @@ def _fit(ld, fml, spec, lf, fam, weights, weights_type, offset, default, keys, r
     # each level's own (D, G), its cross block with the kept coefficients
     # (G, k), and the inverse of the coefficients' information net of the
     # levels (the iid bread before its small-sample factor)
-    if with_fe and G * max(len(keep), 1) * 8 / 1e9 <= INFORMATION_GB:
+    info_gb = G * (max(len(keep), 1) + 1) * 8 / 1e9
+    if (with_fe and info_gb <= INFORMATION_GB
+            and (ld._budget is None or ld._budget.fits(info_gb, share=0.5))):
         res._newton_information = {"D": np.asarray(D, float).copy(),
                                    "cross": np.ascontiguousarray(mom.cross[0][:, keep]),
                                    "Vred": Binv}

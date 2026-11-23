@@ -83,7 +83,8 @@ SPLIT = f"{_P}split"            # the split clustering's name
 FAMILIES = {"logit": LOGIT, "probit": PROBIT, "poisson": POISSON}
 
 # The memory the per-part copies of a pass's sums may take (each thread sums
-# its part of a chunk into its own copy; fewer parts when the copies are big).
+# its part of a chunk into its own copy; fewer parts when the copies are big):
+# at most this, and at most half the memory budget's headroom.
 PART_BYTES = 512 * 2**20
 
 # Use the nonzeros-only products when a row has fewer than this share of
@@ -284,6 +285,7 @@ class GLMDesign:
     _run: Any = None
     _keep: Any = None
     _split_of: Any = None
+    _budget: Any = None
     _remap: Any = None
     _chunk_bytes: float = 64e6
     _has_offset: bool = False
@@ -527,7 +529,21 @@ class _Sums:
         # and (ungrouped) the groups' sums
         per_part = 8 * (2 * M * S + M * k + M * c * c
                         + (0 if self.grouped else M * G * (2 + c)))
-        self.max_parts = max(1, int(PART_BYTES // max(per_part, 1)))
+        part_bytes = PART_BYTES
+        budget = getattr(ld, "_budget", None)
+        if budget is not None:
+            # the pass's own sums, which cannot be split
+            need = 8 * (3 * M * S + M * k + M * c * c + M * G * (2 + c))
+            headroom = budget.headroom_gb() * 1e9
+            if need > headroom:
+                raise MemoryError(
+                    f"a Newton pass over {M} model(s) needs about {need / 1e9:.2f} GB for its "
+                    f"sums ({c} information columns, {G:,} groups) and "
+                    f"{headroom / 1e9:.2f} GB is free ({budget})")
+            part_bytes = min(PART_BYTES, 0.5 * (headroom - need))
+        # fewer parts (fewer threads on a chunk) rather than more memory; at
+        # least one
+        self.max_parts = max(1, int(part_bytes // max(per_part, 1)))
         self.beta, self.effects, self.inc, self.cols, self.colpos = beta, effects, inc, cols, colpos
         self.all_cols = len(cols) == k
         self.M, self.k, self.G, self.S, self.c = M, k, G, S, c
@@ -688,7 +704,11 @@ def glm_design(fml: str, data: Any, *, family: str, weights: str | None = None,
     block_mb, chunk_mb : float
         The stored blocks' size, and the chunks a pass works on.
     polars_engine, max_memory_gb, memory_reserve, verbose, logger
-        As for the estimators.
+        As for the estimators. The memory budget also sizes the passes: each
+        thread's copy of a pass's sums takes its part of at most half the
+        headroom (fewer threads on a pass, not more memory, when it is
+        tight), and a pass whose own sums do not fit raises ``MemoryError``
+        before it reads a row.
 
     Returns
     -------
@@ -998,4 +1018,5 @@ def _pass0(spec, lf, schema, fam, engine, run, budget, log, t0, *, weights, weig
         offset_expr=off_expr,
         fe_table=fe_tables[fe] if fe else None, x_binary=xbinary,
         fe_sorted=fe_sorted, _store=store, _run=run, _keep=keep, _split_of=split_of,
-        _remap=remap, _chunk_bytes=float(chunk_mb) * 1e6, _has_offset=off_expr is not None)
+        _remap=remap, _chunk_bytes=float(chunk_mb) * 1e6, _has_offset=off_expr is not None,
+        _budget=budget)

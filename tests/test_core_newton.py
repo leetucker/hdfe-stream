@@ -253,3 +253,53 @@ def test_outcome_checks(tmp_path):
                    workdir=tmp_path)
     with pytest.raises(ValueError, match="at most one absorbed"):
         glm_design("y ~ x1 | g + c", df, family="poisson", workdir=tmp_path)
+
+
+class _Headroom:
+    """A stand-in for `MemoryBudget` with a given headroom (the real one
+    subtracts what the process holds at the moment)."""
+
+    def __init__(self, gb):
+        self.gb = gb
+
+    def headroom_gb(self, upcoming_gb=0.0):
+        return max(0.0, self.gb - upcoming_gb)
+
+    def fits(self, need_gb, upcoming_gb=0.0, share=1.0):
+        return need_gb <= share * self.headroom_gb(upcoming_gb)
+
+
+@pytest.mark.parametrize("fe", [False, True])
+def test_part_copies_follow_the_budget(fe, tmp_path):
+    """A pass's per-part copies of its sums take at most half the headroom
+    (fewer parts, so fewer threads, when memory is tight; at least one), and
+    the sums do not depend on how many parts there are. A pass whose own sums
+    do not fit raises MemoryError up front."""
+    df = _data("logit")
+    ld = glm_design("y ~ x1 + x2 + x3 + C(c)" + (" | g" if fe else ""), df, family="logit",
+                    workdir=tmp_path)
+    k, G = len(ld.names), ld.n_groups
+    B, A = np.full((1, k), 0.1), np.zeros((1, G))
+    ld._budget = _Headroom(100.0)
+    roomy = ld._sums(B, A)
+    assert roomy.max_parts == int(newton.PART_BYTES // _per_part(roomy))
+    want = ld.newton_pass(B, A)
+    # room for the sums and one part's copies (half of what is left after
+    # the sums is less than two parts')
+    need = 8 * (3 + k + k * k + G * (2 + k))
+    ld._budget = _Headroom((need + 3 * _per_part(roomy)) / 1e9)
+    assert ld._sums(B, A).max_parts == 1
+    got = ld.newton_pass(B, A)
+    for a, b in [(got.loglik, want.loglik), (got.gradient, want.gradient),
+                 (got.information, want.information), (got.cross, want.cross),
+                 (got.effects_information, want.effects_information)]:
+        np.testing.assert_allclose(a, b, rtol=1e-12, atol=1e-10)
+    ld._budget = _Headroom((need - 8) / 1e9)     # the sums themselves do not fit
+    with pytest.raises(MemoryError, match="Newton pass"):
+        ld.newton_pass(B, A)
+    ld.cleanup()
+
+
+def _per_part(sums):
+    M, k, G, S, c = sums.M, sums.k, sums.G, sums.S, sums.c
+    return 8 * (2 * M * S + M * k + M * c * c + (0 if sums.grouped else M * G * (2 + c)))

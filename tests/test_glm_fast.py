@@ -130,3 +130,38 @@ def test_streaming_glm_otherwise():
             assert one.diagnostics.get("fit") != "newton", fml
     with pytest.raises(ValueError, match="CRV3"):
         feglm_stream("y ~ x1 | g", df, "logit", vcov={"CRV3": "cl"}, verbose=False)
+
+
+def test_peak_memory_is_recorded_and_the_kept_information_follows_the_budget(monkeypatch):
+    """The fit records its peak memory, as the other fits do; the information
+    kept for logit-stream's draws is left off the result when it would take
+    more than half the memory budget's headroom."""
+    import sys
+
+    from hdfe_stream.core import newton
+    df = _data("logit")
+    res = feglm_stream("y ~ x1 + x2 | g", df, "logit", verbose=False)
+    assert res.diagnostics["fit"] == "newton"
+    if sys.platform in ("linux", "darwin", "win32"):
+        assert res.diagnostics["peak_rss_gb"] > 0
+    assert res._newton_information is not None
+
+    # room for a pass's sums, 8 (9 + 4 G) bytes with two covariates, but less
+    # than twice the kept information's 24 G
+    G = res.n_levels["g"]
+
+    class Tight:
+        def __init__(self, *a, **k):
+            pass
+
+        def headroom_gb(self, upcoming_gb=0.0):
+            return max(0.0, 40 * G / 1e9 - upcoming_gb)
+
+        def fits(self, need_gb, upcoming_gb=0.0, share=1.0):
+            return need_gb <= share * self.headroom_gb(upcoming_gb)
+
+    monkeypatch.setattr(newton, "MemoryBudget", Tight)
+    tight = feglm_stream("y ~ x1 + x2 | g", df, "logit", verbose=False)
+    assert getattr(tight, "_newton_information", None) is None
+    np.testing.assert_allclose(tight.beta, res.beta, rtol=1e-12)
+    np.testing.assert_allclose(tight.se, res.se, rtol=1e-12)
