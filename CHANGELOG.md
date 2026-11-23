@@ -13,9 +13,15 @@ fixed effects.
   `HDFEResult` as before: the same sample (singletons, then separated levels), coefficient
   names, collinearity rule, vcov flavors and small-sample factors, fit statistics, and
   `fixef`, `resid`, `predict` and `sample`.
-  - On a logit of 1 million people on 153 indicators, the fit takes about 15 s without a
-    fixed effect (about 30 s before) and about 21 s with 2,462 PUMA fixed effects (about
+  - On a logit of 1 million people on 153 indicators, the fit takes about 10 s without a
+    fixed effect (about 30 s before) and about 12 s with 2,462 PUMA fixed effects (about
     65 s before).
+  - Each pass forms the information one of two ways, chosen by the design's shape: a
+    fused row kernel, which works from each row's nonzeros for a design of indicators,
+    up to about 96 columns for dense rows and about 1,000 for indicators; and BLAS
+    matrix products beyond, which are 1.3 to 2 times faster there. The
+    heteroskedasticity-robust variance's sums come from the same kernel, so without
+    clustering the final read makes no copy of the design.
   - The estimates move slightly, toward the maximum: Newton's method stops on the
     decrement, IRLS on the change in deviance, which at its default tolerance can leave
     the coefficients about 1e-6 (relative) from the maximum.

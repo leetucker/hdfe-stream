@@ -54,12 +54,15 @@ import numba as nb
 import numpy as np
 import polars as pl
 import pyarrow.parquet as pq
+from scipy import sparse
+from scipy.linalg import solve_triangular
 
 from ._columns import PREFIX
 from .families import get_family
 from .feterms import parse_fe
 from .formula import categorical_vars, compile_design, numeric_expr, parse_formula
-from .kernels_newton import LOGIT, POISSON, PROBIT, newton_pass_rows, part_starts
+from .kernels_newton import (LOGIT, POISSON, PROBIT, newton_pass_rows, newton_row_terms,
+                             part_starts)
 from .report import warn
 from .resources import MemoryBudget
 from .store import (BlockStore, PolarsEngine, block_rows, factorize, iter_batches,
@@ -86,6 +89,16 @@ PART_BYTES = 512 * 2**20
 # Use the nonzeros-only products when a row has fewer than this share of
 # its covariates nonzero, on average.
 NNZ_SHARE = 0.5
+
+# Which way a pass forms the information over c columns. The fused row
+# kernel (`newton_pass_rows`) costs about (nonzeros per row)^2 / 2 per row,
+# BLAS products c^2 / 2 at a much higher rate; the kernel wins up to about
+# KERNEL_DENSE_COLUMNS / (the rows' nonzero share) columns -- 96 for dense
+# rows, about 300 at a third nonzero, 1,000 at a tenth -- and never beyond
+# KERNEL_SPARSE_COLUMNS, where each thread's c x c copy of the sums no
+# longer stays in cache.
+KERNEL_DENSE_COLUMNS = 96
+KERNEL_SPARSE_COLUMNS = 1024
 
 # The design's 0/1 columns (indicators of factor levels, binary covariates)
 # are stored as one byte each and put back together as each block is read.
@@ -179,7 +192,9 @@ def newton_direction(C, g, rcond: float = 1e-10):
         L = np.linalg.cholesky(Cs)
         if np.min(np.diag(L)) ** 2 < rcond * np.max(np.diag(L)) ** 2:
             raise np.linalg.LinAlgError
-        x = np.linalg.solve(L.T, np.linalg.solve(L, gs))
+        # triangular solves: numpy's general `solve` (LU) on a small system
+        # is slow on a multithreaded BLAS, tens of ms against tens of us
+        x = solve_triangular(L.T, solve_triangular(L, gs, lower=True), lower=False)
     except np.linalg.LinAlgError:
         ev, V = np.linalg.eigh((Cs + Cs.T) / 2)
         keep = ev > rcond * max(float(ev.max()), 0.0)
@@ -287,9 +302,10 @@ class GLMDesign:
 
     def _blocks(self):
         k = len(self.names)
-        rows = max(256, int(self._chunk_bytes // (8 * max(k + 8, 1))))
+        target = max(256, int(self._chunk_bytes // (8 * max(k + 8, 1))))
         for blk in self._store.iterate(["X", "y", "w", "off", "fe", "cl"]):
             n_blk = len(blk["y"])
+            rows = -(-n_blk // max(1, round(n_blk / target)))     # chunks of equal size
             for lo in range(0, n_blk, rows):
                 hi = min(n_blk, lo + rows)
                 ch = {key: (v[lo:hi] if v is not None else None) for key, v in blk.items()}
@@ -383,80 +399,18 @@ class GLMDesign:
             Newton's method converges quadratically with it, Fisher scoring
             (the expected) only linearly.
         """
-        beta = np.ascontiguousarray(np.atleast_2d(np.asarray(beta, dtype=np.float64)))
-        effects = np.ascontiguousarray(np.atleast_2d(np.asarray(effects, dtype=np.float64)))
-        M, k = beta.shape
-        G, S = self.n_groups, self.n_splits
-        if k != len(self.names):
-            raise ValueError(f"beta has {k} columns; the design has {len(self.names)}")
-        if effects.shape != (M, G):
-            raise ValueError(f"effects must be ({M}, {G})")
-        inc = (np.ones((M, S), np.bool_) if models is None
-               else np.ascontiguousarray(np.asarray(models, dtype=np.bool_).reshape(M, S)))
-        cols = (np.arange(k, dtype=np.int64) if columns is None
-                else np.asarray(columns, dtype=np.int64))
-        if len(np.unique(cols)) != len(cols) or (len(cols) and
-                                                 (cols.min() < 0 or cols.max() >= k)):
-            raise ValueError("columns must be distinct covariate positions")
-        c = len(cols) if information else 0
-        colpos = np.full(k, -1, np.int64)
-        colpos[cols] = np.arange(len(cols))
-        grouped = bool(self.fe_sorted and G > 1)
-        nt = nb.get_num_threads()
-        # each part's copies: ll and skipped, the gradient, the information,
-        # and (ungrouped) the groups' sums
-        per_part = 8 * (2 * M * S + M * k + M * c * c
-                        + (0 if grouped else M * G * (2 + c)))
-        max_parts = max(1, int(PART_BYTES // max(per_part, 1)))
-        ll = np.zeros((M, S))
-        sk = np.zeros((M, S))
-        gb = np.zeros((M, k))
-        H = np.zeros((M, c, c))
-        ga = np.zeros((M, G))
-        D = np.zeros((M, G if information else 0))
-        C = np.zeros((M, G if information else 0, c))
-        empty = np.empty(0)
-        fam = FAMILIES[self.family]
-        nnz = self.use_nonzeros
-        for X, y, w, off, f, s in self._blocks():
-            n = len(y)
-            P = max(1, min(nt, max_parts, n // 256 or 1))
-            starts = (part_starts(f, P) if grouped
-                      else np.linspace(0, n, P + 1).astype(np.int64))
-            P = len(starts) - 1
-            ll_t = np.zeros((P, M, S))
-            sk_t = np.zeros((P, M, S))
-            gb_t = np.zeros((P, M, k))
-            H_t = np.zeros((P, M, c, c))
-            gshape = (0, M, 0) if grouped else (P, M, G)
-            ga_t = np.zeros(gshape)
-            D_t = np.zeros(gshape if information else (0, M, 0))
-            C_t = np.zeros((gshape[0], M, gshape[2], c) if information else (0, M, 0, c))
-            with nb.parallel_chunksize(1):
-                newton_pass_rows(fam, X, np.ascontiguousarray(y, dtype=np.float64),
-                                 empty if w is None else np.ascontiguousarray(w, np.float64),
-                                 empty if off is None else np.ascontiguousarray(off,
-                                                                                np.float64),
-                                 f, s, beta, effects, inc, colpos, bool(information), nnz,
-                                 grouped, starts, ll_t, sk_t, gb_t, H_t, ga_t, D_t, C_t,
-                                 ga, D, C, bool(observed))
-            ll += ll_t.sum(axis=0)
-            sk += sk_t.sum(axis=0)
-            gb += gb_t.sum(axis=0)
-            H += H_t.sum(axis=0)
-            if not grouped:
-                ga += ga_t.sum(axis=0)
-                if information:
-                    D += D_t.sum(axis=0)
-                    C += C_t.sum(axis=0)
-        Hs = None
-        if information:
-            Hs = np.triu(H) + np.transpose(np.triu(H, 1), (0, 2, 1))
+        sums = self._sums(beta, effects, models=models, columns=columns,
+                          information=information, observed=observed)
+        for X, y, w, off, f, sp in self._blocks():
+            sums.add(X, y, w, off, f, sp)
         self.diagnostics["passes"] = self.passes + 1
-        return NewtonMoments(loglik=ll, gradient=gb, effects_gradient=ga, information=Hs,
-                             effects_information=D if information else None,
-                             cross=C if information else None,
-                             skipped=sk.astype(np.int64), columns=cols)
+        return sums.moments()
+
+    def _sums(self, beta, effects, *, models=None, columns=None, information=True,
+              observed=False, meat=0) -> _Sums:
+        """The running sums of a pass (`newton_pass`'s arguments; `meat` as
+        in `newton_pass_rows`), for a caller that reads the rows itself."""
+        return _Sums(self, beta, effects, models, columns, information, observed, meat)
 
     def cleanup(self) -> None:
         """Delete the stored rows."""
@@ -538,6 +492,152 @@ def _grouped(path, cols, n_groups, rows):
     finally:
         pf.close()
     return runs == n_groups
+
+
+
+class _Sums:
+    """A pass's sums, block by block (see `GLMDesign.newton_pass`): by the
+    fused row kernel, or by BLAS products for dense or very wide rows (see
+    KERNEL_DENSE_COLUMNS)."""
+
+    def __init__(self, ld, beta, effects, models, columns, information, observed, meat):
+        beta = np.ascontiguousarray(np.atleast_2d(np.asarray(beta, dtype=np.float64)))
+        effects = np.ascontiguousarray(np.atleast_2d(np.asarray(effects, dtype=np.float64)))
+        M, k = beta.shape
+        G, S = ld.n_groups, ld.n_splits
+        if k != len(ld.names):
+            raise ValueError(f"beta has {k} columns; the design has {len(ld.names)}")
+        if effects.shape != (M, G):
+            raise ValueError(f"effects must be ({M}, {G})")
+        inc = (np.ones((M, S), np.bool_) if models is None
+               else np.ascontiguousarray(np.asarray(models, dtype=np.bool_).reshape(M, S)))
+        cols = (np.arange(k, dtype=np.int64) if columns is None
+                else np.asarray(columns, dtype=np.int64))
+        if len(np.unique(cols)) != len(cols) or (len(cols) and
+                                                 (cols.min() < 0 or cols.max() >= k)):
+            raise ValueError("columns must be distinct covariate positions")
+        information = bool(information or meat)
+        c = len(cols) if information else 0
+        colpos = np.full(k, -1, np.int64)
+        colpos[cols] = np.arange(len(cols))
+        self.nnz = ld.use_nonzeros
+        self.blas = c > _kernel_columns(ld)
+        self.grouped = bool(ld.fe_sorted and G > 1)
+        # each part's copies: ll and skipped, the gradient, the information,
+        # and (ungrouped) the groups' sums
+        per_part = 8 * (2 * M * S + M * k + M * c * c
+                        + (0 if self.grouped else M * G * (2 + c)))
+        self.max_parts = max(1, int(PART_BYTES // max(per_part, 1)))
+        self.beta, self.effects, self.inc, self.cols, self.colpos = beta, effects, inc, cols, colpos
+        self.all_cols = len(cols) == k
+        self.M, self.k, self.G, self.S, self.c = M, k, G, S, c
+        self.information, self.observed, self.meat = information, bool(observed), int(meat)
+        self.fam = FAMILIES[ld.family]
+        self.ll = np.zeros((M, S))
+        self.sk = np.zeros((M, S))
+        self.gb = np.zeros((M, k))
+        self.H = np.zeros((M, c, c))
+        self.ga = np.zeros((M, G))
+        self.D = np.zeros((M, G if information else 0))
+        self.C = np.zeros((M, G if information else 0, c))
+
+    def add(self, X, y, w, off, f, s):
+        """Add a chunk of rows: X (n, k), y, w and off (n,) (w and off may be
+        None), f the effects' indices and s the splits (n,)."""
+        y = np.ascontiguousarray(y, dtype=np.float64)
+        w = _EMPTY if w is None else np.ascontiguousarray(w, np.float64)
+        off = _EMPTY if off is None else np.ascontiguousarray(off, np.float64)
+        if self.blas:
+            self._add_blas(X, y, w, off, f, s)
+        else:
+            self._add_kernel(X, y, w, off, f, s)
+
+    def _add_kernel(self, X, y, w, off, f, s):
+        M, k, G, S, c = self.M, self.k, self.G, self.S, self.c
+        n = len(y)
+        P = max(1, min(nb.get_num_threads(), self.max_parts, n // 256 or 1))
+        starts = (part_starts(f, P) if self.grouped
+                  else np.linspace(0, n, P + 1).astype(np.int64))
+        P = len(starts) - 1
+        info = self.information
+        ll_t = np.zeros((P, M, S))
+        sk_t = np.zeros((P, M, S))
+        gb_t = np.zeros((P, M, k))
+        H_t = np.zeros((P, M, c, c))
+        gshape = (0, M, 0) if self.grouped else (P, M, G)
+        ga_t = np.zeros(gshape)
+        D_t = np.zeros(gshape if info else (0, M, 0))
+        C_t = np.zeros((gshape[0], M, gshape[2], c) if info else (0, M, 0, c))
+        with nb.parallel_chunksize(1):
+            newton_pass_rows(self.fam, X, y, w, off, f, s, self.beta, self.effects, self.inc,
+                             self.colpos, info, self.nnz, self.grouped, starts, ll_t, sk_t,
+                             gb_t, H_t, ga_t, D_t, C_t, self.ga, self.D, self.C,
+                             self.observed, self.meat)
+        self.ll += ll_t.sum(axis=0)
+        self.sk += sk_t.sum(axis=0)
+        self.gb += gb_t.sum(axis=0)
+        self.H += H_t.sum(axis=0)
+        if not self.grouped:
+            self.ga += ga_t.sum(axis=0)
+            if info:
+                self.D += D_t.sum(axis=0)
+                self.C += C_t.sum(axis=0)
+
+    def _add_blas(self, X, y, w, off, f, s):
+        M, G, S = self.M, self.G, self.S
+        n = len(y)
+        eta = X @ self.beta.T
+        eta += self.effects[:, f].T
+        if len(off):
+            eta += off[:, None]
+        P = max(1, min(nb.get_num_threads(), n // 256 or 1))
+        starts = np.linspace(0, n, P + 1).astype(np.int64)
+        ll_t, sk_t = np.zeros((P, M, S)), np.zeros((P, M, S))
+        R, Hh = np.empty((n, M)), np.empty((n, M))
+        newton_row_terms(self.fam, y, w, eta, s, self.inc, starts, ll_t, sk_t, R, Hh,
+                         self.observed, self.meat)
+        self.ll += ll_t.sum(axis=0)
+        self.sk += sk_t.sum(axis=0)
+        self.gb += (X.T @ R).T
+        for m in range(M):
+            self.ga[m] += np.bincount(f, weights=R[:, m], minlength=G)
+        if not self.information:
+            return
+        Xc = X if self.all_cols else X[:, self.cols]
+        for m in range(M):
+            hm = Hh[:, m]
+            self.D[m] += np.bincount(f, weights=hm, minlength=G)
+            Xs = Xc * np.sqrt(np.maximum(hm, 0.0))[:, None]
+            self.H[m] += Xs.T @ Xs
+            if G == 1:
+                self.C[m, 0] += hm @ Xc
+            else:
+                F = sparse.csr_matrix((hm, (f, np.arange(n))), shape=(G, n))
+                self.C[m] += F @ Xc
+
+    def moments(self) -> NewtonMoments:
+        info = self.information
+        Hs = None
+        if info:
+            H = self.H
+            Hs = np.triu(H) + np.transpose(np.triu(H, 1), (0, 2, 1))
+        return NewtonMoments(loglik=self.ll, gradient=self.gb, effects_gradient=self.ga,
+                             information=Hs, effects_information=self.D if info else None,
+                             cross=self.C if info else None,
+                             skipped=self.sk.astype(np.int64), columns=self.cols)
+
+
+def _kernel_columns(ld) -> float:
+    """The most information columns a pass forms by the row kernel (see
+    KERNEL_DENSE_COLUMNS); BLAS products beyond."""
+    if not ld.use_nonzeros:
+        return KERNEL_DENSE_COLUMNS
+    k = len(ld.names)
+    share = float(np.sum(ld.x_nonzero)) / k if k else 1.0
+    return min(KERNEL_SPARSE_COLUMNS, KERNEL_DENSE_COLUMNS / max(share, 1e-12))
+
+
+_EMPTY = np.empty(0)
 
 
 def glm_design(fml: str, data: Any, *, family: str, weights: str | None = None,
@@ -731,25 +831,71 @@ def _pass0(spec, lf, schema, fam, engine, run, budget, log, t0, *, weights, weig
     cjoins = [(clusters[name], t) for name, t in cluster_tables.items()]
     fjoins = [(fe_cols[d], t) for d, t in fe_tables.items()]
 
+    # the splits, and the groups' and the covariates' sums (by split), formed
+    # as the blocks are written
+    split_of = None
+    S = 1
+    if split_by:
+        t = cluster_tables[SPLIT]
+        vals = t[split_by].to_numpy()
+        codes = t[CODE].to_numpy()
+        if (not np.issubdtype(vals.dtype, np.integer) or vals.min() < 0
+                or vals.max() >= n_splits):
+            raise ValueError(f"split_by: {split_by!r} must hold integers 0 to {n_splits - 1}")
+        split_of = np.zeros(int(codes.max()) + 1, np.int64)
+        split_of[codes] = vals
+        S = n_splits
+    fe = spec.fe[0] if spec.fe else None
+    G0 = fe_tables[fe].height if fe else 1
+    gw = np.zeros((S, G0))
+    gy = np.zeros((S, G0))
+    gn = np.zeros(G0, np.int64)
+    gpos = np.zeros(G0, np.int64)
+    xs, xq = np.zeros((S, K)), np.zeros((S, K))
+    xcont = np.flatnonzero(~xbinary)       # the squares of 0/1 columns are the columns
+
+    def add_sums(X, y, w, f, cl):
+        n = len(y)
+        f = f if fe else np.zeros(n, np.int64)
+        s = split_of[cl[:, 0]] if split_of is not None else None
+        wt = np.ones(n) if w is None else w
+        idx = f if s is None else s * G0 + f
+        gw[...] += np.bincount(idx, weights=wt, minlength=S * G0).reshape(S, G0)
+        gy[...] += np.bincount(idx, weights=wt * y, minlength=S * G0).reshape(S, G0)
+        gn[...] += np.bincount(f, minlength=G0)
+        gpos[...] += np.bincount(f, weights=(y > 0), minlength=G0).astype(np.int64)
+        for j in range(S):
+            r = None if s is None else s == j
+            if r is not None and not r.any():
+                continue
+            Xj, wj = (X, wt) if r is None else (X[r], wt[r])
+            sj = wj @ Xj
+            xs[j] += sj
+            xq[j] += sj                         # the 0/1 columns' squares
+            if len(xcont):
+                xq[j, xcont] += wj @ (Xj[:, xcont] ** 2) - sj[xcont]
+
     def convert(frame: pl.DataFrame):
         frame = frame.select(evaluated)                 # the design, for this batch
-        cl = fe = None
+        cl = fc = None
         if cjoins:
             cl = np.column_stack([
                 frame.select(cc).join(t, on=cc, how="left", maintain_order="left")[CODE]
                 .to_numpy() for cc, t in cjoins]).astype(np.int64)
         if fjoins:
             cc, t = fjoins[0]
-            fe = (frame.select(cc).join(t, on=cc, how="left", maintain_order="left")[CODE]
+            fc = (frame.select(cc).join(t, on=cc, how="left", maintain_order="left")[CODE]
                   .to_numpy().astype(np.int64))
         X = (frame.select([_xcol(j) for j in range(K)]).to_numpy(order="c")
              if K else np.zeros((frame.height, 0)))
-        store.add({"X": X.astype(np.float64, copy=False),
-                   "y": frame[Y].to_numpy().astype(np.float64),
-                   "w": frame[W].to_numpy().astype(np.float64) * wscale if weights else None,
+        X = X.astype(np.float64, copy=False)
+        y = frame[Y].to_numpy().astype(np.float64)
+        w = frame[W].to_numpy().astype(np.float64) * wscale if weights else None
+        add_sums(X, y, w, fc, cl)
+        store.add({"X": X, "y": y, "w": w,
                    "off": frame[OFF].to_numpy().astype(np.float64)
                    if off_expr is not None else None,
-                   "cl": cl, "fe": fe, "row": frame[ROW].to_numpy().astype(np.int64)})
+                   "cl": cl, "fe": fc, "row": frame[ROW].to_numpy().astype(np.int64)})
 
     log(f"pass 0: writing {n_obs:,} rows as blocks of {rows:,}"
         + (" (in memory)" if in_memory else ""))
@@ -778,42 +924,6 @@ def _pass0(spec, lf, schema, fam, engine, run, budget, log, t0, *, weights, weig
             convert(frame)
     design_path.unlink(missing_ok=True)
 
-    # the splits, the groups' sums, and the covariates' sums by split
-    split_of = None
-    S = 1
-    if split_by:
-        t = cluster_tables[SPLIT]
-        vals = t[split_by].to_numpy()
-        codes = t[CODE].to_numpy()
-        if (not np.issubdtype(vals.dtype, np.integer) or vals.min() < 0
-                or vals.max() >= n_splits):
-            raise ValueError(f"split_by: {split_by!r} must hold integers 0 to {n_splits - 1}")
-        split_of = np.zeros(int(codes.max()) + 1, np.int64)
-        split_of[codes] = vals
-        S = n_splits
-    fe = spec.fe[0] if spec.fe else None
-    G0 = fe_tables[fe].height if fe else 1
-    gw = np.zeros((S, G0))
-    gy = np.zeros((S, G0))
-    gn = np.zeros(G0, np.int64)
-    gpos = np.zeros(G0, np.int64)
-    xs, xq = np.zeros((S, K)), np.zeros((S, K))
-    for blk in store.iterate(["X", "y", "w", "fe", "cl"]):
-        n = len(blk["y"])
-        f = blk["fe"] if fe else np.zeros(n, np.int64)
-        s = split_of[blk["cl"][:, 0]] if split_of is not None else np.zeros(n, np.int64)
-        wt = np.ones(n) if blk.get("w") is None else blk["w"]
-        y = blk["y"]
-        np.add.at(gw, (s, f), wt)
-        np.add.at(gy, (s, f), wt * y)
-        gn += np.bincount(f, minlength=G0)
-        gpos += np.bincount(f, weights=(y > 0), minlength=G0).astype(np.int64)
-        X = blk["X"]
-        for j in range(S):
-            r = s == j
-            if r.any():
-                xs[j] += wt[r] @ X[r]
-                xq[j] += wt[r] @ (X[r] ** 2)
     single = (gn == 1) if fe and drop_singletons else np.zeros(G0, bool)
     if fam.name == "poisson":
         bad = gpos == 0                         # an outcome that is always zero

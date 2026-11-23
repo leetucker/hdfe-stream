@@ -36,7 +36,8 @@ from .kernels_glm import LOGIT, POISSON, PROBIT, _expit, _log_expit, _log_ndtr
 
 _LOG_2PI_HALF = 0.9189385332046727        # log(2 pi) / 2
 
-__all__ = ["LOGIT", "POISSON", "PROBIT", "part_starts", "row_terms", "newton_pass_rows"]
+__all__ = ["LOGIT", "POISSON", "PROBIT", "newton_pass_rows", "newton_row_terms",
+           "part_starts", "row_terms"]
 
 
 @nb.njit(cache=True, inline="always", error_model="numpy")
@@ -93,7 +94,7 @@ def part_starts(f, n_parts):
 @nb.njit(parallel=True, cache=True, error_model="numpy")
 def newton_pass_rows(family, X, y, w, off, f, s, B, A, inc, colpos, info, use_nnz, grouped,
                      starts, ll_t, sk_t, gb_t, H_t, ga_t, D_t, C_t, ga, D, C,
-                     observed=False):
+                     observed=False, meat=0):
     """Add a chunk's rows to the sums (see the module docstring).
 
     X (n, k), y (n,), w and off (n,) or empty, f the group codes and s the
@@ -109,6 +110,12 @@ def newton_pass_rows(family, X, y, w, off, f, s, B, A, inc, colpos, info, use_nn
     triangle. The groups' sums -- the effects' gradient, information and
     cross block -- go to ga_t, D_t, C_t ((P, M, G), (P, M, G), (P, M, G, c)),
     or, when `grouped`, to the shared ga, D, C ((M, G), (M, G), (M, G, c)).
+
+    With `meat` the "information" sums take each row's squared score in
+    place of its information -- (w r)^2 (``meat=2``: no weights or analytic
+    ones) or w r^2 (``meat=1``: frequency weights, a row standing for w
+    rows) -- which gives the heteroskedasticity-robust variance's meat in
+    the same arrow shape.
     """
     n, k = X.shape
     M = B.shape[0]
@@ -165,8 +172,13 @@ def newton_pass_rows(family, X, y, w, off, f, s, B, A, inc, colpos, info, use_nn
                 ll_t[t, m, si] += wt * ll
                 if not inc[m, si]:
                     continue
+                if meat == 2:
+                    h = (wt * r) * (wt * r)
+                elif meat == 1:
+                    h = wt * r * r
+                else:
+                    h *= wt
                 r *= wt
-                h *= wt
                 for q in range(cnt):
                     gb_t[t, m, nz[q]] += r * xv[q]
                 if grouped:
@@ -203,3 +215,38 @@ def newton_pass_rows(family, X, y, w, off, f, s, B, A, inc, colpos, info, use_nn
                     D[m, cur] += loc_h[m]
                     for p in range(c):
                         C[m, cur, p] += loc_c[m, p]
+
+
+@nb.njit(parallel=True, cache=True, error_model="numpy")
+def newton_row_terms(family, y, w, eta, s, inc, starts, ll_t, sk_t, R, Hh, observed=False,
+                     meat=0):
+    """Each row's terms for every model, for the passes that form the sums
+    with BLAS products instead (dense designs): eta (n, M) the linear
+    predictors; into R and Hh (n, M) the weighted score and information (or,
+    with `meat`, squared score, as in `newton_pass_rows`), zero for a row
+    outside the model's splits (`inc`) or with a non-finite eta; ll_t and
+    sk_t (P, M, S) each part's log-likelihood and rows skipped."""
+    M = eta.shape[1]
+    has_w = len(w) > 0
+    for t in nb.prange(len(starts) - 1):
+        for i in range(starts[t], starts[t + 1]):
+            wt = w[i] if has_w else 1.0
+            si = s[i]
+            for m in range(M):
+                e = eta[i, m]
+                R[i, m] = 0.0
+                Hh[i, m] = 0.0
+                if not np.isfinite(e):
+                    sk_t[t, m, si] += 1.0
+                    continue
+                ll, r, h = row_terms(family, y[i], e, observed)
+                ll_t[t, m, si] += wt * ll
+                if not inc[m, si]:
+                    continue
+                R[i, m] = wt * r
+                if meat == 2:
+                    Hh[i, m] = (wt * r) * (wt * r)
+                elif meat == 1:
+                    Hh[i, m] = wt * r * r
+                else:
+                    Hh[i, m] = wt * h

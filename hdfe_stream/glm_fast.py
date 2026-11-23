@@ -47,7 +47,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import polars as pl
-from scipy import special
+from scipy import sparse, special
 
 from .core.families import get_family
 from .core.feterms import parse_fe
@@ -370,7 +370,6 @@ def _fit(ld, fml, spec, lf, fam, weights, weights_type, offset, default, keys, r
     mdir.mkdir(parents=True)
     resid_path = str(mdir / "resid.parquet")
     fweights = weights is not None and weights_type == "fweights"
-    meat_hc = np.zeros((len(keep), len(keep)))
     ctabs = ld.diagnostics["cluster_tables"]
     cl_names = list(terms)
     csums = {t: np.zeros((ctabs[t].height, len(keep))) for t in cl_names}
@@ -385,25 +384,32 @@ def _fit(ld, fml, spec, lf, fam, weights, weights_type, offset, default, keys, r
     import pyarrow as pa
     import pyarrow.parquet as pq
     beta_full = np.asarray(b, dtype=np.float64)
+    # the robust variance's meat, sum (w r)^2 x x' (w r^2 x x' with frequency
+    # weights), in the information's arrow shape -- x stands for (1, x)
+    # without a fixed effect, x - (its group's mean) with one -- from the
+    # row kernel's squared-score sums
+    msums = ld._sums(beta_full, np.atleast_2d(a), meat=1 if fweights else 2)
+    all_keep = len(keep) == p
     for blk in ld._rows_full():
         X, y, w, off, f = blk["X"], blk["y"], blk["w"], blk["off"], blk["f"]
         n = len(y)
         xb = X @ beta_full + (0.0 if with_fe else a[0])
         eff = a[f] if with_fe else np.zeros(n)
         eta = xb + eff + (0.0 if off is None else off)
-        lli, r, h, mu, uw = _terms(fam.name, y, eta)
+        _, r, _, mu, uw = _terms(fam.name, y, eta)
         wt = np.ones(n) if w is None else w
-        Xs = (X - mu_g[f]) if with_fe else np.column_stack([np.ones(n), X])
-        Xs = Xs[:, keep]
-        sc = (wt * r)[:, None] * Xs                       # each row's score
-        if fweights:
-            meat_hc += (sc / np.sqrt(wt)[:, None]).T @ (sc / np.sqrt(wt)[:, None])
-        else:
-            meat_hc += sc.T @ sc
-        for j, t in enumerate(cl_names):
-            code = blk["cl"][:, (1 if ld._split_of is not None else 0) + j]
-            np.add.at(csums[t], code, sc)
-            cl_seen[t][code] = True
+        msums.add(X, y, w, off, f, blk["s"])
+        if cl_names:
+            Xs = (X - mu_g[f]) if with_fe else np.column_stack([np.ones(n), X])
+            if not all_keep:
+                Xs = Xs[:, keep]
+            rows = np.arange(n)
+            for j, t in enumerate(cl_names):
+                code = blk["cl"][:, (1 if ld._split_of is not None else 0) + j]
+                # the clusters' summed scores, sum over the rows of w r x
+                csums[t] += sparse.csr_matrix((wt * r, (code, rows)),
+                                              shape=(len(cl_seen[t]), n)) @ Xs
+                cl_seen[t][code] = True
         ysum += float(wt @ y)
         wsum += float(wt.sum())
         if fam.name == "poisson":
@@ -432,6 +438,18 @@ def _fit(ld, fml, spec, lf, fam, weights, weights_type, offset, default, keys, r
         writer.write_table(table)
     if writer is not None:
         writer.close()
+
+    mm = msums.moments()
+    Hm, Cm, Dm = mm.information[0], mm.cross[0], mm.effects_information[0]
+    if with_fe:
+        Cmu = Cm.T @ mu_g
+        meat = Hm - Cmu - Cmu.T + mu_g.T @ (Dm[:, None] * mu_g)
+    else:
+        meat = np.empty((p, p))
+        meat[0, 0] = Dm[0]
+        meat[0, 1:] = meat[1:, 0] = Cm[0]
+        meat[1:, 1:] = Hm
+    meat_hc = meat[np.ix_(keep, keep)]
 
     # the variances
     N = ld.weight_sum if fweights else ld.n_obs

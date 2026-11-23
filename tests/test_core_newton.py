@@ -59,8 +59,9 @@ def _terms(family, y, eta):
     return y * eta - mu - special.gammaln(y + 1), y - mu, mu
 
 
-def _reference(ld, B, A, models, cols):
-    """The pass's sums by NumPy over the stored rows."""
+def _reference(ld, B, A, models, cols, meat=0):
+    """The pass's sums by NumPy over the stored rows (with `meat`, the
+    squared scores' in place of the information's)."""
     M, S, G, k = len(B), ld.n_splits, ld.n_groups, len(ld.names)
     ll = np.zeros((M, S))
     gb = np.zeros((M, k))
@@ -76,7 +77,11 @@ def _reference(ld, B, A, models, cols):
             lt, r, h = _terms(ld.family, y, eta)
             ll[m] += np.bincount(s, wt * lt, S)
             inc = models[m, s]
-            r, h = np.where(inc, wt * r, 0.0), np.where(inc, wt * h, 0.0)
+            if meat:
+                h = (wt * r * r) if meat == 1 else (wt * r) ** 2
+            else:
+                h = wt * h
+            r, h = np.where(inc, wt * r, 0.0), np.where(inc, h, 0.0)
             gb[m] += X.T @ r
             ga[m] += np.bincount(f, r, G)
             Xc = X[:, cols]
@@ -106,8 +111,14 @@ def test_pass_matches_numpy(family, fe, tmp_path, monkeypatch):
     models = np.array([[True] * S, [False, True, True, True], [True, False, True, False]])
     cols = np.array([4, 0, 2, 6])
     ref = _reference(ld, B, A, models, cols)
-    for nnz_share, sorted_ in [(0.0, True), (1.1, True), (1.1, False)]:
+    # the row kernel (nonzeros only or not; groups' sums per run or per part)
+    # and the BLAS products
+    for nnz_share, sorted_, blas in [(0.0, True, False), (1.1, True, False),
+                                     (1.1, False, False), (1.1, True, True),
+                                     (0.0, False, True)]:
         monkeypatch.setattr(newton, "NNZ_SHARE", nnz_share)
+        monkeypatch.setattr(newton, "KERNEL_DENSE_COLUMNS", -1 if blas else 10**6)
+        monkeypatch.setattr(newton, "KERNEL_SPARSE_COLUMNS", -1 if blas else 10**6)
         ld.fe_sorted = sorted_ and ld.diagnostics["fe_sorted"]
         mom = ld.newton_pass(B, A, models=models, columns=cols)
         for got, want in zip([mom.loglik, mom.gradient, mom.effects_gradient, mom.information,
@@ -116,6 +127,33 @@ def test_pass_matches_numpy(family, fe, tmp_path, monkeypatch):
         lite = ld.newton_pass(B, A, models=models, information=False)
         np.testing.assert_allclose(lite.loglik, ref[0], rtol=1e-12)
         assert lite.information is None
+    ld.cleanup()
+
+
+@pytest.mark.parametrize("family", FAMILIES)
+@pytest.mark.parametrize("fe", [False, True])
+@pytest.mark.parametrize("blas", [False, True])
+def test_meat_sums_match_numpy(family, fe, blas, tmp_path, monkeypatch):
+    """The squared-score sums (the robust variance's meat), for analytic
+    weights ((w r)^2) and frequency weights (w r^2), by the row kernel and by
+    the BLAS products."""
+    monkeypatch.setattr(newton, "KERNEL_DENSE_COLUMNS", -1 if blas else 10**6)
+    monkeypatch.setattr(newton, "KERNEL_SPARSE_COLUMNS", -1 if blas else 10**6)
+    df = _data(family)
+    fml = "y ~ x1 + x2 + x3 + C(c)" + (" | g" if fe else "")
+    ld = glm_design(fml, df, family=family, weights="w", workdir=tmp_path)
+    k, G = len(ld.names), ld.n_groups
+    r = np.random.default_rng(5)
+    B, A = r.normal(0, 0.2, (1, k)), r.normal(0, 0.2, (1, G))
+    models, cols = np.ones((1, 1), bool), np.arange(k)
+    for meat in (1, 2):
+        ref = _reference(ld, B, A, models, cols, meat=meat)
+        sums = ld._sums(B, A, meat=meat)
+        for X, y, w, off, f, s in ld._blocks():
+            sums.add(X, y, w, off, f, s)
+        mom = sums.moments()
+        for got, want in zip([mom.information, mom.effects_information, mom.cross], ref[3:]):
+            np.testing.assert_allclose(got, want, rtol=1e-10, atol=1e-9)
     ld.cleanup()
 
 
