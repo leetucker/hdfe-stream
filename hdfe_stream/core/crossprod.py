@@ -157,15 +157,12 @@ class _Estimator(_StreamingBase):
 
     _direct = None
 
-    def _sink(self, lf, target, what, before_retry=None, **kw):
-        if self.no_fe and what == "pass 0 write rows":
-            self._direct = lf
-            if getattr(self, "cmaps", None):
-                # cluster codes are joined onto these rows; the source's
-                # columns alone (_raw_rows) do not have them
-                self._raw_rows = None
-            return None
-        return super()._sink(lf, target, what, before_retry=before_retry, **kw)
+    def _write_rows_no_fe(self, coded, out, maps):
+        self._direct = coded
+        if getattr(self, "cmaps", None):
+            # cluster codes are joined onto these rows; the source's
+            # columns alone (_raw_rows) do not have them
+            self._raw_rows = None
 
     def _row_chunks(self, cols):
         if self._direct is None:

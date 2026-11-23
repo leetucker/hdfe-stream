@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.12.2
+
+Lower peak memory for regressions without fixed effects whose design has many columns,
+such as a categorical expanded into hundreds or thousands of indicators. Estimates are
+unchanged.
+
+- **Pass 0's row write without fixed effects** reads the source's own columns a batch at
+  a time, evaluates the design on each batch and writes it with a Parquet writer. It
+  previously sank the evaluated design through Polars' streaming engine, which buffers up
+  to a row group per thread of every design column, so its memory grew with the number
+  of rows up to several million. With about 2,000 indicators, `feols_stream` peaked at
+  16.9 GB at 1 million rows; it now peaks at 11.2 GB, the same as at 300,000 rows, and
+  is about 30% faster (133 s instead of 188 s). The write itself fell from 16.5 GB to
+  2.6 GB.
+- This applies when every design and weight expression is row-wise, as formula-built
+  designs always are, and with the CPU engine. Otherwise the evaluated design is sunk as
+  before.
+
 ## 0.12.1
 
 Lower peak memory for designs with many columns, such as a categorical expanded into

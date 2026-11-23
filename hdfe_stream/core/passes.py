@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+import pyarrow.parquet as pq
 
 from ._columns import BUCKET, GCODE, PREFIX, WCOL, check_source, tcol, vcol
 from .connected import COMPONENT, _find_components
@@ -261,7 +262,7 @@ class _PassesMixin:
             # go to disk in the order they arrive, in one file.
             self._log("pass 0: writing rows (no fixed effects: no grouping)")
             out = str(self.workdir / "rows_b0000.parquet")
-            self._sink(coded, out, "pass 0 write rows", row_group_size=self.rgs)
+            self._write_rows_no_fe(coded, out, maps)
             self.paths["rows"] = [out]
             self._track_disk()
             for spec in self.clusters.values():
@@ -576,6 +577,49 @@ class _PassesMixin:
         off, _ = self._offsets()
         self.offs = np.array([off[f] for f in self.o_fe], np.int64)
         self.n_ident_cells = M
+
+    def _write_rows_no_fe(self, coded, out, maps):
+        """Pass 0's rows without fixed effects, to `out`.
+
+        With a row-wise design (`_raw_rows`), the source's columns are read
+        a batch at a time and the design evaluated on each batch, written
+        with a Parquet writer: a streaming sink of the evaluated design
+        buffers up to a row group per thread of every design column (with
+        2,000 indicators, 16.5 GB at a million rows), where a batch holds
+        about 64 MB of it. Otherwise the query is sunk as it is.
+        """
+        raw = getattr(self, "_raw_rows", None)
+        if raw is None or self.polars_engine == "gpu":
+            self._sink(coded, out, "pass 0 write rows", row_group_size=self.rgs)
+            return
+        query, evaluate = raw
+        names = coded.collect_schema().names()
+        tables = [pl.scan_parquet(path) for _, _, _, path in maps]
+
+        def finish(frame):
+            frame = evaluate(frame)
+            for (_, cols, _, _), table in zip(maps, tables):
+                frame = frame.join(table, on=cols)
+            return frame.select(names)
+
+        writer = None
+        try:
+            for batch in query.collect_batches(chunk_size=self.batch_rows,
+                                               engine="streaming"):
+                frame = finish(batch.lazy()).collect()
+                if frame.height == 0:
+                    continue
+                table = frame.to_arrow()
+                del frame
+                if writer is None:
+                    writer = pq.ParquetWriter(out, table.schema)
+                writer.write_table(table, row_group_size=min(self.rgs, self.batch_rows))
+                del table
+            if writer is None:          # no rows: an empty file with the columns
+                finish(query.head(0)).collect().write_parquet(out)
+        finally:
+            if writer is not None:
+                writer.close()
 
     def _defer_design(self, schema, src):
         """Decide where the design is evaluated; see `utils._row_wise`.
