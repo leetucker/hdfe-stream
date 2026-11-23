@@ -160,6 +160,10 @@ class _Estimator(_StreamingBase):
     def _sink(self, lf, target, what, before_retry=None, **kw):
         if self.no_fe and what == "pass 0 write rows":
             self._direct = lf
+            if getattr(self, "cmaps", None):
+                # cluster codes are joined onto these rows; the source's
+                # columns alone (_raw_rows) do not have them
+                self._raw_rows = None
             return None
         return super()._sink(lf, target, what, before_retry=before_retry, **kw)
 
@@ -168,8 +172,19 @@ class _Estimator(_StreamingBase):
             yield from super()._row_chunks(cols)
             return
         pieces = 8 * nb.get_num_threads()
-        for frame in self._direct.select(cols).collect_batches(chunk_size=self.batch_rows,
-                                                                engine="streaming"):
+        raw = getattr(self, "_raw_rows", None)
+        if raw is not None:
+            # the source's columns a batch at a time, the design evaluated on
+            # each (see _pass0_code): bounded by the batch, where a query
+            # holding the evaluated design is not
+            query, evaluate = raw
+            frames = (evaluate(batch.lazy()).select(cols).collect()
+                      for batch in query.collect_batches(chunk_size=self.batch_rows,
+                                                         engine="streaming"))
+        else:
+            frames = self._direct.select(cols).collect_batches(chunk_size=self.batch_rows,
+                                                               engine="streaming")
+        for frame in frames:
             n = frame.height
             if n == 0:
                 continue

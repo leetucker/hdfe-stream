@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.12.1
+
+Lower peak memory for designs with many columns, such as a categorical expanded into
+hundreds or thousands of indicators. Estimates are unchanged.
+
+- **Pass 0's scan** (counts, means and variances) aggregates the design's expressions
+  directly instead of first evaluating every design column. Polars' streaming engine
+  buffered whole chunks of the evaluated columns, so the scan's memory grew with the
+  number of rows. With about 2,000 indicators it reached 6 GB at 1.6 million rows; it now
+  takes a few hundred MB. This applies with and without fixed effects.
+- **`core.crossprod` without fixed effects** reads the source's own columns a batch at a
+  time and evaluates the design on each batch. It previously read a query that held the
+  evaluated design, which Polars' `collect_batches` did not keep bounded. With about
+  2,000 indicators the pass ran past 14 GB at 1.6 million rows. It now peaks at about
+  8.4 GB from 400,000 rows up, set by the batch size rather than by the number of rows,
+  and is about 7% faster at 400,000 rows. With 50 variables the pass's peak fell from
+  2.4 GB to 1.1 GB at 5 million rows, in the same time.
+- Both changes apply when every design and weight expression is row-wise, as
+  formula-built designs always are. Otherwise, and in `core.crossprod` when cluster codes
+  are joined onto the rows, the design is evaluated as before.
+
 ## 0.12.0
 
 Adds Rambachan and Roth's sensitivity analysis for parallel trends, and studentized intervals

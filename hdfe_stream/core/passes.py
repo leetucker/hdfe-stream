@@ -121,6 +121,24 @@ class _PassesMixin:
                 narrow = restrict(narrow)
             lf = evaluate(narrow)
         self._record_sample(raw, src)
+        # With a row-wise design (formula-built designs are), the scan below
+        # aggregates the design's expressions directly, and the rows pass of
+        # core.crossprod (no fixed effects) evaluates them a batch at a time
+        # (`_raw_rows`), never reading a query that holds the evaluated design
+        # columns: Polars' streaming engine buffers whole morsels of those
+        # (with 2,000 indicators, the scan peaked at 6 GB at 1.6 million rows,
+        # and collect_batches held most of the 26 GB design), while their
+        # expressions alone stream in a few hundred MB.
+        base = narrow if restricts else source
+        row_wise = all(_row_wise(e)[0] for e in
+                       [self.var_exprs[nm] for nm in self.var_names]
+                       + ([self.weights] if self.weights is not None else []))
+        self._raw_rows = None
+        if row_wise:
+            needed = dict.fromkeys(
+                [*src, *self.keep, *self.slope_vars]
+                + [r for e in [*design, *wexpr] for r in e.meta.root_names()])
+            self._raw_rows = (base.select([pl.col(c) for c in needed]), evaluate)
 
         # One scan for counts, means, weight checks and (if the streamed
         # dimension must be chosen by cardinality) HyperLogLog counts.
@@ -143,10 +161,20 @@ class _PassesMixin:
             combo = [pl.struct(cols).hash(seed=7).approx_n_unique().alias("__combos")]
         self._log("pass 0: scanning data (counts, means"
                   + (", approximate cardinalities)" if need_card or combo else ")"))
-        mom = self._collect(lf.select([pl.len().alias("n")] + wstats + tstats + card + combo
-                                      + [pl.col(vcol(j)).mean() for j in range(m)]
-                                      + [pl.col(vcol(j)).var().alias(f"var{j}")
-                                         for j in range(m)]),
+        if row_wise:
+            # the rows of `lf` (the same filters), with the design as expressions
+            exprs = [self.var_exprs[nm] for nm in self.var_names]
+            scan = (base.with_columns(wexpr + texpr).drop_nulls(src)
+                        .filter(pl.all_horizontal([e.is_finite() for e in exprs]
+                                                  + others_finite)))
+            stats = ([e.mean().alias(vcol(j)) for j, e in enumerate(exprs)]
+                     + [e.var().alias(f"var{j}") for j, e in enumerate(exprs)])
+        else:
+            scan = lf
+            stats = ([pl.col(vcol(j)).mean() for j in range(m)]
+                     + [pl.col(vcol(j)).var().alias(f"var{j}") for j in range(m)])
+        mom = self._collect(scan.select([pl.len().alias("n")] + wstats + tstats + card + combo
+                                        + stats),
                             "pass 0 scan", engine="streaming")
         approx = {d: mom[f"__card_{d}"].item() for d in self.fe_user} if need_card else {}
         g, why = self._choose_stream(approx)
