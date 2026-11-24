@@ -401,13 +401,17 @@ def _fit(ld, fml, spec, lf, fam, weights, weights_type, offset, default, keys, r
     # row kernel's squared-score sums
     msums = ld._sums(beta_full, np.atleast_2d(a), meat=1 if fweights else 2)
     all_keep = len(keep) == p
+    # each row's fit and score, for the cluster sums and the residual file
+    # (the meat's sums take theirs from the row kernel)
+    by_row = bool(cl_names) or save_resid
     for blk in ld._rows_full():
         X, y, w, off, f = blk["X"], blk["y"], blk["w"], blk["off"], blk["f"]
         n = len(y)
-        xb = X @ beta_full + (0.0 if with_fe else a[0])
-        eff = a[f] if with_fe else np.zeros(n)
-        eta = xb + eff + (0.0 if off is None else off)
-        _, r, _, mu, uw = _terms(fam.name, y, eta)
+        if by_row:
+            xb = X @ beta_full + (0.0 if with_fe else a[0])
+            eff = a[f] if with_fe else np.zeros(n)
+            eta = xb + eff + (0.0 if off is None else off)
+            _, r, _, mu, uw = _terms(fam.name, y, eta)
         wt = np.ones(n) if w is None else w
         msums.add(X, y, w, off, f, blk["s"])
         if cl_names:

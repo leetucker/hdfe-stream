@@ -35,6 +35,8 @@ import numpy as np
 from .kernels_glm import LOGIT, POISSON, PROBIT, _expit, _log_expit, _log_ndtr
 
 _LOG_2PI_HALF = 0.9189385332046727        # log(2 pi) / 2
+# the most entries of a part's group sums (M G (2 + c)) that it keeps locally
+_LOCAL_SUMS = 4096
 
 __all__ = ["LOGIT", "POISSON", "PROBIT", "newton_pass_rows", "newton_row_terms",
            "part_starts", "row_terms"]
@@ -54,10 +56,15 @@ def row_terms(family, yi, eta, observed=False):
     from series that do not underflow, so that rows far in a tail keep their
     score."""
     if family == LOGIT:
-        lp = _log_expit(eta)
-        lq = _log_expit(-eta)
-        p = _expit(eta)
-        q = _expit(-eta)
+        # _expit and _log_expit at eta and -eta, from one exponential and one
+        # logarithm
+        e = math.exp(-abs(eta))
+        d = 1.0 + e
+        l1 = math.log1p(e)
+        if eta >= 0.0:
+            p, q, lp, lq = 1.0 / d, e / d, -l1, -eta - l1
+        else:
+            p, q, lp, lq = e / d, 1.0 / d, eta - l1, -l1
         if yi > 0.0:
             return lp, q, p * q
         return lq, -p, p * q
@@ -121,6 +128,7 @@ def newton_pass_rows(family, X, y, w, off, f, s, B, A, inc, colpos, info, use_nn
     M = B.shape[0]
     c = H_t.shape[2]
     n_parts = len(starts) - 1
+    G_t = ga_t.shape[2]
     has_w = len(w) > 0
     has_off = len(off) > 0
     for t in nb.prange(n_parts):
@@ -129,6 +137,22 @@ def newton_pass_rows(family, X, y, w, off, f, s, B, A, inc, colpos, info, use_nn
         loc_s = np.zeros(M)
         loc_h = np.zeros(M)
         loc_c = np.zeros((M, c))
+        # the part's sums are kept here and copied out at the end: entries of
+        # the shared arrays that neighboring parts write would sit on one
+        # cache line, and the threads would contend for it on every row
+        ll_p = np.zeros((M, ll_t.shape[2]))
+        sk_p = np.zeros((M, ll_t.shape[2]))
+        gb_p = np.zeros((M, k))
+        # the information's upper triangle, part t's own (c x c per model, far
+        # from the other parts'), indexed flat
+        H_p = H_t[t].reshape((M, c * c))
+        # the groups' sums, ungrouped: in place when they are large enough
+        # that the parts' copies do not share cache lines, else local
+        own = not grouped and M * G_t * (2 + c) <= _LOCAL_SUMS
+        Gl = G_t if own else 0
+        ga_p = np.zeros((M, Gl))
+        D_p = np.zeros((M, Gl if info else 0))
+        C_p = np.zeros((M, Gl if info else 0, c))
         cur = -1
         for i in range(starts[t], starts[t + 1]):
             gi = f[i]
@@ -166,10 +190,10 @@ def newton_pass_rows(family, X, y, w, off, f, s, B, A, inc, colpos, info, use_nn
                 for q in range(cnt):
                     eta += B[m, nz[q]] * xv[q]
                 if not np.isfinite(eta):
-                    sk_t[t, m, si] += 1.0
+                    sk_p[m, si] += 1.0
                     continue
                 ll, r, h = row_terms(family, yi, eta, observed)
-                ll_t[t, m, si] += wt * ll
+                ll_p[m, si] += wt * ll
                 if not inc[m, si]:
                     continue
                 if meat == 2:
@@ -180,15 +204,19 @@ def newton_pass_rows(family, X, y, w, off, f, s, B, A, inc, colpos, info, use_nn
                     h *= wt
                 r *= wt
                 for q in range(cnt):
-                    gb_t[t, m, nz[q]] += r * xv[q]
+                    gb_p[m, nz[q]] += r * xv[q]
                 if grouped:
                     loc_s[m] += r
+                elif own:
+                    ga_p[m, gi] += r
                 else:
                     ga_t[t, m, gi] += r
                 if not info:
                     continue
                 if grouped:
                     loc_h[m] += h
+                elif own:
+                    D_p[m, gi] += h
                 else:
                     D_t[t, m, gi] += h
                 for q in range(cnt):
@@ -198,16 +226,15 @@ def newton_pass_rows(family, X, y, w, off, f, s, B, A, inc, colpos, info, use_nn
                     hx = h * xv[q]
                     if grouped:
                         loc_c[m, pa] += hx
+                    elif own:
+                        C_p[m, gi, pa] += hx
                     else:
                         C_t[t, m, gi, pa] += hx
                     for q2 in range(q, cnt):
                         pb = colpos[nz[q2]]
                         if pb < 0:
                             continue
-                        if pa <= pb:
-                            H_t[t, m, pa, pb] += hx * xv[q2]
-                        else:
-                            H_t[t, m, pb, pa] += hx * xv[q2]
+                        H_p[m, min(pa, pb) * c + max(pa, pb)] += hx * xv[q2]
         if grouped and cur >= 0:
             for m in range(M):
                 ga[m, cur] += loc_s[m]
@@ -215,6 +242,18 @@ def newton_pass_rows(family, X, y, w, off, f, s, B, A, inc, colpos, info, use_nn
                     D[m, cur] += loc_h[m]
                     for p in range(c):
                         C[m, cur, p] += loc_c[m, p]
+        for m in range(M):
+            for j in range(ll_p.shape[1]):
+                ll_t[t, m, j] += ll_p[m, j]
+                sk_t[t, m, j] += sk_p[m, j]
+            for j in range(k):
+                gb_t[t, m, j] += gb_p[m, j]
+            for g in range(Gl):
+                ga_t[t, m, g] += ga_p[m, g]
+                if info:
+                    D_t[t, m, g] += D_p[m, g]
+                    for p in range(c):
+                        C_t[t, m, g, p] += C_p[m, g, p]
 
 
 @nb.njit(parallel=True, cache=True, error_model="numpy")
