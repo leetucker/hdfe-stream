@@ -37,6 +37,9 @@ fixed effects.
     check switched off still fit by IRLS. With multiple estimation or the check switched
     off, a model with no fixed effect or one gets Newton's method first, and IRLS takes
     the final step.
+- **IRLS with an `iwls_tol` below rounding** (about 1e-12 relative) stops once a step no
+  longer lowers the deviance. It previously could reject a step whose deviance was
+  higher by rounding alone and raise "IRLS step-halving failed".
 - **`core.newton`** (`glm_design`, `GLMDesign`, `NewtonMoments`): the stored design of a
   logit, probit or Poisson model with no fixed effect or one, and a pass that gives the
   log-likelihood, gradient and information of several models in one read, each on its

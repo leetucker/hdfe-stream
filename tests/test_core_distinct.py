@@ -7,6 +7,7 @@ import pytest
 
 from hdfe_stream.core.distinct import count_distinct, distinct_bytes
 from hdfe_stream.core.profile import scan_source
+from hdfe_stream.core.resources import MemoryBudget
 
 
 @pytest.fixture(scope="module")
@@ -55,7 +56,9 @@ def test_partitions_follow_the_budget(frame, monkeypatch):
         return real(self, *a, **k)
 
     monkeypatch.setattr(pl.LazyFrame, "collect", spy)
-    monkeypatch.setattr(mod, "_BYTES_ONE", 10_000_000)     # pretend each value takes 10 MB
+    # pretend each value takes 1 MB, with 4 GB of headroom whatever this process holds
+    monkeypatch.setattr(mod, "_BYTES_ONE", 1_000_000)
+    monkeypatch.setattr(MemoryBudget, "headroom_gb", lambda self: 4.0)
     got = count_distinct(frame, {"g": "g"}, exact=True, max_memory_gb=4.0, memory_reserve=0.0)
     assert got["g"] == frame["g"].n_unique()
     assert len(calls) > 2                                  # the estimate, then several parts

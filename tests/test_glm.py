@@ -66,8 +66,16 @@ def glm_panel(tmp_path_factory):
 
 
 def pf_glm(family, fml, data, **kwargs):
-    """pyfixest reference, iterated and demeaned to a tight tolerance."""
+    """pyfixest reference, iterated and demeaned to a tight tolerance. The
+    probit is compared with pyfixest 0.70 and later only: 0.60's stops short
+    of the maximum (about 1e-7 from it on these data, where hdfe_stream's
+    Newton fit and its IRLS at a 1e-15 tolerance agree to 1e-10)."""
     import pyfixest as pf
+
+    from hdfe_stream.core.reporting import _has_typed_components
+
+    if family == "probit" and not _has_typed_components():
+        pytest.skip("the probit is compared with pyfixest 0.70 and later")
     kwargs = {"iwls_tol": 1e-12,
               "demeaner": pf.LsmrDemeaner(fixef_atol=1e-12, fixef_btol=1e-12), **kwargs}
     with warnings.catch_warnings():
@@ -100,10 +108,8 @@ def loosened(tol, family):
     """pyfixest 0.70's probit stops iterating earlier than its `iwls_tol`
     says: tightening the tolerance moves its estimates towards ours (1e-7 away
     at 1e-12, 1e-8 at 1e-14, and a tighter one fails in step-halving). So the
-    comparison is looser for probit there; 0.60 and the logit agree to 1e-8."""
-    from hdfe_stream.core.reporting import _has_typed_components
-
-    return max(tol, 5e-5) if family == "probit" and _has_typed_components() else tol
+    comparison is looser for probit; the logit agrees to 1e-8."""
+    return max(tol, 5e-5) if family == "probit" else tol
 
 
 def assert_agrees(res, ref):

@@ -73,6 +73,23 @@ def test_newton_start_gives_the_irls_fit(family, fe, vcov, monkeypatch):
         np.testing.assert_allclose(a["fe_g"].to_numpy(), b["fe_g"].to_numpy(), atol=1e-6)
 
 
+@pytest.mark.parametrize("family", ["logit", "probit", "poisson"])
+def test_irls_below_rounding_converges(family, monkeypatch):
+    # a tolerance no deviance can meet stops once a step no longer lowers the
+    # deviance, at the fit a tight tolerance gives, instead of failing in
+    # step-halving on a rise that is rounding
+    df = _data(family)
+    kw = {"vcov": "hetero", "weights": "w", "iwls_maxiter": 100}
+    if family == "poisson":
+        kw["offset"] = "lexp"
+    monkeypatch.setattr(StreamingGLM, "newton", False)
+    tiny = _fit(family, "y ~ x1 + x2 + C(c)", df, iwls_tol=1e-300, **kw)
+    tight = _fit(family, "y ~ x1 + x2 + C(c)", df, iwls_tol=1e-12, **kw)
+    irls = tiny.diagnostics["irls"]
+    assert irls["converged"] and irls["iterations"] < 20 and irls["step_halvings"] == 0
+    np.testing.assert_allclose(tiny.beta, tight.beta, rtol=1e-7, atol=1e-8)
+
+
 def test_collinear_covariate_dropped_as_by_irls(monkeypatch):
     df = _data("logit").with_columns(x3=2 * pl.col("x1") - pl.col("x2"))
     fast = feglm_stream("y ~ x1 + x2 + x3 | g", df, "logit", verbose=False)

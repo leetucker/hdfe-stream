@@ -93,6 +93,10 @@ LO, HI = f"{PREFIX}lo", f"{PREFIX}hi"      # per-level outcome range, in the sep
 # deviance does not depend on the number of threads
 _ROW_BLOCKS = 256
 _MAX_HALVINGS = 30
+# the relative change in deviance that rounding alone can make at the maximum
+# (the deviance is a sum over every row): a step changing it by less is
+# accepted, and the fit has converged, whatever iwls_tol asks for
+_DEV_ROUNDING = 1e-12
 # the row passes hold BLAS to one thread up to this many columns (see
 # core.utils.single_blas); wider cross-products gain from BLAS's threads
 _SINGLE_BLAS_MAX_COLS = 128
@@ -129,7 +133,8 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
         coefficient of one (e.g. log exposure).
     iwls_tol : float, default 1e-8
         IRLS convergence tolerance on the relative change in deviance
-        (pyfixest's default).
+        (pyfixest's default). Below what rounding resolves (about 1e-12), the
+        iteration stops once a step no longer lowers the deviance.
     iwls_maxiter : int, default 25
         The most IRLS steps (pyfixest's default).
     separation_check : bool, default True
@@ -799,6 +804,9 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
                         raise RuntimeError(f"{model['fml']}: IRLS step-halving failed "
                                            f"(deviance {cand.dev:.10g} vs {dev:.10g})")
             crit = abs(cand.dev - dev) / (0.1 + abs(dev))
+            # a later step that does not lower the deviance was accepted as
+            # rounding: nothing is left to gain, even when iwls_tol is below that
+            flat = not cur.init and cand.dev >= dev
             # the step just taken is the final one if this converges: its
             # weights (those of `cur`), Gamma and cross-products give the vcov
             last = SimpleNamespace(cur=cur, gamma=gamma, A=A, info=info, raw=agg.raw)
@@ -807,7 +815,7 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
             self._log(f"  IRLS {it}: deviance {dev:.12g}, relative change {crit:.2e}"
                       + (f", solver iterations {info['iterations']}"
                          if info.get("solver") != "none" else ""))
-            if crit < self.iwls_tol:
+            if crit < self.iwls_tol or flat:
                 converged = True
                 break
         if not converged:
@@ -824,9 +832,11 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
 
     def _accept(self, dev_new, dev):
         """A step that lowers the deviance, or changes it by less than the
-        tolerance (rounding at convergence can raise it by a hair)."""
+        tolerance or than rounding can (at convergence it can raise it by a
+        hair)."""
+        tol = max(self.iwls_tol, _DEV_ROUNDING)
         return np.isfinite(dev_new) and (
-            dev_new < dev or abs(dev_new - dev) / (0.1 + abs(dev)) < self.iwls_tol)
+            dev_new < dev or abs(dev_new - dev) / (0.1 + abs(dev)) < tol)
 
     # ------------------------------------------------------------ row pass
     def _row_pass_plain(self, out, state, y, X, f, off, c, first):
