@@ -15,7 +15,8 @@ fixed effects.
   `fixef`, `resid`, `predict` and `sample`.
   - On a logit of 1 million people on 153 indicators, the fit takes about 10 s without a
     fixed effect (about 30 s before) and about 12 s with 2,462 PUMA fixed effects (about
-    65 s before).
+    65 s before). In the benchmark of 20 million rows on 10 dense covariates, the logit
+    took 6.0 s (8.9 s before) and the probit 7.0 s (9.5 s).
   - Each pass forms the information one of two ways, chosen by the design's shape: a
     fused row kernel, which works from each row's nonzeros for a design of indicators,
     up to about 96 columns for dense rows and about 1,000 for indicators; and BLAS

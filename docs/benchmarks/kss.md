@@ -54,7 +54,7 @@ At 5 million workers (42.5 million rows):
 | xhdfe | 518 s | 20.4 GB | — |
 | xhdfe, standard errors | did not finish within 3 hours (tried once; no longer run at this size) | | |
 | hdfe_stream | 182 s | 4.5 GB | 2.6 GB |
-| hdfe_stream, standard errors | 1,126 s | 11.8 GB | 3.2 GB |
+| hdfe_stream, standard errors | 1,145 s | 11.8 GB | 3.2 GB |
 
 **At scale, memory is the difference.** At 5 million workers xhdfe's point
 estimate peaks at 20.4 GB, and hdfe_stream's at 4.5 GB, while writing 2.6 GB to
