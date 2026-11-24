@@ -256,11 +256,13 @@ class BlockStore:
                 for k, a in arrays.items():
                     path = blk.files[k]
                     self.bytes -= path.stat().st_size
+                    # removed and written anew rather than overwritten: ext4
+                    # (auto_da_alloc) flushes a file that was truncated and
+                    # rewritten when it is closed, which stalled pass 0
+                    path.unlink(missing_ok=True)
                     if blk.n:
                         np.save(path, a)
                         self.bytes += path.stat().st_size
-                    else:
-                        path.unlink(missing_ok=True)
             if blk.n:
                 kept.append(blk)
         self.blocks = kept
