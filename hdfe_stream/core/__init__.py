@@ -14,6 +14,7 @@ Stable names
     core.utils         as_lazy, single_blas
     core.profile       Profile, Component, Request, ScanStats, scan_source,
                        combine_profiles, source_row_group_rows
+    core.distinct      count_distinct, distinct_bytes
     core.resources     detect_cpus, detect_memory_gb, limit_threads, limit_memory,
                        thread_scope, peak_rss_gb, reset_peak_rss, current_rss_gb,
                        describe, MemoryBudget
@@ -66,6 +67,8 @@ Infrastructure
     report.py          logging / printing
     utils.py           small shared helpers; Parquet iteration in whole groups
     profile.py         `Profile`: estimated memory/disk, the scan, the request
+    distinct.py        distinct counts, approximate (HyperLogLog) or exact
+                       (hash-partitioned streaming passes)
     profile_streaming.py  the memory model of the shared passes (`_ProfileMixin`)
     resources.py       CPUs and memory a job may use, thread limits, peak memory
                        (re-exports the `stream-limits` package)

@@ -43,6 +43,13 @@ fixed effects.
   own splits (cross-validation folds, say), with the fixed effect profiled out exactly.
   It is a stable API for estimators that run their own iteration, such as a penalized
   GLM's path.
+- **`core.distinct.count_distinct`**: distinct counts of columns or combinations of
+  columns, among the rows a filter keeps. The default is HyperLogLog's approximate
+  count in one streaming pass, as before. With `exact=True` the count is exact: one
+  streaming pass when Polars' hash tables (about 50 bytes a value for one column, 120
+  for two) fit half the memory headroom, and otherwise k passes, each counting the
+  values whose hash falls in one of k parts. `scan_source(exact_distinct=True)` uses
+  it. The fits still choose how to stream a fixed effect from the approximate count.
 - **Pass 0's row write without fixed effects** reads the source's own columns a batch at
   a time, evaluates the design on each batch and writes it with a Parquet writer. It
   previously sank the evaluated design through Polars' streaming engine, which buffers up
