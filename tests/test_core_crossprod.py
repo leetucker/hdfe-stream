@@ -226,3 +226,35 @@ def test_saved_rows_without_fixed_effects(tmp_path):
     rows = cp.rows().collect().sort(cp.row_id)
     np.testing.assert_allclose(rows["x1"].to_numpy(), df["x1"].to_numpy())
     assert (rows["firm"].to_numpy() == df["firm"].to_numpy()).all()
+
+
+@pytest.mark.parametrize("vcov", ["hetero", {"CRV1": "year"}])
+def test_rows_without_fixed_effects_written_by_batch(vcov, tmp_path, monkeypatch):
+    """Without fixed effects, pass 0 writes the rows a batch at a time, the
+    design evaluated on each (and, clustered, the cluster codes joined on
+    each): the fit is the one from sinking the evaluated design."""
+    from hdfe_stream.core import passes
+
+    df = _panel(missing=True)
+    path = tmp_path / "panel.parquet"
+    df.write_parquet(path, row_group_size=700)
+    fml = "y ~ C(firm) + x1:x2"
+    calls = []
+    batched = passes._PassesMixin._write_rows_no_fe
+
+    def spy(self, coded, out, maps):
+        calls.append(getattr(self, "_raw_rows", None) is not None)
+        return batched(self, coded, out, maps)
+
+    monkeypatch.setattr(passes._PassesMixin, "_write_rows_no_fe", spy)
+    fit = feols_stream(fml, str(path), weights="w", vcov=vcov, batch_rows=1000,
+                       workdir=tmp_path, verbose=False)
+    assert calls == [True]
+    monkeypatch.setattr(passes._PassesMixin, "_write_rows_no_fe",
+                        lambda self, coded, out, maps: self._sink(
+                            coded, out, "pass 0 write rows", row_group_size=self.rgs))
+    ref = feols_stream(fml, str(path), weights="w", vcov=vcov, batch_rows=1000,
+                       workdir=tmp_path, verbose=False)
+    assert fit.n_obs == ref.n_obs == df.filter(pl.col("x2").is_not_null()).height
+    np.testing.assert_allclose(fit.beta, ref.beta, rtol=1e-10, atol=1e-12)
+    np.testing.assert_allclose(fit.se, ref.se, rtol=1e-10)

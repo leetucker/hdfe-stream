@@ -106,9 +106,10 @@ python benchmarks/general_gpu_benchmark.py      # on a machine with an NVIDIA GP
 The numbers are in
 [benchmarks/results/general_gpu.csv](https://github.com/leetucker/hdfe-stream/blob/main/benchmarks/results/general_gpu.csv).
 The configurations are hdfe_stream on the CPU; with `polars_engine="gpu"`; and,
-for logit, with `device="cuda"`, which runs every IRLS step on the GPU after
-uploading the rows once (see [using the GPU options](#using-the-gpu-options)),
-and with both. The others are the fastest CPU library for each model
+for logit, with `device="cuda"`, which in 0.10.0, measured here, ran every IRLS
+step on the GPU after uploading the rows once (a logit now runs Newton's steps
+there instead; see [using the GPU options](#using-the-gpu-options)), and with
+both. The others are the fastest CPU library for each model
 (polars-ols, polars-ds); [cuML](https://github.com/rapidsai/cuml)'s
 `LinearRegression` and `LogisticRegression`, which have no 2SLS; and the normal
 equations, 2SLS and Newton's method written in CuPy, as about the least work
@@ -176,7 +177,7 @@ Wall time:
 - **`device="cuda"` helps logit at large sizes.** It took 8.1 s at 20 million
   rows against 11.0 s on the CPU (26% less), 3.5 s against 3.9 s at 5 million,
   and was slower at 1 million rows and below. With the Polars engine as well it
-  was slower than with `device="cuda"` alone. Only the IRLS steps move: the
+  was slower than with `device="cuda"` alone. Only the IRLS steps moved: the
   other passes (scanning and writing the rows, and the final pass for the
   standard errors) still run on the CPU, which is probably why the fit stays
   well behind cuML and CuPy; we did not profile it.
@@ -228,12 +229,15 @@ fit = feols_stream(fml, "panel.parquet", device="cuda", polars_engine="gpu")
   the GPU once, and runs the conjugate-gradient iterations there. It needs
   `solver="auto"` or `"explicit"`; if S does not fit in the memory left, the solve falls back to the
   CPU, as it would without a GPU.
-- For a logit, probit or Poisson without fixed effects there is no solve to
-  move, and `device="cuda"` instead uploads the rows once and runs every IRLS
-  step there, as long as they fit in the device's free memory (otherwise it
-  warns and uploads them again at each step). It helped only above about 5
-  million rows (see [plain regressions](#plain-regressions-ols-iv-and-logit)).
-  OLS and 2SLS have no GPU path of their own.
+- For a logit, probit or Poisson with no fixed effect or one, `device="cuda"`
+  uploads the rows once and runs every Newton step there. If the rows do not
+  fit in about 60% of the device's free memory, the fit raises `MemoryError`.
+  With two or more fixed effects the IRLS steps' solve moves, as above. In
+  0.10.0, which ran the IRLS steps of a fit without fixed effects on the GPU,
+  it helped only above about 5 million rows (see
+  [plain regressions](#plain-regressions-ols-iv-and-logit)); the Newton steps
+  have not been measured on a GPU yet. OLS and 2SLS have no GPU path of their
+  own.
 - `polars_engine="gpu"` sends the fit's Polars queries to cudf-polars, and runs
   any query the engine cannot on the CPU instead.
 - cudf-polars supports a narrow range of Polars versions (version 26.6 needs

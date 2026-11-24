@@ -36,9 +36,9 @@ costs about 0.8 GB before it has done anything.
 
 On plain regressions, without the fixed-effects structure it was built for, it
 is not the fastest, but not far behind and far lighter: at 20 million rows OLS
-took 5.5 s and 2.6 GB, against 5.4 s and 7.5 GB for scikit-learn, 8.5 s and
+took 6.7 s and 2.5 GB, against 5.4 s and 7.5 GB for scikit-learn, 8.5 s and
 5.7 GB for polars-ols, 5.5 s and 13.4 GB for pyfixest, and 2.9 s and 7.8 GB for
-fixest. A logit took 8.9 s and 2.7 GB, against 12.8 s and 7.7 GB for
+fixest. A logit took 6.0 s and 2.7 GB, against 12.8 s and 7.7 GB for
 statsmodels, 14.3 s and 16.8 GB for pyfixest, and 4.2 s and 5.5 GB for glum.
 
 ## How it is measured

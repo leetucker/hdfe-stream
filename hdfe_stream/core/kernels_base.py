@@ -48,6 +48,19 @@ def _nb_unpack(Xd, dcols, Xb, bcols, out):
             out[i, bcols[j]] = Xb[i, j]
 
 
+@nb.njit(parallel=True, cache=True)
+def _nb_pack(X, dcols, bcols, Xd, Xb):
+    """Xd = X[:, dcols] and Xb = X[:, bcols] (as bytes), rows in parallel:
+    the inverse of `_nb_unpack`, in one pass over X."""
+    n = X.shape[0]
+    kd, kb = len(dcols), len(bcols)
+    for i in nb.prange(n):
+        for j in range(kd):
+            Xd[i, j] = X[i, dcols[j]]
+        for j in range(kb):
+            Xb[i, j] = np.uint8(X[i, bcols[j]])
+
+
 @nb.njit(cache=True)
 def _nb_rhs(starts, codes, n, sums, offs, b):
     """b += D_o' M_0 V for the given columns of V (cell sums)."""

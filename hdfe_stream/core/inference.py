@@ -122,6 +122,9 @@ class _InferenceMixin:
             V = _stack(ch, [vcol(j) for j in range(m)])
             w = (np.ascontiguousarray(ch[WCOL], dtype=np.float64) if wcol
                  else np.ones(len(V)))
+            # read-only whatever the chunk, so the kernels see one signature
+            # (see _IRLSMixin._chunk_data)
+            w.flags.writeable = False
             # residualize in place, then one BLAS product for the k x k sums
             if tcols:
                 _nb_residualize_rows_sl(starts, codes, self.offs, w, self._slope_matrix(ch),
@@ -422,6 +425,9 @@ class _InferenceMixin:
             y = np.ascontiguousarray(ch[vcol(yj)], dtype=np.float64)
             w = (np.ascontiguousarray(ch[WCOL], dtype=np.float64) if weighted
                  else np.ones(len(y)))
+            # read-only whatever the chunk (see _IRLSMixin._chunk_data)
+            y.flags.writeable = False
+            w.flags.writeable = False
             return SimpleNamespace(y=y, w=w, fw=w if fweights else None,
                                    w_out=w if weighted else None, extra=None)
         rows.cols, rows.weighted = [], weighted

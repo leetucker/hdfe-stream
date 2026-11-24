@@ -41,6 +41,21 @@ least-squares step, as in pyfixest: bread (X~'WX~)^-1, scores W e x~ with e
 the working residual, and pyfixest's small-sample factors, with the iid vcov
 the bread alone (no dispersion is estimated).
 
+With no fixed effect or one, Newton's method comes first (`_newton_start`).
+Each Newton step is one read of the rows through the fused pass of
+`core.newton`, which forms the log-likelihood, the gradient and the
+information in one sweep. The one fixed effect is profiled out exactly, and
+the products run over each row's nonzeros when the design is mostly zeros,
+as a design of indicators is. The first read copies the rows into a block
+store (0/1 columns as one byte each), which the later reads use. Newton's
+method stops on the decrement: below 1e-8 (or `iwls_tol`, if smaller), or
+below a thousandth of `iwls_tol` relative to the deviance. IRLS then starts
+from its estimates, and its first step, which converges, supplies
+everything else unchanged: the collinearity check, the inference and the
+result files. A step that raises the log-likelihood is halved, as in IRLS.
+With ``device="cuda"`` the Newton steps run on the device (`core.gpu.newton_rows`),
+the rows uploaded once if they fit. Not with `bias_correction`.
+
 Before anything is written, fixed-effect levels whose outcome is always zero
 (Poisson) or never varies (logit, probit) are dropped: their effect would be
 infinite. For Poisson one pass over the dimensions finds them all, since
@@ -56,8 +71,10 @@ import time
 from typing import Any, Sequence
 from types import SimpleNamespace
 
+import numba
 import numpy as np
 import polars as pl
+from scipy import special
 
 from .core._columns import PREFIX, vcol
 from .core.typing import Variables
@@ -66,7 +83,9 @@ from .core.irls import _OFFSET, _IRLSMixin, _State
 from .core.kernels_glm import FAMILY_CODES, _nb_glm_rows, _nb_glm_rows_plain
 from .core.passes import _drop_levels
 from .core.report import warn
+from .core.store import BlockStore
 from .core.inference import _criteria
+from .core.utils import SINGLE_BLAS_MAX_COLS as _SINGLE_BLAS_MAX_COLS
 from .core.utils import _norm_vars, single_blas
 from .estimator import StreamingHDFE
 
@@ -75,9 +94,10 @@ LO, HI = f"{PREFIX}lo", f"{PREFIX}hi"      # per-level outcome range, in the sep
 # deviance does not depend on the number of threads
 _ROW_BLOCKS = 256
 _MAX_HALVINGS = 30
-# the row passes hold BLAS to one thread up to this many columns (see
-# core.utils.single_blas); wider cross-products gain from BLAS's threads
-_SINGLE_BLAS_MAX_COLS = 128
+# the relative change in deviance that rounding alone can make at the maximum
+# (the deviance is a sum over every row): a step changing it by less is
+# accepted, and the fit has converged, whatever iwls_tol asks for
+_DEV_ROUNDING = 1e-12
 # without batch_rows, chunks of about this many MB of the design (at most
 # 2,000,000 rows, at least 100,000): with BLAS on one thread, small chunks
 # cost no time, and memory follows the chunk
@@ -111,7 +131,8 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
         coefficient of one (e.g. log exposure).
     iwls_tol : float, default 1e-8
         IRLS convergence tolerance on the relative change in deviance
-        (pyfixest's default).
+        (pyfixest's default). Below what rounding resolves (about 1e-12), the
+        iteration stops once a step no longer lowers the deviance.
     iwls_maxiter : int, default 25
         The most IRLS steps (pyfixest's default).
     separation_check : bool, default True
@@ -382,8 +403,11 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
                 for mi, model in enumerate(self.models)]
 
     def _fit_model(self, tag, model, ctx):
+        start = self._newton_start(model)
         self._log(f"IRLS ({self.family.name}): {model['fml']}")
-        fit = self._irls(model)
+        fit = self._irls(model, start=start)
+        if start is not None:
+            fit.newton = self._newton_info
         if self.bias is not None:
             self._bias_acc = _BiasSums(self)
         try:
@@ -394,6 +418,266 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
         if acc is not None:
             res = self._bias_correct(tag, model, fit, res, ctx, acc)
         return self._fit_statistics(res, model, fit)
+
+    # ------------------------------------------------------------ Newton
+    # Whether a model with no fixed effect or one is fitted by Newton's method
+    # on the fused passes of `core.newton` before IRLS takes its final step.
+    newton = True
+
+    def _newton_eligible(self):
+        return (self.newton and not self.o_fe and not self.slopes
+                and getattr(self, "_fixed_beta", None) is None and self.bias is None
+                and (not self.fe or self.G_id == 0))
+
+    def _newton_start(self, model):
+        """Newton's method for `model` on the stored rows, the one fixed
+        effect (if any) profiled out exactly: each step one read of the rows
+        with the fused pass of `core.newton` (the log-likelihood, gradient and
+        arrow-shaped information, from each row's nonzeros when the design is
+        sparse), and a halving of the step when the log-likelihood falls.
+        Returns the coefficients as IRLS's state, from which IRLS takes the
+        final step (and with it the collinearity check, the cell sums of the
+        variance and the convergence check on the deviance), or None when the
+        model is not one this applies to."""
+        if not self._newton_eligible():
+            return None
+        from .core.kernels_newton import newton_pass_rows, part_starts
+        from .core.newton import NNZ_SHARE, NewtonMoments, newton_direction
+
+        t0 = time.time()
+        fam = FAMILY_CODES[self.family.name]
+        yj = self.vidx[self.yname]
+        xj = [self.vidx[x] for x in model["x"]]
+        k = len(xj)
+        G = self.G_s if self.fe else 1
+        cols = self._columns(yj, xj)
+        nt = numba.get_num_threads()
+        state = {"nnz": None, "store": None, "binary": np.ones(k, bool), "nz": 0, "size": 0}
+
+        def from_rows():
+            """The rows from the row files (the first read)."""
+            g0 = 0
+            for ch, starts, codes in self._row_chunks(cols):
+                y, X, w, off = self._chunk_data(ch, yj, xj)
+                n = len(y)
+                if self.fe:
+                    ng = len(starts) - 1
+                    f = np.repeat(np.arange(g0, g0 + ng, dtype=np.int64), np.diff(starts))
+                    g0 += ng
+                else:
+                    f = np.zeros(n, np.int64)
+                yield np.ascontiguousarray(X), y, w, off, f
+
+        def chunks():
+            """The rows: from the row files the first time, which also notes
+            the design's 0/1 columns and its share of nonzeros; then from a
+            copy in a block store, which keeps those columns as one byte each
+            and the rest as plain arrays (much less to read and nothing to
+            assemble per pass than the row files' Parquet columns)."""
+            if state["store"] is not None:
+                for b in state["store"].iterate(["X", "y", "w", "off", "f"]):
+                    yield b["X"], b["y"], b.get("w"), b.get("off"), b["f"]
+                return
+            for X, y, w, off, f in from_rows():
+                state["binary"] &= np.all((X == 0) | (X == 1), axis=0)
+                state["nz"] += int(np.count_nonzero(X))
+                state["size"] += X.size
+                yield X, y, w, off, f
+            state["nnz"] = bool(state["size"]) and state["nz"] < NNZ_SHARE * state["size"]
+            store = BlockStore(self.workdir / "newton_blocks", in_memory=False,
+                               binary=state["binary"] if state["binary"].any() else None)
+            for X, y, w, off, f in from_rows():
+                store.add({"X": X, "y": y, "w": w, "off": off, "f": f})
+            state["store"] = store
+
+        empty = np.zeros(0)
+        colpos = np.arange(k, dtype=np.int64)
+        inc = np.ones((1, 1), np.bool_)
+        passes = [0]
+
+        on_device = self.device == "cuda"
+        if on_device:
+            from .core.gpu import cuda_backend, group_indicator, newton_rows
+            be = cuda_backend()
+            dev = {"chunks": None}
+
+            def dev_chunks():
+                """The rows on the device: uploaded from the block copy on the
+                first pass and kept there if they fit in the device's free
+                memory with room to spare, else uploaded again each pass."""
+                if dev["chunks"] is not None:
+                    yield from dev["chunks"]
+                    return
+                budget = 0.6 * getattr(be, "free_bytes", lambda: float("inf"))()
+                kept, used, keep = [], 0, True
+                for X, y, w, off, f in chunks():
+                    d = (be.xp.asarray(X), be.xp.asarray(y),
+                         None if w is None else be.xp.asarray(w),
+                         None if off is None else be.xp.asarray(off),
+                         f if self.fe else None,
+                         group_indicator(be, f, G) if self.fe else None)
+                    used += sum(a.nbytes for a in d[:4] if a is not None)
+                    if keep and used > budget:
+                        keep, kept = False, []
+                        warn("device='cuda': the rows do not fit in the device's free "
+                             "memory, so every Newton step uploads them again", self.logger)
+                    if keep:
+                        kept.append(d)
+                    yield d
+                if keep:
+                    dev["chunks"] = kept
+
+        def dpass(b, a, info):
+            ll, gb, ga = 0.0, np.zeros(k), np.zeros(G)
+            H = np.zeros((k, k)) if info else None
+            D = np.zeros(G) if info else None
+            C = np.zeros((G, k)) if info else None
+            for X, y, w, off, f, F in dev_chunks():
+                out = newton_rows(be, self.family.name, X, y, w, off, f, F, b, a, info, G)
+                ll += out[0]
+                gb += out[1]
+                ga += out[2]
+                if info:
+                    H += out[3]
+                    D += out[4]
+                    C += out[5]
+            if not info:
+                return ll, None
+            return ll, NewtonMoments(
+                loglik=np.array([[ll]]), gradient=gb[None], effects_gradient=ga[None],
+                information=((H + H.T) / 2)[None], effects_information=D[None],
+                cross=C[None], skipped=np.zeros((1, 1), np.int64), columns=colpos)
+
+        def npass(b, a, info):
+            if on_device:
+                passes[0] += 1
+                return dpass(b, a, info)
+            passes[0] += 1
+            B = np.ascontiguousarray(b[None, :], dtype=np.float64)
+            A = np.ascontiguousarray(a[None, :], dtype=np.float64)
+            c = k if info else 0
+            ll = np.zeros((1, 1))
+            sk = np.zeros((1, 1))
+            gb = np.zeros((1, k))
+            H = np.zeros((1, c, c))
+            ga = np.zeros((1, G))
+            D = np.zeros((1, G if info else 0))
+            C = np.zeros((1, G if info else 0, c))
+            grouped = bool(self.fe)
+            for X, y, w, off, f in chunks():
+                n = len(y)
+                P = max(1, min(nt, n // 256 or 1))
+                starts = (part_starts(f, P) if grouped
+                          else np.linspace(0, n, P + 1).astype(np.int64))
+                P = len(starts) - 1
+                gshape = (0, 1, 0) if grouped else (P, 1, G)
+                ll_t, sk_t = np.zeros((P, 1, 1)), np.zeros((P, 1, 1))
+                gb_t, H_t = np.zeros((P, 1, k)), np.zeros((P, 1, c, c))
+                ga_t = np.zeros(gshape)
+                D_t = np.zeros(gshape if info else (0, 1, 0))
+                C_t = np.zeros((gshape[0], 1, gshape[2], c) if info else (0, 1, 0, c))
+                with numba.parallel_chunksize(1):
+                    newton_pass_rows(fam, X, y, empty if w is None else w,
+                                     empty if off is None else off, f, np.zeros(n, np.int64),
+                                     B, A, inc, colpos, info, state["nnz"], grouped, starts,
+                                     ll_t, sk_t, gb_t, H_t, ga_t, D_t, C_t, ga, D, C)
+                ll += ll_t.sum(axis=0)
+                sk += sk_t.sum(axis=0)
+                gb += gb_t.sum(axis=0)
+                H += H_t.sum(axis=0)
+                if not grouped:
+                    ga += ga_t.sum(axis=0)
+                    if info:
+                        D += D_t.sum(axis=0)
+                        C += C_t.sum(axis=0)
+            if not info:
+                return float(ll.sum()), None
+            Hs = np.triu(H) + np.transpose(np.triu(H, 1), (0, 2, 1))
+            return float(ll.sum()), NewtonMoments(
+                loglik=ll, gradient=gb, effects_gradient=ga, information=Hs,
+                effects_information=D, cross=C, skipped=sk.astype(np.int64),
+                columns=colpos)
+
+        # the start: each group's (or, without a fixed effect, the intercept's)
+        # value at the outcome's mean, the slopes at zero
+        sy, sw = np.zeros(G), np.zeros(G)
+        for X, y, w, off, f in chunks():
+            wt = np.ones(len(y)) if w is None else w
+            sy += np.bincount(f, wt * y, G)
+            sw += np.bincount(f, wt, G)
+        mean = np.clip(sy / np.where(sw > 0, sw, 1.0), 1e-10, None)
+        if self.family.name == "poisson":
+            a0 = np.log(mean)
+        else:
+            mean = np.clip(mean, 1e-10, 1 - 1e-10)
+            a0 = (np.log(mean / (1 - mean)) if self.family.name == "logit"
+                  else special.ndtri(mean))
+        b = np.zeros(k)
+        if self.fe:
+            a = a0
+        else:
+            a = np.zeros(1)
+            if "Intercept" in model["x"] and self.offset_name is None:
+                b[model["x"].index("Intercept")] = a0[0]
+        ll, mom = npass(b, a, True)
+        # the collinearity check IRLS makes on its first step, on the
+        # information at the start: the variables it drops are held at zero
+        Cb = mom.profiled(0)[0] if self.fe else mom.information[0]
+        hs = float(mom.effects_information[0].sum()) if self.fe else None
+        if self.fe:
+            hx = mom.cross[0].sum(axis=0)
+            raw = np.diag(mom.information[0]) - hx * hx / hs if hs > 0 else None
+        else:
+            raw = None
+        free = ~self._collinear(Cb, raw=raw) if k else np.zeros(0, bool)
+        if k and not free.any():
+            state["store"].delete()
+            return None                 # IRLS says what is wrong
+        sel = np.flatnonzero(free)
+        # Stop when the decrement (about twice the log-likelihood the next step
+        # would add, and so the deviance it would remove) is below 1e-8, or
+        # iwls_tol if smaller, or relative to the deviance below a thousandth of
+        # iwls_tol (IRLS's own test on the relative change in deviance). IRLS's
+        # final step follows, and then changes the deviance by far less than
+        # iwls_tol, so it is one step.
+        # (With a quasi-separated covariate, whose coefficient grows without
+        # bound, the decrement falls only linearly, and an absolute tolerance
+        # alone would spend every iteration.)
+        tol_abs = min(1e-8, self.iwls_tol)
+        tol_rel = 1e-3 * self.iwls_tol
+        it, halvings, decrement, converged = 0, 0, np.inf, False
+        for it in range(1, self.iwls_maxiter + 1):
+            if self.fe:
+                Cb, g = mom.profiled(0)
+            else:
+                Cb, g = mom.information[0], mom.gradient[0]
+            db = np.zeros(k)
+            db[sel], decrement = newton_direction(Cb[np.ix_(sel, sel)], g[sel])
+            if decrement < max(tol_abs, tol_rel * (0.1 + 2.0 * abs(ll))):
+                converged = True
+                break
+            da = mom.effects_step(db, 0) if self.fe else np.zeros(1)
+            t = 1.0
+            for _ in range(_MAX_HALVINGS):
+                ll_new, mom_new = npass(b + t * db, a + t * da, True)
+                if np.isfinite(ll_new) and ll_new >= ll - 1e-12 * (1.0 + abs(ll)):
+                    break
+                t /= 2
+                halvings += 1
+            else:
+                break
+            b, a, ll, mom = b + t * db, a + t * da, ll_new, mom_new
+            self._log(f"  Newton {it}: log-likelihood {ll:.12g}, decrement {decrement:.2e}"
+                      + (f", step {t:g}" if t < 1 else ""))
+        state["store"].delete()
+        self._newton_info = {"iterations": it, "converged": converged, "passes": passes[0] + 1,
+                             "step_halvings": halvings, "decrement": float(decrement),
+                             "nonzeros_only": bool(state["nnz"]) and not on_device,
+                             "device": be.name if on_device else None,
+                             "seconds": round(time.time() - t0, 2)}
+        if self.fe:
+            return _State(beta=b, fe=np.zeros(0), a_id=np.zeros(self.G_id), a_s=a)
+        return _State(beta=b, fe=np.zeros(0), a_id=np.zeros(0), a_s=np.zeros(0))
 
     def _inference(self, tag, model, fit, ctx, beta=None):
         """Pass 2 on the final weighted least-squares step of `fit`: the
@@ -439,6 +723,8 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
                                    "step_halvings": fit.halvings,
                                    "deviance": [float(d) for d in fit.path],
                                    "seconds": fit.seconds}
+        if getattr(fit, "newton", None) is not None:
+            res.diagnostics["newton"] = dict(fit.newton)
         res.diagnostics["separation"] = dict(self.separation)
         if self.offset_name is not None:
             res.diagnostics["offset"] = self.offset_name
@@ -476,6 +762,12 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
                 if len(keep) and not keep.any():
                     raise ValueError(f"{model['fml']}: all covariates are collinear with the "
                                      "fixed effects")
+                if not keep.all() and not cur.init:
+                    if np.any(cur.beta[~keep] != 0):
+                        # the start (Newton's) kept a variable this drops: start
+                        # over from the family's starting values
+                        return self._irls(model)
+                    cur = _State(cur.beta[keep], cur.fe, cur.a_id, cur.a_s)
                 if not keep.all():
                     dropped = [nm for nm, kp in zip(names, keep) if not kp]
                     warn(f"{model['fml']}: {len(dropped)} variables dropped due to "
@@ -510,6 +802,9 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
                         raise RuntimeError(f"{model['fml']}: IRLS step-halving failed "
                                            f"(deviance {cand.dev:.10g} vs {dev:.10g})")
             crit = abs(cand.dev - dev) / (0.1 + abs(dev))
+            # a later step that does not lower the deviance was accepted as
+            # rounding: nothing is left to gain, even when iwls_tol is below that
+            flat = not cur.init and cand.dev >= dev
             # the step just taken is the final one if this converges: its
             # weights (those of `cur`), Gamma and cross-products give the vcov
             last = SimpleNamespace(cur=cur, gamma=gamma, A=A, info=info, raw=agg.raw)
@@ -518,7 +813,7 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
             self._log(f"  IRLS {it}: deviance {dev:.12g}, relative change {crit:.2e}"
                       + (f", solver iterations {info['iterations']}"
                          if info.get("solver") != "none" else ""))
-            if crit < self.iwls_tol:
+            if crit < self.iwls_tol or flat:
                 converged = True
                 break
         if not converged:
@@ -535,9 +830,11 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
 
     def _accept(self, dev_new, dev):
         """A step that lowers the deviance, or changes it by less than the
-        tolerance (rounding at convergence can raise it by a hair)."""
+        tolerance or than rounding can (at convergence it can raise it by a
+        hair)."""
+        tol = max(self.iwls_tol, _DEV_ROUNDING)
         return np.isfinite(dev_new) and (
-            dev_new < dev or abs(dev_new - dev) / (0.1 + abs(dev)) < self.iwls_tol)
+            dev_new < dev or abs(dev_new - dev) / (0.1 + abs(dev)) < tol)
 
     # ------------------------------------------------------------ row pass
     def _row_pass_plain(self, out, state, y, X, f, off, c, first):

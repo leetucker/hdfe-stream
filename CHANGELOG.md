@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.13.0
+
+Faster logit, probit and Poisson fits with no fixed effect or one, a public Newton pass
+for packages built on `hdfe_stream.core`, and lower peak memory for wide designs without
+fixed effects.
+
+- **`feglm_stream` and `fepois_stream` with no fixed effect or one** fit by Newton's
+  method on compact stored rows instead of IRLS on partitioned Parquet files. Each step is
+  one read of the rows. The fixed effect is profiled out exactly, and for a design of
+  indicators the products run over each row's nonzeros only. The result is the same
+  `HDFEResult` as before: the same sample (singletons, then separated levels), coefficient
+  names, collinearity rule, vcov flavors and small-sample factors, fit statistics, and
+  `fixef`, `resid`, `predict` and `sample`.
+  - On a logit of 1 million people on 153 indicators, the fit takes about 10 s without a
+    fixed effect (about 30 s before) and about 12 s with 2,462 PUMA fixed effects (about
+    65 s before). In the benchmark of 20 million rows on 10 dense covariates, the logit
+    took 6.0 s (8.9 s before) and the probit 7.0 s (9.5 s).
+  - Each pass forms the information one of two ways, chosen by the design's shape: a
+    fused row kernel, which works from each row's nonzeros for a design of indicators,
+    up to about 96 columns for dense rows and about 1,000 for indicators; and BLAS
+    matrix products beyond, which are 1.3 to 2 times faster there. The
+    heteroskedasticity-robust variance's sums come from the same kernel, so without
+    clustering the final read makes no copy of the design.
+  - The fit follows `max_memory_gb` as the other fits do: each thread's copy of a pass's
+    sums takes its share of at most half the headroom (fewer threads on a pass when
+    memory is tight), a pass whose sums do not fit raises `MemoryError` before it reads
+    the rows, the information kept for logit-stream's draws is left off the result when
+    it would take more than half the headroom, and `diagnostics["peak_rss_gb"]` records
+    the peak.
+  - The estimates move slightly, toward the maximum: Newton's method stops on the
+    decrement, IRLS on the change in deviance, which at its default tolerance can leave
+    the coefficients about 1e-6 (relative) from the maximum.
+  - Without a fixed effect, pass 0 reads the source a batch at a time rather than
+    copying the sample first. Once the decrement passes the test, the last step is
+    taken without another read when it is too small to change the information (each
+    row's linear predictor moves by less than about 1e-8).
+  - `save_resid=False` keeps this path and leaves the residual file unwritten, as
+    for IRLS.
+  - With `device="cuda"` (experimental) the Newton steps run on the GPU, with one fixed
+    effect as well as without; before, a GPU did nothing for a GLM with one fixed effect.
+  - Two or more fixed effects, multiple estimation, `bias_correction` and the separation
+    check switched off still fit by IRLS. With multiple estimation or the check switched
+    off, a model with no fixed effect or one gets Newton's method first, and IRLS takes
+    the final step.
+- **IRLS with an `iwls_tol` below rounding** (about 1e-12 relative) stops once a step no
+  longer lowers the deviance. It previously could reject a step whose deviance was
+  higher by rounding alone and raise "IRLS step-halving failed".
+- **`core.newton`** (`glm_design`, `GLMDesign`, `NewtonMoments`): the stored design of a
+  logit, probit or Poisson model with no fixed effect or one, and a pass that gives the
+  log-likelihood, gradient and information of several models in one read, each on its
+  own splits (cross-validation folds, say), with the fixed effect profiled out exactly.
+  It is a stable API for estimators that run their own iteration, such as a penalized
+  GLM's path.
+- **`core.distinct.count_distinct`**: distinct counts of columns or combinations of
+  columns, among the rows a filter keeps. The default is HyperLogLog's approximate
+  count in one streaming pass, as before. With `exact=True` the count is exact: one
+  streaming pass when Polars' hash tables (about 50 bytes a value for one column, 120
+  for two) fit half the memory headroom, and otherwise k passes, each counting the
+  values whose hash falls in one of k parts. `scan_source(exact_distinct=True)` uses
+  it. The fits still choose how to stream a fixed effect from the approximate count.
+- **Pass 0's row write without fixed effects** is chosen by the design's width. Polars'
+  streaming sink of the evaluated design, the faster write, buffers up to a row group per
+  thread of every design column, so on a wide design its memory grew with the number of
+  rows up to several million. The rows are now sunk when that buffer (threads x
+  `row_group_size` x columns x 8 bytes) fits a quarter of the memory headroom, as for a
+  design of tens of columns. Otherwise the source's own columns are read a batch at a
+  time, the design evaluated on each batch, and the rows written with a Parquet writer.
+  With about 2,000 indicators, `feols_stream` peaked at 16.9 GB at 1 million rows; it now
+  peaks at 11.2 GB, the same as at 300,000 rows, and is about 30% faster (133 s instead
+  of 188 s). The write itself fell from 16.5 GB to 2.6 GB.
+- The batch write applies when every design and weight expression is row-wise, as
+  formula-built designs always are, and with the CPU engine. Otherwise the evaluated
+  design is sunk as before.
+
 ## 0.12.1
 
 Lower peak memory for designs with many columns, such as a categorical expanded into

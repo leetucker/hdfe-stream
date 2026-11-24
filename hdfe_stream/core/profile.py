@@ -64,18 +64,22 @@ class ScanStats:
     """What the one scan of the data found."""
     n_raw: int                                  # rows in the source
     n_rows: int                                 # rows with every used value present and finite
-    distinct: dict[str, int] = field(default_factory=dict)     # approximate level counts
+    distinct: dict[str, int] = field(default_factory=dict)     # level counts
     minmax: dict[str, tuple] = field(default_factory=dict)
     seconds: float = 0.0
+    distinct_exact: bool = False                # exact counts, or HyperLogLog's (about 2%)
 
     def to_dict(self):
         return {"n_raw": self.n_raw, "n_rows": self.n_rows, "distinct": dict(self.distinct),
+                "distinct_exact": self.distinct_exact,
                 "minmax": {k: list(v) for k, v in self.minmax.items()}, "seconds": self.seconds}
 
 
 def scan_source(lf: pl.LazyFrame, *, present: Sequence[pl.Expr] = (),
                 distinct: Mapping[str, Sequence[str]] | None = None,
-                minmax: Sequence[str] = ()) -> ScanStats:
+                minmax: Sequence[str] = (), exact_distinct: bool = False,
+                max_memory_gb: float | None = None,
+                memory_reserve: float | None = None) -> ScanStats:
     """One streaming pass over the columns the fit uses.
 
     Parameters
@@ -86,6 +90,11 @@ def scan_source(lf: pl.LazyFrame, *, present: Sequence[pl.Expr] = (),
     distinct : name -> source columns; the (approximate, HyperLogLog) number of
         distinct values of the combination of the columns, among kept rows.
     minmax : columns whose minimum and maximum among kept rows to report.
+    exact_distinct : bool, default False
+        Count the distinct values exactly (`core.distinct.count_distinct`),
+        in one or more further streaming passes whose hash tables fit the
+        memory budget (``max_memory_gb``, ``memory_reserve``), instead of
+        HyperLogLog's approximate count in the one scan.
     """
     import time
     t0 = time.time()
@@ -105,17 +114,24 @@ def scan_source(lf: pl.LazyFrame, *, present: Sequence[pl.Expr] = (),
         for c in cols:
             if c not in schema:
                 raise ValueError(f"column {c!r} is not in the data")
+        if exact_distinct:
+            continue
         key = pl.col(cols[0]) if len(cols) == 1 else pl.struct([pl.col(c) for c in cols])
         aggs.append(key.hash().filter(keep).approx_n_unique().alias(f"u:{name}"))
     for c in minmax:
         aggs.append(pl.col(c).filter(keep).min().alias(f"lo:{c}"))
         aggs.append(pl.col(c).filter(keep).max().alias(f"hi:{c}"))
     row = lf.select(aggs).collect(engine="streaming").row(0, named=True)
+    counts = {k[2:]: int(v or 0) for k, v in row.items() if k.startswith("u:")}
+    if exact_distinct and distinct:
+        from .distinct import count_distinct
+        counts = count_distinct(lf, {n: list(c) for n, c in distinct.items()}, exact=True,
+                                where=keep, max_memory_gb=max_memory_gb,
+                                memory_reserve=memory_reserve)
     return ScanStats(
-        n_raw=int(row["__raw"]), n_rows=int(row["__n"] or 0),
-        distinct={k[2:]: int(v or 0) for k, v in row.items() if k.startswith("u:")},
+        n_raw=int(row["__raw"]), n_rows=int(row["__n"] or 0), distinct=counts,
         minmax={c: (row[f"lo:{c}"], row[f"hi:{c}"]) for c in minmax},
-        seconds=round(time.time() - t0, 3))
+        seconds=round(time.time() - t0, 3), distinct_exact=bool(exact_distinct))
 
 
 def source_row_group_rows(source) -> int | None:

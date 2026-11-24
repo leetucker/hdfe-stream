@@ -234,3 +234,29 @@ def test_rmse_divides_by_the_sum_of_the_weights(rich, tmp_path):
     assert rel(a.rmse, b.rmse) < 1e-12
     assert rel(a.rmse, np.sqrt(a.rss / sum_w)) < 1e-12
     a.cleanup(), b.cleanup()
+
+
+@pytest.mark.parametrize("route", ["sink", "batches"])
+def test_rows_without_fixed_effects_either_write(rich, workdir, route, monkeypatch):
+    # pass 0 sinks the rows of a narrow design and writes a wide one's a batch
+    # at a time (forced here by the share of the headroom); the fits agree
+    from hdfe_stream.core import passes
+    from hdfe_stream.core.estimator import _StreamingBase
+
+    sunk = []
+    real = _StreamingBase._sink
+
+    def spy(self, lf, target, what, *a, **kw):
+        sunk.append(what)
+        return real(self, lf, target, what, *a, **kw)
+
+    monkeypatch.setattr(_StreamingBase, "_sink", spy)
+    fml = "log_earn ~ age_squared + age_cubed + i(occ)"
+    base = feols_stream(fml, rich.src, workdir=workdir, vcov="hetero", verbose=False)
+    monkeypatch.setattr(passes, "_SINK_SHARE", 1.0 if route == "sink" else 0.0)
+    sunk.clear()
+    res = feols_stream(fml, rich.src, workdir=workdir, vcov="hetero", verbose=False,
+                       batch_rows=5_000)
+    assert ("pass 0 write rows" in sunk) == (route == "sink")
+    np.testing.assert_allclose(res.beta, base.beta, rtol=1e-8)
+    np.testing.assert_allclose(res.se, base.se, rtol=1e-8)

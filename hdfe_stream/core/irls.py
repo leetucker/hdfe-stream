@@ -218,6 +218,14 @@ class _IRLSMixin:
              if self.weights is not None else None)
         off = (np.ascontiguousarray(ch[vcol(self.vidx[_OFFSET])], dtype=np.float64)
                if self.offset_name is not None else None)
+        # read-only whatever the chunk: a column comes zero-copy (read-only)
+        # or copied (writable) depending on how it was stored, and numba
+        # compiles a kernel once per signature, so a size that read the other
+        # kind compiled the row kernels again inside the fit (seconds on a
+        # machine whose cache had only the one kind)
+        y.flags.writeable = False
+        if off is not None:
+            off.flags.writeable = False
         return y, X, f, off
 
     def _eta(self, s, y, X, off, codes, lay):
