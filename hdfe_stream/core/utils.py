@@ -168,6 +168,9 @@ def _function_name(spec):
 
 
 _THREADPOOLS = None
+# the passes hold BLAS to one thread up to this many columns (see
+# single_blas); wider cross-products gain from BLAS's threads
+SINGLE_BLAS_MAX_COLS = 128
 
 
 def single_blas(on: bool = True):

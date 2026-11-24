@@ -166,8 +166,12 @@ class BlockStore:
             if self.binary is not None:
                 if X.shape[1] != len(self.binary):
                     raise ValueError(f"X has {X.shape[1]} columns, binary= {len(self.binary)}")
-                arrays["X~b"] = np.ascontiguousarray(X[:, self.binary], dtype=np.uint8)
-                X = X[:, ~self.binary]
+                from .kernels_base import _nb_pack
+                Xd = np.empty((n, len(self._dcols)), self.dtype)
+                Xb = np.empty((n, len(self._bcols)), np.uint8)
+                _nb_pack(np.ascontiguousarray(X, dtype=np.float64), self._dcols, self._bcols,
+                         Xd, Xb)
+                arrays["X~b"], X = Xb, Xd
             arrays["X"] = np.ascontiguousarray(X, dtype=self.dtype)
         if n == 0:
             return
@@ -228,6 +232,38 @@ class BlockStore:
                     nxt = pool.submit(self._load, self.blocks[i + 1], fields)
                 yield whole(cur)
                 del cur
+
+    def keep_rows(self, keep_of) -> None:
+        """Drop rows from the blocks in place. `keep_of(arrays)` takes a
+        block's fields (X as stored, as `iterate(raw=True)` gives them) and
+        returns the mask of the rows to keep, or None to keep them all. A
+        block left with no rows is removed."""
+        kept = []
+        for blk in self.blocks:
+            arrays = (dict(blk.arrays) if self.in_memory
+                      else {k: np.load(p) for k, p in blk.files.items()})
+            mask = keep_of(arrays)
+            if mask is None or mask.all():
+                kept.append(blk)
+                continue
+            arrays = {k: np.ascontiguousarray(a[mask]) for k, a in arrays.items()}
+            blk.n = int(mask.sum())
+            if self.in_memory:
+                self.bytes -= sum(a.nbytes for a in blk.arrays.values())
+                blk.arrays = arrays
+                self.bytes += sum(a.nbytes for a in arrays.values())
+            else:
+                for k, a in arrays.items():
+                    path = blk.files[k]
+                    self.bytes -= path.stat().st_size
+                    if blk.n:
+                        np.save(path, a)
+                        self.bytes += path.stat().st_size
+                    else:
+                        path.unlink(missing_ok=True)
+            if blk.n:
+                kept.append(blk)
+        self.blocks = kept
 
     def delete(self) -> None:
         """Forget the blocks and remove their files."""

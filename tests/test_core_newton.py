@@ -208,26 +208,32 @@ def test_skipped_groups_and_profiling(tmp_path):
 
 
 @pytest.mark.parametrize("family", FAMILIES)
-def test_pass0(family, tmp_path):
-    """The sample, the groups dropped, the weights' scaling and the sums."""
+@pytest.mark.parametrize("storage", ["disk", "memory"])
+def test_pass0(family, storage, tmp_path):
+    """The sample, the groups dropped (from the sums and from the stored
+    rows), the weights' scaling and the sums; d is a 0/1 column, stored as
+    bytes."""
     df = _data(family).with_columns(
         pl.when(pl.int_range(pl.len()) % 50 == 7).then(None).otherwise(pl.col("x2"))
-        .alias("x2"))
+        .alias("x2"), (pl.col("c") > 2).cast(pl.Int64).alias("d"))
     with pytest.warns(UserWarning, match="levels of g dropped"):
-        ld = glm_design("y ~ x1 + x2 | g", df, family=family, weights="w",
-                        split_by="fold", n_splits=4, workdir=tmp_path)
+        ld = glm_design("y ~ x1 + x2 + d | g", df, family=family, weights="w",
+                        split_by="fold", n_splits=4, workdir=tmp_path, storage=storage,
+                        block_mb=0.02)
     kept = df.filter(pl.col("x2").is_not_null())
     assert ld.diagnostics["n_raw"] == df.height
     assert ld.separation == {"checked": True, "levels": 1,
                              "observations": kept.filter(pl.col("g") == 29).height}
     used = kept.filter(pl.col("g") != 29)
     assert ld.n_obs == used.height
+    assert ld._store.n_rows == used.height
+    assert len(ld._store.blocks) > 1
     # analytic weights scaled to a mean of 1 over the rows kept
     w = used["w"].to_numpy() * used.height / used["w"].sum()
     np.testing.assert_allclose(ld.weight_sum, w.sum(), rtol=1e-12)
     f = used["fold"].to_numpy()
-    for j, nm in enumerate(["x1", "x2"]):
-        x = used[nm].to_numpy()
+    for j, nm in enumerate(["x1", "x2", "d"]):
+        x = used[nm].to_numpy().astype(float)
         np.testing.assert_allclose(ld.x_sums[:, j], np.bincount(f, w * x, 4), rtol=1e-10)
         np.testing.assert_allclose(ld.x_squares[:, j], np.bincount(f, w * x * x, 4),
                                    rtol=1e-10)

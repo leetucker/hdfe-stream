@@ -67,7 +67,7 @@ from .report import warn
 from .resources import MemoryBudget
 from .store import (BlockStore, PolarsEngine, block_rows, factorize, iter_batches,
                     iter_groups, not_missing, write_sample)
-from .utils import as_lazy
+from .utils import SINGLE_BLAS_MAX_COLS, as_lazy, single_blas
 from .workspace import Run, _base_dir
 
 __all__ = ["glm_design", "GLMDesign", "NewtonMoments"]
@@ -403,8 +403,10 @@ class GLMDesign:
         """
         sums = self._sums(beta, effects, models=models, columns=columns,
                           information=information, observed=observed)
-        for X, y, w, off, f, sp in self._blocks():
-            sums.add(X, y, w, off, f, sp)
+        # the row kernel's passes with BLAS on one thread (see single_blas)
+        with single_blas(not sums.blas):
+            for X, y, w, off, f, sp in self._blocks():
+                sums.add(X, y, w, off, f, sp)
         self.diagnostics["passes"] = self.passes + 1
         return sums.moments()
 
@@ -761,13 +763,16 @@ def glm_design(fml: str, data: Any, *, family: str, weights: str | None = None,
     budget = MemoryBudget(max_memory_gb, memory_reserve)
     run = Run(_base_dir(workdir), auto_cleanup=True)
     try:
-        return _pass0(spec, lf, schema, fam, engine, run, budget, log, t0,
-                      weights=weights, weights_type=weights_type, split_by=split_by,
-                      n_splits=n_splits, offset=offset, clusters=clusters,
-                      drop_singletons=drop_singletons,
-                      in_memory=storage == "memory",
-                      dtype=np.float32 if dtype == "float32" else np.float64,
-                      block_mb=block_mb, chunk_mb=chunk_mb)
+        # pass 0's products are thin (a block's column sums): BLAS's threads
+        # would only contend with Polars' and numba's (see single_blas)
+        with single_blas(len(spec.x) <= SINGLE_BLAS_MAX_COLS):
+            return _pass0(spec, lf, schema, fam, engine, run, budget, log, t0,
+                          weights=weights, weights_type=weights_type, split_by=split_by,
+                          n_splits=n_splits, offset=offset, clusters=clusters,
+                          drop_singletons=drop_singletons,
+                          in_memory=storage == "memory",
+                          dtype=np.float32 if dtype == "float32" else np.float64,
+                          block_mb=block_mb, chunk_mb=chunk_mb)
     except BaseException:
         run.cleanup()
         raise
@@ -991,20 +996,26 @@ def _pass0(spec, lf, schema, fam, engine, run, budget, log, t0, *, weights, weig
         if not keep.any():
             raise ValueError(f"{spec.fml}: no observations left after dropping the levels of "
                              f"{fe} whose effects would be infinite")
-        for blk in store.iterate(["X", "w", "fe", "cl"]):
+        # the dropped rows come out of the covariates' sums and out of the
+        # store, so that the passes read only the rows they use
+        def kept_rows(blk):
             gone = drop[blk["fe"]]
             if not gone.any():
-                continue
+                return None
             n = len(gone)
             s = (split_of[blk["cl"][:, 0]] if split_of is not None
                  else np.zeros(n, np.int64))[gone]
             wt = (np.ones(n) if blk.get("w") is None else blk["w"])[gone]
-            X = blk["X"][gone]
+            parts = {k: blk[k][gone] for k in ("X", "X~b") if k in blk}
+            X = store._whole(parts)["X"].astype(np.float64, copy=False)
             for j in range(S):
                 r = s == j
                 if r.any():
                     xs[j] -= wt[r] @ X[r]
                     xq[j] -= wt[r] @ (X[r] ** 2)
+            return ~gone
+
+        store.keep_rows(kept_rows)
     gw, gy = gw[:, keep], gy[:, keep]
     n_kept = int(n_obs - gn[drop].sum()) if fe else int(n_obs)
     if weights and weights_type != "fweights" and fe and drop.any():

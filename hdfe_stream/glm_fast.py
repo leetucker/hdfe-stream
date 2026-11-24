@@ -170,8 +170,9 @@ def _terms(family, y, eta):
 def fit(fml, data, family, *, vcov, cluster, fe_dof, iwls_tol, iwls_maxiter, offset,
         options):
     """The fast path's fit (call `eligible` first)."""
-    from .core.newton import glm_design, newton_direction
+    from .core.newton import _kernel_columns, glm_design, newton_direction
     from .core.resources import peak_rss_gb, reset_peak_rss, thread_scope
+    from .core.utils import single_blas
     from .core.workspace import Run, _base_dir
 
     t0 = time.time()
@@ -192,10 +193,14 @@ def fit(fml, data, family, *, vcov, cluster, fe_dof, iwls_tol, iwls_maxiter, off
         ld = glm_design(fml, lf, family=fam.name, weights=weights, weights_type=weights_type,
                         offset=offset, clusters=terms, drop_singletons=True, **options)
         try:
-            out = _fit(ld, fml, spec, lf, fam, weights, weights_type, offset, default, keys,
-                       requests, terms, fe_dof, iwls_tol, iwls_maxiter, verbose, logger, t0,
-                       Run, _base_dir, options.get("workdir"), newton_direction, device,
-                       save_resid)
+            # BLAS on one thread when the passes are the row kernel's: between
+            # them it only solves small systems, and its threads would contend
+            # with numba's (see core.utils.single_blas)
+            with single_blas(len(ld.names) <= _kernel_columns(ld)):
+                out = _fit(ld, fml, spec, lf, fam, weights, weights_type, offset, default,
+                           keys, requests, terms, fe_dof, iwls_tol, iwls_maxiter, verbose,
+                           logger, t0, Run, _base_dir, options.get("workdir"),
+                           newton_direction, device, save_resid)
         finally:
             ld.cleanup()
     rss = peak_rss_gb()

@@ -85,6 +85,7 @@ from .core.passes import _drop_levels
 from .core.report import warn
 from .core.store import BlockStore
 from .core.inference import _criteria
+from .core.utils import SINGLE_BLAS_MAX_COLS as _SINGLE_BLAS_MAX_COLS
 from .core.utils import _norm_vars, single_blas
 from .estimator import StreamingHDFE
 
@@ -97,9 +98,6 @@ _MAX_HALVINGS = 30
 # (the deviance is a sum over every row): a step changing it by less is
 # accepted, and the fit has converged, whatever iwls_tol asks for
 _DEV_ROUNDING = 1e-12
-# the row passes hold BLAS to one thread up to this many columns (see
-# core.utils.single_blas); wider cross-products gain from BLAS's threads
-_SINGLE_BLAS_MAX_COLS = 128
 # without batch_rows, chunks of about this many MB of the design (at most
 # 2,000,000 rows, at least 100,000): with BLAS on one thread, small chunks
 # cost no time, and memory follows the chunk
