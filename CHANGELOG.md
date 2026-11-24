@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.13.1 (unreleased)
+## 0.13.1
 
 - **`core.crossprod` forms the cross-products of sparse rows from each row's nonzeros.**
   A chunk with at most 20% of its entries nonzero (and at least 32 columns), as a design
