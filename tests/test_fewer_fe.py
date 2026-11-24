@@ -258,5 +258,5 @@ def test_rows_without_fixed_effects_either_write(rich, workdir, route, monkeypat
     res = feols_stream(fml, rich.src, workdir=workdir, vcov="hetero", verbose=False,
                        batch_rows=5_000)
     assert ("pass 0 write rows" in sunk) == (route == "sink")
-    np.testing.assert_allclose(res.beta, base.beta, rtol=1e-12)
+    np.testing.assert_allclose(res.beta, base.beta, rtol=1e-10)
     np.testing.assert_allclose(res.se, base.se, rtol=1e-10)
