@@ -117,6 +117,18 @@ def test_collinear_and_dropped():
     _same(fast, slow)
 
 
+@pytest.mark.parametrize("fe", ["", " | g"])
+def test_without_saved_residuals(fe):
+    # save_resid=False keeps the fast path, as StreamingGLM's estimates and
+    # variances, and leaves the residual file unwritten
+    df = _data("logit")
+    fast, slow = _both("logit", "y ~ x1 + x2" + fe, df, vcov={"CRV1": "cl"},
+                       save_resid=False)
+    _same(fast, slow)
+    with pytest.raises(FileNotFoundError, match="save_resid=False"):
+        fast.resid()
+
+
 def test_streaming_glm_otherwise():
     """Two fixed effects, multiple estimation, CRV3 (an error for GLMs, as
     before) and IRLS-only options go to StreamingGLM."""
@@ -165,3 +177,4 @@ def test_peak_memory_is_recorded_and_the_kept_information_follows_the_budget(mon
     assert getattr(tight, "_newton_information", None) is None
     np.testing.assert_allclose(tight.beta, res.beta, rtol=1e-12)
     np.testing.assert_allclose(tight.se, res.se, rtol=1e-12)
+

@@ -61,7 +61,7 @@ from .core.utils import as_lazy
 # options of feglm_stream/fepois_stream this path takes (others: StreamingGLM)
 _OPTIONS = {"weights", "weights_type", "workdir", "verbose", "logger", "max_memory_gb",
             "memory_reserve", "polars_engine", "n_threads", "storage", "dtype", "device",
-            "block_mb", "chunk_mb"}
+            "block_mb", "chunk_mb", "save_resid"}
 # the most memory the information kept for a one-way fixed effect may take
 # (`HDFEResult._newton_information`, for packages that draw its levels): at
 # most this, and at most half the memory budget's headroom
@@ -181,6 +181,7 @@ def fit(fml, data, family, *, vcov, cluster, fe_dof, iwls_tol, iwls_maxiter, off
     weights_type = options.pop("weights_type", "aweights")
     n_threads = options.pop("n_threads", None)
     device = options.pop("device", "cpu")
+    save_resid = bool(options.pop("save_resid", True))
     verbose = options.get("verbose", True)
     logger = options.get("logger")
     fam = get_family(family)
@@ -193,7 +194,8 @@ def fit(fml, data, family, *, vcov, cluster, fe_dof, iwls_tol, iwls_maxiter, off
         try:
             out = _fit(ld, fml, spec, lf, fam, weights, weights_type, offset, default, keys,
                        requests, terms, fe_dof, iwls_tol, iwls_maxiter, verbose, logger, t0,
-                       Run, _base_dir, options.get("workdir"), newton_direction, device)
+                       Run, _base_dir, options.get("workdir"), newton_direction, device,
+                       save_resid)
         finally:
             ld.cleanup()
     rss = peak_rss_gb()
@@ -211,7 +213,7 @@ def _log(verbose, logger, msg):
 
 def _fit(ld, fml, spec, lf, fam, weights, weights_type, offset, default, keys, requests,
          terms, fe_dof, iwls_tol, iwls_maxiter, verbose, logger, t0, Run, _base_dir, workdir,
-         newton_direction, device="cpu"):
+         newton_direction, device="cpu", save_resid=True):
     fe = ld.fe
     G = ld.n_groups
     if ld.diagnostics["singletons"]:
@@ -313,22 +315,27 @@ def _fit(ld, fml, spec, lf, fam, weights, weights_type, offset, default, keys, r
         return (theta, None) if with_fe else (theta[1:], theta[:1])
 
     theta = b.copy() if with_fe else np.r_[a[0], b]
+    # a step this small moves each row's linear predictor by about
+    # sqrt(decrement / weight sum) < 1e-8, and the information as little: the
+    # information it was taken from serves as the variances' bread, unread
+    unread = 1e-16 * ld.weight_sum
     polish = False
     for it in range(1, iwls_maxiter + 1):
         C, g = system(mom)
         d = np.zeros(p)
         d[sel], decrement = newton_direction(C[np.ix_(sel, sel)], g[sel])
-        if polish or decrement == 0.0:
-            # the last step, too small to need a read: applied as it is
+        # once the decrement passes the test, one more step: near a regular
+        # maximum it squares the error (what IRLS's final step does after
+        # `StreamingGLM`'s Newton start). It is read, for the bread at the
+        # estimates, unless it is too small to change it
+        passed = decrement < max(tol_abs, tol_rel * (0.1 + 2.0 * abs(ll)))
+        if polish or decrement == 0.0 or (passed and decrement < unread):
             theta = theta + d
             if with_fe:
                 a = a + mom.effects_step(d, 0)
             converged = True
             break
-        # once the decrement passes the test, one more step: near a regular
-        # maximum it squares the error (what IRLS's final step does after
-        # `StreamingGLM`'s Newton start)
-        polish = decrement < max(tol_abs, tol_rel * (0.1 + 2.0 * abs(ll)))
+        polish = passed
         da = mom.effects_step(d, 0) if with_fe else None
         t = 1.0
         for _ in range(_MAX_HALVINGS):
@@ -372,7 +379,7 @@ def _fit(ld, fml, spec, lf, fam, weights, weights_type, offset, default, keys, r
     run = Run(_base_dir(workdir), auto_cleanup=True)
     mdir = run.path / "models" / "m000"
     mdir.mkdir(parents=True)
-    resid_path = str(mdir / "resid.parquet")
+    resid_path = str(mdir / "resid.parquet") if save_resid else None
     fweights = weights is not None and weights_type == "fweights"
     ctabs = ld.diagnostics["cluster_tables"]
     cl_names = list(terms)
@@ -422,6 +429,8 @@ def _fit(ld, fml, spec, lf, fam, weights, weights_type, offset, default, keys, r
             lsat += float(wt @ (special.xlogy(y, y) - y - lg))
         if with_fe:
             n_obs_g += np.bincount(f, minlength=G)
+        if not save_resid:
+            continue
         cols = {}
         for c in keep_cols:
             cols[c] = _values_of(ld, c, blk, cl_names, terms, fe_cols)

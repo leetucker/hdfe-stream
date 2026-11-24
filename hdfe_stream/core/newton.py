@@ -805,13 +805,22 @@ def _pass0(spec, lf, schema, fam, engine, run, budget, log, t0, *, weights, weig
              for c in e.meta.root_names()]
     cols = list(dict.fromkeys([*roots, *([weights] if weights else []), *raw]))
     rows = block_rows(block_mb, K)
-    design_path = run.path / "sample.parquet"
-    log("pass 0: writing the sample")
-    write_sample(engine, lf, usable, cols, design_path, rows, ROW)
     evaluated = [pl.col(ROW), spec.y.alias(Y), *xexprs, *wexpr,
                  *([off_expr.alias(OFF)] if off_expr is not None else []),
                  *[pl.col(c) for c in raw]]
-    design = pl.scan_parquet(design_path).select(evaluated)
+    # Without a fixed effect the rows are stored in their order, so pass 0
+    # reads the source itself, a batch at a time: copying the sample first
+    # would cost a write and a read of every row. With one, the copy is what
+    # the rows are sorted by group from.
+    design_path = None
+    sample = (lf.with_row_index(ROW).with_columns(pl.col(ROW).cast(pl.Int64))
+              .filter(usable).select(pl.col(ROW), *[pl.col(c) for c in cols]))
+    if fe_cols or engine.name == "gpu":
+        design_path = run.path / "sample.parquet"
+        log("pass 0: writing the sample")
+        write_sample(engine, lf, usable, cols, design_path, rows, ROW)
+        sample = pl.scan_parquet(design_path)
+    design = sample.select(evaluated)
 
     # facts about the sample, from the local copy
     stats = engine.collect(design.select(
@@ -876,14 +885,20 @@ def _pass0(spec, lf, schema, fam, engine, run, budget, log, t0, *, weights, weig
 
     def add_sums(X, y, w, f, cl):
         n = len(y)
-        f = f if fe else np.zeros(n, np.int64)
         s = split_of[cl[:, 0]] if split_of is not None else None
         wt = np.ones(n) if w is None else w
-        idx = f if s is None else s * G0 + f
-        gw[...] += np.bincount(idx, weights=wt, minlength=S * G0).reshape(S, G0)
-        gy[...] += np.bincount(idx, weights=wt * y, minlength=S * G0).reshape(S, G0)
-        gn[...] += np.bincount(f, minlength=G0)
-        gpos[...] += np.bincount(f, weights=(y > 0), minlength=G0).astype(np.int64)
+        if fe or s is not None:
+            f = f if fe else np.zeros(n, np.int64)
+            idx = f if s is None else s * G0 + f
+            gw[...] += np.bincount(idx, weights=wt, minlength=S * G0).reshape(S, G0)
+            gy[...] += np.bincount(idx, weights=wt * y, minlength=S * G0).reshape(S, G0)
+            gn[...] += np.bincount(f, minlength=G0)
+            gpos[...] += np.bincount(f, weights=(y > 0), minlength=G0).astype(np.int64)
+        else:                                   # one group: plain sums
+            gw[0, 0] += wt.sum()
+            gy[0, 0] += wt @ y
+            gn[0] += n
+            gpos[0] += int(np.count_nonzero(y > 0))
         for j in range(S):
             r = None if s is None else s == j
             if r is not None and not r.any():
@@ -893,7 +908,8 @@ def _pass0(spec, lf, schema, fam, engine, run, budget, log, t0, *, weights, weig
             xs[j] += sj
             xq[j] += sj                         # the 0/1 columns' squares
             if len(xcont):
-                xq[j, xcont] += wj @ (Xj[:, xcont] ** 2) - sj[xcont]
+                Xc = Xj if len(xcont) == K else Xj[:, xcont]
+                xq[j, xcont] += np.einsum("ij,ij,i->j", Xc, Xc, wj) - sj[xcont]
 
     def convert(frame: pl.DataFrame):
         frame = frame.select(evaluated)                 # the design, for this batch
@@ -939,10 +955,15 @@ def _pass0(spec, lf, schema, fam, engine, run, budget, log, t0, *, weights, weig
         for frame in iter_groups(engine, design_path, fcols, rows, run.path,
                                  fe_tables[d].height, [*fcols, ROW], log=log):
             convert(frame)
-    else:
+    elif design_path is not None:
         for frame in iter_batches(design_path, rows):
             convert(frame)
-    design_path.unlink(missing_ok=True)
+    else:
+        for frame in sample.collect_batches(chunk_size=rows, engine="streaming"):
+            if frame.height:
+                convert(frame)
+    if design_path is not None:
+        design_path.unlink(missing_ok=True)
 
     single = (gn == 1) if fe and drop_singletons else np.zeros(G0, bool)
     if fam.name == "poisson":

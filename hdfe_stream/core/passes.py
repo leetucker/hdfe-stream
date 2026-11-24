@@ -61,6 +61,10 @@ def _drop_levels(frame, tables, fe_cols):
     return frame
 
 
+# pass 0 sinks the rows without fixed effects when the sink's buffers fit this
+# share of the memory headroom, and otherwise writes them a batch at a time
+_SINK_SHARE = 0.25
+
 class _PassesMixin:
 
     # whether pass 1 wrote the cell sums to disk (set there; see _pass1_cells)
@@ -581,19 +585,24 @@ class _PassesMixin:
     def _write_rows_no_fe(self, coded, out, maps):
         """Pass 0's rows without fixed effects, to `out`.
 
-        With a row-wise design (`_raw_rows`), the source's columns are read
-        a batch at a time and the design evaluated on each batch, written
-        with a Parquet writer: a streaming sink of the evaluated design
-        buffers up to a row group per thread of every design column (with
-        2,000 indicators, 16.5 GB at a million rows), where a batch holds
-        about 64 MB of it. Otherwise the query is sunk as it is.
+        A streaming sink of the evaluated design is the faster write (its
+        threads evaluate and encode in parallel), but it buffers up to a row
+        group per thread of every design column (with 2,000 indicators,
+        16.5 GB at a million rows). So the query is sunk when that buffer,
+        threads x row_group_size x columns x 8 bytes, fits a quarter of the
+        memory headroom. Otherwise, with a row-wise design (`_raw_rows`), the
+        source's columns are read a batch at a time and the design evaluated
+        on each batch, written with a Parquet writer: a batch holds about
+        64 MB of it.
         """
         raw = getattr(self, "_raw_rows", None)
-        if raw is None or self.polars_engine == "gpu":
+        names = coded.collect_schema().names()
+        sink_gb = pl.thread_pool_size() * self.rgs * len(names) * 8 / 1e9
+        if (raw is None or self.polars_engine == "gpu"
+                or self.budget.fits(sink_gb, share=_SINK_SHARE)):
             self._sink(coded, out, "pass 0 write rows", row_group_size=self.rgs)
             return
         query, evaluate = raw
-        names = coded.collect_schema().names()
         tables = [pl.scan_parquet(path) for _, _, _, path in maps]
 
         def finish(frame):

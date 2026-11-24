@@ -31,6 +31,12 @@ fixed effects.
   - The estimates move slightly, toward the maximum: Newton's method stops on the
     decrement, IRLS on the change in deviance, which at its default tolerance can leave
     the coefficients about 1e-6 (relative) from the maximum.
+  - Without a fixed effect, pass 0 reads the source a batch at a time rather than
+    copying the sample first. Once the decrement passes the test, the last step is
+    taken without another read when it is too small to change the information (each
+    row's linear predictor moves by less than about 1e-8).
+  - `save_resid=False` keeps this path and leaves the residual file unwritten, as
+    for IRLS.
   - With `device="cuda"` (experimental) the Newton steps run on the GPU, with one fixed
     effect as well as without; before, a GPU did nothing for a GLM with one fixed effect.
   - Two or more fixed effects, multiple estimation, `bias_correction` and the separation
@@ -53,17 +59,19 @@ fixed effects.
   for two) fit half the memory headroom, and otherwise k passes, each counting the
   values whose hash falls in one of k parts. `scan_source(exact_distinct=True)` uses
   it. The fits still choose how to stream a fixed effect from the approximate count.
-- **Pass 0's row write without fixed effects** reads the source's own columns a batch at
-  a time, evaluates the design on each batch and writes it with a Parquet writer. It
-  previously sank the evaluated design through Polars' streaming engine, which buffers up
-  to a row group per thread of every design column, so its memory grew with the number
-  of rows up to several million. With about 2,000 indicators, `feols_stream` peaked at
-  16.9 GB at 1 million rows; it now peaks at 11.2 GB, the same as at 300,000 rows, and
-  is about 30% faster (133 s instead of 188 s). The write itself fell from 16.5 GB to
-  2.6 GB.
-- This applies when every design and weight expression is row-wise, as formula-built
-  designs always are, and with the CPU engine. Otherwise the evaluated design is sunk as
-  before.
+- **Pass 0's row write without fixed effects** is chosen by the design's width. Polars'
+  streaming sink of the evaluated design, the faster write, buffers up to a row group per
+  thread of every design column, so on a wide design its memory grew with the number of
+  rows up to several million. The rows are now sunk when that buffer (threads x
+  `row_group_size` x columns x 8 bytes) fits a quarter of the memory headroom, as for a
+  design of tens of columns. Otherwise the source's own columns are read a batch at a
+  time, the design evaluated on each batch, and the rows written with a Parquet writer.
+  With about 2,000 indicators, `feols_stream` peaked at 16.9 GB at 1 million rows; it now
+  peaks at 11.2 GB, the same as at 300,000 rows, and is about 30% faster (133 s instead
+  of 188 s). The write itself fell from 16.5 GB to 2.6 GB.
+- The batch write applies when every design and weight expression is row-wise, as
+  formula-built designs always are, and with the CPU engine. Otherwise the evaluated
+  design is sunk as before.
 
 ## 0.12.1
 
