@@ -258,3 +258,74 @@ def test_rows_without_fixed_effects_written_by_batch(vcov, tmp_path, monkeypatch
     assert fit.n_obs == ref.n_obs == df.filter(pl.col("x2").is_not_null()).height
     np.testing.assert_allclose(fit.beta, ref.beta, rtol=1e-10, atol=1e-12)
     np.testing.assert_allclose(fit.se, ref.se, rtol=1e-10)
+
+
+def _indicator_frame(n=4000, seed=3):
+    """A design of indicators (three factors) and a continuous outcome: about
+    4 nonzeros a row among 61 columns, sparse enough for the nonzeros kernel."""
+    rng = np.random.default_rng(seed)
+    cols = {"y": rng.standard_normal(n)}
+    for f, levels in (("a", 30), ("b", 20), ("c", 10)):
+        code = rng.integers(0, levels + 1, n)       # level 0 is the reference
+        for lev in range(1, levels + 1):
+            cols[f"{f}{lev}"] = (code == lev).astype(float)
+    cols["w"] = rng.uniform(0.5, 2.0, n)
+    cols["fold"] = rng.integers(0, 5, n)
+    return pl.DataFrame(cols)
+
+
+@pytest.mark.parametrize("weighted", [False, True])
+def test_sparse_rows_use_the_nonzeros_kernel(weighted, tmp_path, monkeypatch):
+    # without fixed effects a design of indicators is sparse: its products are
+    # formed from each row's nonzeros, and equal the dense products
+    from hdfe_stream.core import crossprod
+    df = _indicator_frame()
+    names = [c for c in df.columns if c not in ("w", "fold")]
+    calls = []
+    real = crossprod._nz_accumulate
+
+    def spy(*a):
+        calls.append(a[0].shape)
+        return real(*a)
+
+    monkeypatch.setattr(crossprod, "_nz_accumulate", spy)
+    cp = cross_products(df, names, weights="w" if weighted else None, split_by="fold",
+                        n_splits=5, workdir=tmp_path, verbose=False)
+    assert calls, "the sparse design did not take the nonzeros kernel"
+    V = df.select(names).to_numpy()
+    w = df["w"].to_numpy() if weighted else np.ones(len(df))
+    s = df["fold"].to_numpy()
+    for j in range(5):
+        r = s == j
+        np.testing.assert_allclose(cp.gram[j], (V[r] * w[r, None]).T @ V[r], rtol=1e-12,
+                                   atol=1e-12)
+        np.testing.assert_array_equal(cp.gram[j], cp.gram[j].T)
+        np.testing.assert_allclose(cp.sums[j], w[r] @ V[r], rtol=1e-12, atol=1e-12)
+        assert cp.counts[j] == r.sum()
+        np.testing.assert_allclose(cp.weight_sums[j], w[r].sum(), rtol=1e-12)
+
+
+def test_the_two_kernels_agree_and_mix(monkeypatch):
+    # chunks of either kind add into the same sums: with the default threshold
+    # the sparse chunks take the nonzeros kernel and the dense one BLAS, and
+    # after the pass's symmetrization the sums equal those of either alone
+    from hdfe_stream.core import crossprod
+    rng = np.random.default_rng(5)
+    m, S = 60, 3
+    sparse = np.where(rng.random((3000, m)) < 0.05, rng.standard_normal((3000, m)), 0.0)
+    chunks = [sparse, rng.standard_normal((2000, m)), sparse[:7]]
+    weights = [rng.uniform(0.5, 2.0, len(V)) for V in chunks]
+    splits = [rng.integers(0, S, len(V)) for V in chunks]
+
+    def run(density):
+        monkeypatch.setattr(crossprod, "_SPARSE_DENSITY", density)
+        gram, sums = np.zeros((S, m, m)), np.zeros((S, m))
+        wsum, count = np.zeros(S), np.zeros(S, np.int64)
+        for V, w, s in zip(chunks, weights, splits, strict=True):
+            crossprod._accumulate(V, w, s, S, gram, sums, wsum, count, True)
+        return (gram + gram.transpose(0, 2, 1)) / 2, sums, wsum, count
+
+    blas = run(-1.0)                       # every chunk by BLAS
+    for density in (crossprod._SPARSE_DENSITY, 1.0):    # mixed; every chunk by nonzeros
+        for a, b in zip(run(density), blas, strict=True):
+            np.testing.assert_allclose(a, b, rtol=1e-12, atol=1e-12)

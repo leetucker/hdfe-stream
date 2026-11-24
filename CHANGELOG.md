@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.1 (unreleased)
+
+- **`core.crossprod` forms the cross-products of sparse rows from each row's nonzeros.**
+  A chunk with at most 20% of its entries nonzero (and at least 32 columns), as a design
+  of indicators without fixed effects is, has its products summed over each row's
+  nonzeros into its own split's sums, with no per-thread copies of the sums. Other chunks,
+  including the residualized rows of every fit with fixed effects, keep BLAS. On 150,000
+  rows of 1,973 indicator columns (about 150 nonzeros a row), the products were 20, 8
+  and 4 times faster with 1, 5 and 20 splits. The estimators' own passes are unchanged.
+
 ## 0.13.0
 
 Faster logit, probit and Poisson fits with no fixed effect or one, a public Newton pass
