@@ -9,7 +9,7 @@ covariates](covariates.md) benchmark for OLS.
 
 pyfixest runs with its default demeaner, LSMR. hdfe_stream runs at its defaults, and "sized to the design", with
 bucket, batch and row-group sizes scaled down as the design widens (the rule is
-in [wide designs](../examples/wide_designs.md#2-scale-the-batches-down-with-the-width)).
+in [wide designs](../examples/wide_designs.md#2-size-the-batches-by-the-width-if-the-defaults-do-not-suit)).
 Wherever both libraries finished, the coefficients agree to within 1e-7, the
 tolerance the iterations reach. The numbers are in
 [benchmarks/results/glm_covariates.csv](https://github.com/leetucker/hdfe-stream/blob/main/benchmarks/results/glm_covariates.csv).

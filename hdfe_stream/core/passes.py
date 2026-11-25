@@ -64,6 +64,9 @@ def _drop_levels(frame, tables, fe_cols):
 # pass 0 sinks the rows without fixed effects when the sink's buffers fit this
 # share of the memory headroom, and otherwise writes them a batch at a time
 _SINK_SHARE = 0.25
+# Polars' streaming engine works in morsels of about this many rows
+# (POLARS_IDEAL_MORSEL_SIZE), each thread holding one of every column it computes
+_MORSEL_ROWS = 100_000
 
 class _PassesMixin:
 
@@ -107,14 +110,20 @@ class _PassesMixin:
         lf = evaluate(source)
         # Row restrictions, in order: the largest connected set, singletons,
         # then whatever the subclass drops (separation, for GLMs); each sees
-        # the rows left by those before it.
+        # the rows left by those before it. Each is a query over the rows
+        # `evaluate` keeps; for a wide design those rows come from a narrow
+        # file of the columns the restrictions read (see _restriction_rows).
+        narrow_file = self._restriction_rows(source, evaluate, src)
+        hooks_lf = lf if narrow_file is None else pl.scan_parquet(narrow_file)
         restricts = []
         for hook in (self._connected_restriction, self._singleton_restriction,
                      self._restrict_sample):
-            restrict = hook(lf)
+            restrict = hook(hooks_lf)
             if restrict is not None:
-                lf = restrict(lf)
+                hooks_lf = restrict(hooks_lf)
                 restricts.append(restrict)
+        if narrow_file is not None:
+            Path(narrow_file).unlink(missing_ok=True)
         if restricts:
             # The same rows, with the restrictions applied to the source
             # before the design is evaluated: they are anti-joins on the
@@ -214,18 +223,41 @@ class _PassesMixin:
                                 for j in range(m)])
         # Each bucket is sorted in memory, so its rows set pass 0's peak: by
         # default, about 384 MB of them at the rows' width (the design and the
-        # source columns they carry), between 500,000 and 20,000,000 rows.
+        # source columns they carry), between 50,000 and 20,000,000 rows.
         # (An ACS logit of 3 million rows and 41 columns: one 20M-row bucket
-        # peaked at 3.3 GB, 1M-row buckets at 1.7 GB, in less time.)
+        # peaked at 3.3 GB, 1M-row buckets at 1.7 GB, in less time.) Rows of up
+        # to about 96 columns reach the target above 500,000 rows; a wider
+        # design's buckets would otherwise be 500,000 rows of every column
+        # (2,000 indicators: 8 GB before the sort).
+        # A design so wide that 384 MB holds fewer than 250,000 of its rows, but
+        # 1 GB at least 200,000 (about 190 to 620 columns), has larger buckets,
+        # up to 1 GB and 250,000 rows, each read in one chunk (below). With 503
+        # indicators on 8.5 million rows, 245,000-row buckets read whole took
+        # 101 s at 11 GB, against 118 s with 94,000-row buckets in 63,000-row
+        # chunks (95 s at 17 GB with 0.13.1's 500,000-row buckets). With 167 or
+        # 83 indicators the 384 MB buckets and 256 MB chunks were as fast, with
+        # less memory (4.0 GB against 6.5 at 167); with 2,000, 61,000-row
+        # buckets read whole were no faster than 24,000-row ones, at 10 GB
+        # against 4.
         rpb = self.rows_per_bucket
+        whole_buckets = False
         if rpb is None:
             width = self.m + len(src) + len(self.keep) + 2
             # a bucket's sort takes about 3.5 x its bytes: 10% of the headroom, at most
-            # 384 MB and at least 64 MB, so a small allocation gets smaller buckets
-            target = min(384e6, max(64e6, 0.1 * self.budget.headroom_gb() * 1e9))
-            rpb = min(20_000_000, max(500_000, int(target / (8 * width))))
+            # the target and at least 64 MB, so a small allocation gets smaller buckets
+            room = max(64e6, 0.1 * self.budget.headroom_gb() * 1e9)
+            narrow = int(min(384e6, room) / (8 * width))
+            wide = min(250_000, int(min(1e9, room) / (8 * width)))
+            whole_buckets = wide >= 200_000 and wide > narrow
+            rpb = min(20_000_000, max(50_000, wide if whole_buckets else narrow))
         P = self.n_buckets or max(1, -(-self.n_obs // rpb))
         self.n_buckets = P
+        if whole_buckets and getattr(self, "_align_batches", False):
+            # a chunk of whole groups spans a whole bucket (hashing leaves some
+            # buckets a little above the average), so that each bucket's file is
+            # read in one batch; at most 2,000,000 rows, as before
+            per_bucket = -(-self.n_obs // P)
+            self.batch_rows = min(2_000_000, max(self.batch_rows, int(1.25 * per_bucket)))
 
         # Codes for non-streamed dimensions and extra cluster variables:
         # one level-sized hash table each.
@@ -629,6 +661,60 @@ class _PassesMixin:
         finally:
             if writer is not None:
                 writer.close()
+
+    def _restriction_design(self) -> list[str]:
+        """The design variables the row restrictions read, beyond the source
+        columns (the GLM's separation check reads the outcome)."""
+        return []
+
+    def _restriction_rows(self, source, evaluate, src):
+        """The rows the restrictions see, as a narrow file, or None to query
+        the evaluated design directly.
+
+        The restrictions (connected set, singletons, separation) group the
+        kept rows by the fixed effects, and which rows are kept depends on
+        every design column being finite, so a query over the evaluated
+        design computes all of it: Polars' streaming engine then holds a
+        morsel of every design column per thread (with 2,000 indicators and 8
+        threads, 12.5 GB from a million rows on). When that, threads x morsel
+        x columns x 8 bytes, does not fit a quarter of the memory headroom and
+        the design is row-wise, the source's columns are read a batch at a
+        time, the design evaluated on each batch, and only the source columns
+        and the design variables the restrictions read are written."""
+        if not self.fe_user or self.polars_engine == "gpu":
+            return None
+        exprs = ([self.var_exprs[nm] for nm in self.var_names]
+                 + ([self.weights] if self.weights is not None else []))
+        if not all(_row_wise(e)[0] for e in exprs):
+            return None
+        query_gb = pl.thread_pool_size() * _MORSEL_ROWS * self.m * 8 / 1e9
+        if self.budget.fits(query_gb, share=_SINK_SHARE):
+            return None
+        design = [vcol(self.vidx[nm]) for nm in self._restriction_design()]
+        cols = list(dict.fromkeys([*src, *design]))
+        needed = dict.fromkeys(
+            [*src, *self.keep, *self.slope_vars]
+            + [r for e in exprs for r in e.meta.root_names()])
+        query = source.select([pl.col(c) for c in needed])
+        out = self.workdir / "pass0_restriction_rows.parquet"
+        writer = None
+        try:
+            for batch in query.collect_batches(chunk_size=self.batch_rows,
+                                               engine="streaming"):
+                table = evaluate(batch.lazy()).select(cols).collect().to_arrow()
+                if table.num_rows == 0:
+                    continue
+                if writer is None:
+                    writer = pq.ParquetWriter(out, table.schema)
+                writer.write_table(table)
+            if writer is None:          # no rows: an empty file with the columns
+                evaluate(query.head(0)).select(cols).collect().write_parquet(out)
+        finally:
+            if writer is not None:
+                writer.close()
+        self._log(f"pass 0: the restrictions read a narrow copy of the rows "
+                  f"({len(cols)} columns)")
+        return str(out)
 
     def _defer_design(self, schema, src):
         """Decide where the design is evaluated; see `utils._row_wise`.

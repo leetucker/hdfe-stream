@@ -23,14 +23,18 @@ are the same, the memory is not. Define such a column in the input LazyFrame to
 avoid it. `result.diagnostics["design_evaluated"]` says which happened:
 `"per bucket"` is the one you want.
 
-## 2. Scale the batches down with the width
+## 2. Size the batches by the width, if the defaults do not suit
 
-At its defaults hdfe_stream holds a whole bucket of up to 20 million rows, with
-every covariate, while it sorts. That is fine for a handful of covariates and
-not for hundreds. Every step that holds rows holds all the covariates, so scale
-`rows_per_bucket`, `batch_rows` and `row_group_size` down with the width. The
-benchmarks aim at about 1 GB of design per bucket and 250 MB per batch and row
-group, never above the defaults, so a narrow design is unaffected:
+Every step that holds rows holds all the covariates, so the defaults size them
+by the width: a bucket of the sort is about 384 MB of rows (between 50,000 and
+20 million rows) and, with fixed effects, a batch about 256 MB (between 20,000
+and 2 million rows). From about 190 to 620 columns a bucket is up to 1 GB and
+250,000 rows, read in one batch, which is faster there at the same peak. A
+narrow design gets the largest sizes, and with 2,000 indicators the fit's peak
+stays near 4 GB whatever the number of rows. To trade
+memory for time differently, size `rows_per_bucket`, `batch_rows` and
+`row_group_size` yourself. The benchmarks aim at about 1 GB of design per bucket
+and 250 MB per batch and row group, never above the defaults:
 
 ```python
 def sized_options(k, bucket_bytes=1e9, batch_bytes=250e6):

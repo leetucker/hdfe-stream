@@ -185,15 +185,17 @@ class StreamingHDFE(_StreamingBase, _InverseMixin, _LeaveOutMixin, _TraceMixin,
         of the streamed dimension when building the cell table. Default:
         chunks of about 64 MB of the design, between 100,000 and 2,000,000
         rows, for GLMs (`StreamingGLM`) and for linear models without fixed
-        effects, which keeps memory proportional to the design's width
-        rather than to a row count; 2,000,000 rows for linear models with
-        fixed effects.
+        effects, and of about 256 MB, between 20,000 and 2,000,000 rows, for
+        linear models with fixed effects (a whole bucket where buckets are the
+        larger ones, below): memory follows the design's width rather than a
+        row count.
     rows_per_bucket : int, optional
         Target rows per bucket: rows are hash-partitioned by the streamed
         dimension into buckets so the sort is bucket-sized. Each bucket is
         sorted in memory, which sets pass 0's peak; the default is about
         384 MB of rows at their width (the design and the source columns),
-        between 500,000 and 20,000,000 rows.
+        between 50,000 and 20,000,000 rows; for a design of about 190 to 620
+        columns, up to 1 GB and 250,000 rows.
     n_buckets : int, optional
         The number of buckets, instead of `rows_per_bucket`.
     row_group_size : int, default 500_000

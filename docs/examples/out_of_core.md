@@ -79,11 +79,15 @@ why:
 
 `batch_rows`
 : rows read per batch, and per slice of whole groups when building the cell
-  table (default 2,000,000).
+  table (default: about 256 MB of the design with fixed effects, between 20,000
+  and 2,000,000 rows, or a whole bucket when buckets are the larger ones below;
+  64 MB without, between 100,000 and 2,000,000).
 
 `rows_per_bucket`
-: target rows per bucket of the streamed dimension (default 20,000,000). More
-  buckets means less peak memory in the sort.
+: target rows per bucket of the streamed dimension (default: about 384 MB of rows
+  at their width, less with a small memory allowance, between 50,000 and
+  20,000,000 rows; from about 190 to 620 columns, up to 1 GB and 250,000 rows).
+  More buckets means less peak memory in the sort.
 
 `row_group_size`
 : rows per row group of the working files (default 500,000).

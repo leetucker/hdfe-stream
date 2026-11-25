@@ -220,6 +220,7 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
         self._raw_w = None
         self._bufs = {}
         self._dev_rows = None           # device copy of the rows, no-FE fits on the GPU
+        self._align_batches = False     # the GLM's chunks follow its own rule
         if options.get("batch_rows") is None:
             self.batch_rows = min(2_000_000,
                                   max(100_000, int(_CHUNK_MB * 1e6 / (8 * (self.m + 4)))))
@@ -314,6 +315,9 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
         return out
 
     # ------------------------------------------------------------ sample
+    def _restriction_design(self):
+        return [self.yname]
+
     def _restrict_sample(self, lf):
         """Check the outcome, and drop the separated fixed-effect levels."""
         if self.bias is not None and self.bias["lags"]:

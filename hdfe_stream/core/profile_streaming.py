@@ -161,7 +161,13 @@ class _ProfileMixin:
                       formula="the floor of a small fit"))
 
         # ------------------------------------------------- pass 0 (memory)
-        rpb = self.rows_per_bucket or min(20_000_000, max(500_000, int(384e6 / row_bytes)))
+        # pass 0's rule (core.passes), without its headroom limit
+        narrow_rows = int(384e6 / row_bytes)
+        wide_rows = min(250_000, int(1e9 / row_bytes))
+        whole_buckets = (self.rows_per_bucket is None and wide_rows >= 200_000
+                         and wide_rows > narrow_rows)
+        rpb = self.rows_per_bucket or min(20_000_000, max(
+            50_000, wide_rows if whole_buckets else narrow_rows))
         bucket = min(rpb, N)
         add(Component("pass 0: sort one bucket", _SORT_EXPECTED * bucket * row_bytes,
                       _SORT_UPPER * bucket * row_bytes, phases=("pass0",),
@@ -188,10 +194,13 @@ class _ProfileMixin:
                                                  "fixed effect and extra cluster"))
 
         # ------------------------------------------ batches (all passes)
-        batch = min(self.batch_rows, N)
+        batch_rows = self.batch_rows
+        if whole_buckets and getattr(self, "_align_batches", False):   # (pass 0)
+            batch_rows = min(2_000_000, max(batch_rows, int(1.25 * min(rpb, N))))
+        batch = min(batch_rows, N)
         add(Component("row batch (design chunk)", batch * 8 * (3 * m + D + 4),
                       batch * 8 * (5 * m + D + 6), phases=("pass1", "assemble", "residuals"),
-                      formula=f"min(batch_rows={self.batch_rows:,}, N) x (3-5 x {m} + {D + 4}) x 8"))
+                      formula=f"min(batch_rows={batch_rows:,}, N) x (3-5 x {m} + {D + 4}) x 8"))
 
         if not self.no_fe:
             # pass 1 and the solve: level-sized arrays
