@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.13.2
+
+- **A wide design with fixed effects no longer holds memory that grows with the rows.**
+  Chunks were 2,000,000 rows and pass 0's buckets at least 500,000 rows whatever the
+  design's width, so with about 2,000 indicators and one fixed effect `feols_stream`
+  peaked at 22 GB at 300,000 rows, ignoring `max_memory_gb`. Chunks are now about 256 MB
+  of the design and buckets about 384 MB of rows (at least 50,000); from about 190 to 620
+  columns, buckets of up to 1 GB, each read in one chunk. Up to 12 columns nothing changes.
+- **Pass 0's row restrictions** (connected set, singletons, separation) on a wide design
+  read a narrow copy of the columns they need, written a batch at a time, instead of a
+  query over the evaluated design, in which Polars held a morsel of every design column
+  per thread (12.5 GB from a million rows on, with 2,000 indicators). The rows dropped are
+  the same.
+- With 503 indicators and worker and firm fixed effects on 8.5 million rows, the fit takes
+  101 s at 11.0 GB (95 s at 17.2 GB with 0.13.1's sizes); with 167, 42 s at 4.0 GB
+  (41 s, 6.5 GB). With about 2,000 indicators and one fixed effect the peak is about 4 GB
+  at 300,000 rows. `core.crossprod` with fixed effects uses the same chunks and buckets.
+
 ## 0.13.1
 
 - **`core.crossprod` forms the cross-products of sparse rows from each row's nonzeros.**

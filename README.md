@@ -233,13 +233,12 @@ smallest H100 machine.
 
 For plain OLS, 2SLS and logit with no fixed effects the answer is less clear-cut.
 At 20 million rows GPU libraries fitted them in 3 to 5 s (cuML, and a
-hand-written CuPy solve), 1.3 to 3.4 times faster than hdfe_stream on the CPU of
+hand-written CuPy solve), 1.3 to 3.0 times faster than hdfe_stream on the CPU of
 the same machine, and not at all below a few million rows. But
 hdfe_stream's own GPU options did little for them: `polars_engine="gpu"` was
-slower at every size, and `device="cuda"`, measured in 0.10.0, when it ran a
-logit's IRLS steps on the GPU, saved 26% at 20 million rows, 10% at 5 million
-and nothing below that. A logit now runs Newton's steps there instead, which
-have not been measured on a GPU yet. And fixest,
+slower at every size, and `device="cuda"`, which runs a logit's Newton steps on
+the GPU, saved 27% at 20 million rows, 4% at 5 million and nothing below that.
+And fixest,
 on the 16-vCPU CPU machine, fitted the same OLS in 2.9 s. See [plain
 regressions on the GPU](https://leetucker.github.io/hdfe-stream/benchmarks/gpu.html#plain-regressions-ols-iv-and-logit).
 [CPU and GPU](https://leetucker.github.io/hdfe-stream/benchmarks/gpu.html) has the numbers.

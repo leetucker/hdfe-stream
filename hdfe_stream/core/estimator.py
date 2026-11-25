@@ -212,11 +212,20 @@ class _StreamingBase(_ProfileMixin, _PassesMixin, _SolveMixin, _InferenceMixin):
         self.tol, self.maxiter = tol, maxiter
         # Without fixed effects nothing groups the rows, and chunks of about 64 MB
         # of the design (100,000 to 2,000,000 rows) keep memory to the design's
-        # width at no cost in time (3M x 40: peak 3.9 -> 2.1 GB); with fixed
-        # effects 2,000,000 rows (StreamingGLM sets its own).
-        self.batch_rows = (batch_rows if batch_rows is not None else
-                           min(2_000_000, max(100_000, int(64e6 / (8 * (self.m + 4)))))
-                           if self.no_fe else 2_000_000)
+        # width at no cost in time (3M x 40: peak 3.9 -> 2.1 GB). With fixed
+        # effects, chunks of whole groups of about 256 MB (20,000 to 2,000,000
+        # rows) to start: 2,000,000 rows up to 12 columns, and fewer for a wide
+        # design, whose chunks otherwise held every row up to 2 million (2,000
+        # indicators, 300,000 rows: 22 GB). For a design whose buckets are the
+        # larger ones (about 190 to 620 columns), pass 0 then raises them to a
+        # bucket's rows (`_align_batches`). StreamingGLM sets its own.
+        self._align_batches = batch_rows is None and not self.no_fe
+        if batch_rows is not None:
+            self.batch_rows = batch_rows
+        elif self.no_fe:
+            self.batch_rows = min(2_000_000, max(100_000, int(64e6 / (8 * (self.m + 4)))))
+        else:
+            self.batch_rows = min(2_000_000, max(20_000, int(256e6 / (8 * (self.m + 4)))))
         self.rgs = row_group_size
         self.scratch_mb = int(scratch_mb)
         self.n_buckets, self.rows_per_bucket = n_buckets, rows_per_bucket
