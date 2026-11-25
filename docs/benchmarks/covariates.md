@@ -49,11 +49,15 @@ of its 30.8 GB):
 
 | covariates | pyfixest | xhdfe | fixest (R) | FixedEffectModels.jl | hdfe_stream | hdfe_stream, sized |
 |---:|---:|---:|---:|---:|---:|---:|
-| 8 | 10 s, 8.0 GB | 12 s, 9.5 GB | 18 s, 3.5 GB | 23 s, 3.3 GB | 5 s, 2.5 GB | 5 s, 3.3 GB |
-| 41 | 28 s, 17.5 GB | 36 s, 22.4 GB | 63 s, 10.5 GB | 89 s, 7.8 GB | 11 s, 4.0 GB | 11 s, 3.7 GB |
-| 83 | — | — | 119 s, 19.4 GB | 177 s, 13.7 GB | 21 s, 4.1 GB | 21 s, 4.5 GB |
-| 167 | — | — | — | 322 s, 24.1 GB | 42 s, 6.4 GB | 43 s, 4.0 GB |
-| 503 | — | — | — | — | 97 s, 17.3 GB | 111 s, 10.5 GB |
+| 8 | 10 s, 8.0 GB | 12 s, 9.5 GB | 18 s, 3.5 GB | 23 s, 3.3 GB | 5 s, 2.5 GB | 6 s, 3.3 GB |
+| 41 | 28 s, 17.5 GB | 36 s, 22.4 GB | 63 s, 10.5 GB | 89 s, 7.8 GB | 11 s, 3.1 GB | 12 s, 3.5 GB |
+| 83 | — | — | 119 s, 19.4 GB | 177 s, 13.7 GB | 22 s, 3.3 GB | 22 s, 4.3 GB |
+| 167 | — | — | — | 322 s, 24.1 GB | 45 s, 3.9 GB | 44 s, 4.0 GB |
+| 503 | — | — | — | — | 106 s, 10.9 GB | 114 s, 10.5 GB |
+
+The hdfe_stream columns are from a later run on the same instance type, which
+ran about 5% slower than the other libraries' run (by the configuration sized to
+the design, measured on both).
 
 ## Reading the figures
 
@@ -66,13 +70,15 @@ indicators to 4.0 GB at 167 and 10.5 GB at 503. Part of that last figure is the
 memory-mapped cell table, whose pages count towards the peak although the
 kernel can drop them under pressure, so the memory the fit itself needs is less.
 
-**Size the batches to the design.** At its defaults hdfe_stream sorts buckets of about 384 MB of rows,
-but each batch is 2 million rows with every covariate, which is 8 GB at 503; that
-is fine for a handful of covariates and costly for hundreds (6.4 GB at 167 and
-17.3 GB at 503, against 4.0 and 10.5 GB sized to the design). Every step that holds rows holds all the covariates, so scale
-`rows_per_bucket`, `batch_rows` and `row_group_size` down with the width. The
-benchmark aims at about 1 GB of design per bucket and 250 MB per batch and row
-group, never above the defaults:
+**The defaults size the batches by the width.** Every step that holds rows
+holds all the covariates, so hdfe_stream sorts buckets of about 384 MB of rows
+and reads batches of about 256 MB of the design, and from about 190 to 620
+columns reads buckets of up to 1 GB whole. At its defaults it takes 3.9 GB at 167
+indicators and 10.9 GB at 503, close to the configuration sized to the design
+(4.0 and 10.5 GB), and is faster at 503 (106 s against 114 s). To trade memory
+for time differently, size `rows_per_bucket`, `batch_rows` and `row_group_size`
+yourself. The sized configuration aims at about 1 GB of design per bucket and
+250 MB per batch and row group, never above the defaults:
 
 ```python
 per_row = 8 * (k + 4)                   # k covariates, plus outcome and ids
@@ -86,8 +92,8 @@ fit = feols_stream(fml, data, rows_per_bucket=min(20_000_000, int(1e9 // per_row
 **Time grows with the width.** The cross-products cost k × k per row; they are
 formed chunk by chunk as BLAS matrix products. With this machine's 16 cores
 the time grew about in proportion to the width from 83 indicators up, though
-(2.1 times from 83 to 167, 2.6 times from 167 to 503, sized to the design), and
-503 indicators took 2 minutes where 167 took 43 seconds. hdfe_stream is the fastest
+(2.0 times from 83 to 167, 2.6 times from 167 to 503, sized to the design), and
+503 indicators took about 2 minutes where 167 took 44 seconds. hdfe_stream is the fastest
 configuration at every width measured.
 
 **Timings are noisy where memory is tight.** Each point is one run, so

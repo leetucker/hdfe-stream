@@ -106,16 +106,14 @@ python benchmarks/general_gpu_benchmark.py      # on a machine with an NVIDIA GP
 The numbers are in
 [benchmarks/results/general_gpu.csv](https://github.com/leetucker/hdfe-stream/blob/main/benchmarks/results/general_gpu.csv).
 The configurations are hdfe_stream on the CPU; with `polars_engine="gpu"`; and,
-for logit, with `device="cuda"`, which in 0.10.0, measured here, ran every IRLS
-step on the GPU after uploading the rows once (a logit now runs Newton's steps
-there instead; see [using the GPU options](#using-the-gpu-options)), and with
-both. The others are the fastest CPU library for each model
+for logit, with `device="cuda"`, which uploads the rows to the GPU once and runs
+every Newton step there, and with both. The others are the fastest CPU library for each model
 (polars-ols, polars-ds); [cuML](https://github.com/rapidsai/cuml)'s
 `LinearRegression` and `LogisticRegression`, which have no 2SLS; and the normal
 equations, 2SLS and Newton's method written in CuPy, as about the least work
 the GPU can be given. GPU times include copying the data to the GPU. All
 configurations agree on the coefficients to within 2.3e-13 (OLS and IV) and
-4.5e-8 (logit).
+3.3e-8 (logit).
 
 ```{image} ../figures/general_gpu_time.light.svg
 :class: only-light benchmark
@@ -148,39 +146,39 @@ Wall time:
 
 | configuration | 100,000 rows | 1 million | 5 million | 20 million |
 |---|---:|---:|---:|---:|
-| hdfe_stream OLS (CPU) | 1.0 s | 1.4 s | 3.2 s | 6.0 s |
-| hdfe_stream OLS (GPU Polars) | 3.3 s | 3.6 s | 5.0 s | 8.5 s |
+| hdfe_stream OLS (CPU) | 1.0 s | 1.3 s | 3.2 s | 5.9 s |
+| hdfe_stream OLS (GPU Polars) | 2.5 s | 2.8 s | 3.9 s | 7.2 s |
 | polars-ols (CPU) | 0.1 s | 0.4 s | 2.1 s | 8.1 s |
 | cuML OLS | 1.7 s | 1.9 s | 2.5 s | 4.7 s |
 | CuPy normal equations (OLS) | 0.6 s | 0.8 s | 1.3 s | 3.3 s |
-| hdfe_stream IV (CPU) | 1.4 s | 2.1 s | 4.4 s | 12.1 s |
-| hdfe_stream IV (GPU Polars) | 3.7 s | 4.3 s | 6.7 s | 14.2 s |
+| hdfe_stream IV (CPU) | 1.4 s | 2.1 s | 4.3 s | 11.9 s |
+| hdfe_stream IV (GPU Polars) | 3.0 s | 3.5 s | 5.6 s | 12.8 s |
 | polars-ols two stages (CPU) | 0.1 s | 0.8 s | 4.4 s | 17.6 s |
 | CuPy 2SLS | 0.6 s | 0.8 s | 1.5 s | 4.0 s |
-| hdfe_stream logit (CPU) | 1.0 s | 1.8 s | 3.9 s | 11.0 s |
-| hdfe_stream logit (GPU IRLS) | 1.5 s | 2.0 s | 3.5 s | 8.1 s |
-| hdfe_stream logit (GPU Polars) | 3.4 s | 4.0 s | 6.2 s | 13.0 s |
-| hdfe_stream logit (GPU IRLS + GPU Polars) | 3.7 s | 4.2 s | 5.6 s | 10.1 s |
+| hdfe_stream logit (CPU) | 1.0 s | 1.4 s | 2.5 s | 6.7 s |
+| hdfe_stream logit (GPU Newton) | 1.5 s | 1.7 s | 2.4 s | 4.9 s |
+| hdfe_stream logit (GPU Polars) | 2.6 s | 3.0 s | 4.5 s | 10.0 s |
+| hdfe_stream logit (GPU Newton + GPU Polars) | 2.9 s | 3.1 s | 4.1 s | 8.0 s |
 | polars-ds logit (CPU) | 0.1 s | 0.7 s | 3.0 s | 12.1 s |
 | cuML logit | 1.7 s | 2.1 s | 2.5 s | 4.6 s |
 | CuPy Newton logit | 0.6 s | 0.8 s | 1.3 s | 3.2 s |
 
 - **A GPU does help plain regressions, unlike the fixed-effects one, but not
   hdfe_stream's linear fits.** At 20 million rows cuML fits OLS in 4.7 s and
-  logit in 4.6 s, and the CuPy versions take 3.2 to 4.0 s, against 6.0 s for
-  hdfe_stream OLS, 12.1 s for IV and 11.0 s for logit on the CPU: gains of 1.3
-  to 3.4 times. Below about 5 million rows the CPU libraries are faster.
+  logit in 4.6 s, and the CuPy versions take 3.2 to 4.0 s, against 5.9 s for
+  hdfe_stream OLS, 11.9 s for IV and 6.7 s for logit on the CPU: gains of 1.3
+  to 3.0 times. Below about 5 million rows the CPU libraries are faster.
 - **`polars_engine="gpu"` made hdfe_stream slower at every size and in every
-  model**, by 1.2 to 3.4 times, and held up to 13 GB of GPU memory. An OLS or
+  model**, by 1.1 to 2.7 times, and held up to 15 GB of GPU memory. An OLS or
   2SLS fit has no solve to move, so its time goes to reading and writing rows in
   Polars, which is the part this option moves.
-- **`device="cuda"` helps logit at large sizes.** It took 8.1 s at 20 million
-  rows against 11.0 s on the CPU (26% less), 3.5 s against 3.9 s at 5 million,
-  and was slower at 1 million rows and below. With the Polars engine as well it
-  was slower than with `device="cuda"` alone. Only the IRLS steps moved: the
-  other passes (scanning and writing the rows, and the final pass for the
-  standard errors) still run on the CPU, which is probably why the fit stays
-  well behind cuML and CuPy; we did not profile it.
+- **`device="cuda"` helps logit at large sizes.** It took 4.9 s at 20 million
+  rows against 6.7 s on the CPU (27% less), 2.4 s against 2.5 s at 5 million,
+  and was slower at 1 million rows and below; it held 2.4 GB of GPU memory at
+  20 million. With the Polars engine as well it was slower than with
+  `device="cuda"` alone. The Newton steps run on the GPU; reading the source and
+  storing the rows still run on the CPU, which is probably why the fit stays
+  behind cuML and CuPy; we did not profile it.
 - **The cost.** A GPU fit still has to read the data: CuPy and cuML
   fit 20 million rows in 3 to 5 s, and fixest on the CPU machine of the other
   pages fits the same OLS in 2.9 s, which costs about an eighth as much per
@@ -188,7 +186,9 @@ Wall time:
   the card, or the fit is repeated; for a one-off fit it does not, here.
 - Each point is one run, and the CPU rows are on this machine's CPU, not the
   other pages'. cuML 26.06 ran in an environment of its own (NumPy below 2.4).
-  Polars was 1.39.3, as for the GPU benchmark above.
+  hdfe_stream's rows are from a later run on the same instance type, with
+  Polars 1.44.2 and cudf-polars 26.10.2; the other libraries' rows ran with
+  Polars 1.39.3, as for the GPU benchmark above.
 
 ## Should I use a GPU?
 
@@ -232,16 +232,15 @@ fit = feols_stream(fml, "panel.parquet", device="cuda", polars_engine="gpu")
 - For a logit, probit or Poisson with no fixed effect or one, `device="cuda"`
   uploads the rows once and runs every Newton step there. If the rows do not
   fit in about 60% of the device's free memory, the fit raises `MemoryError`.
-  With two or more fixed effects the IRLS steps' solve moves, as above. In
-  0.10.0, which ran the IRLS steps of a fit without fixed effects on the GPU,
-  it helped only above about 5 million rows (see
-  [plain regressions](#plain-regressions-ols-iv-and-logit)); the Newton steps
-  have not been measured on a GPU yet. OLS and 2SLS have no GPU path of their
-  own.
+  With two or more fixed effects the IRLS steps' solve moves, as above. Without
+  fixed effects it helps only at large sizes: a logit of 20 million rows took
+  4.9 s against 6.7 s on the CPU (see
+  [plain regressions](#plain-regressions-ols-iv-and-logit)). OLS and 2SLS have no
+  GPU path of their own.
 - `polars_engine="gpu"` sends the fit's Polars queries to cudf-polars, and runs
   any query the engine cannot on the CPU instead.
-- cudf-polars supports a narrow range of Polars versions (version 26.6 needs
-  Polars 1.39), so installing it can change your Polars version.
+- cudf-polars supports a narrow range of Polars versions (version 26.10 needs
+  Polars 1.35 to 1.44), so installing it can change your Polars version.
 
 ## How it was measured
 
@@ -254,7 +253,9 @@ hdfe_stream 0.10.0 and pyfixest 0.70.0, measured on 2026-11-09. Python and its p
 cudf-polars 26.6.0 and, for pyfixest's rows, PyTorch 2.15.0 (CUDA 13.0). The
 CPU numbers here are therefore not those of the other pages: this is a
 different, older CPU, with an older Polars, and hdfe_stream took 29 s at 5
-million workers here against 23 s there.
+million workers here against 23 s there. The hdfe_stream rows of the plain
+regressions are hdfe_stream 0.13.2, measured on 2026-11-25 on the same instance
+type with NVIDIA driver 620.70 (CUDA 13.5), Polars 1.44.2 and cudf-polars 26.10.2.
 
 - **Peak GPU memory** is the configuration's process's, polled from
   `nvidia-smi`. Each configuration runs in a fresh process, so the GPU ones pay

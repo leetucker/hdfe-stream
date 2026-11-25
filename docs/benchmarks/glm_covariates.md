@@ -50,22 +50,25 @@ Wall time and peak memory, hdfe_stream sized to the design:
 
 | covariates | Poisson: `fepois_stream` | Poisson: pyfixest | logit: `feglm_stream` | logit: pyfixest |
 |---:|---:|---:|---:|---:|
-| 8 | 18 s, 3.0 GB | 62 s, 10.9 GB | 16 s, 3.0 GB | 73 s, 10.9 GB |
-| 41 | 49 s, 4.9 GB | 190 s, 28.0 GB | 51 s, 4.2 GB | 227 s, 26.3 GB |
-| 83 | 100 s, 4.8 GB | out of memory | 104 s, 4.8 GB | out of memory |
-| 167 | 223 s, 6.2 GB | out of memory | 235 s, 6.2 GB | out of memory |
-| 503 | 732 s, 10.9 GB | out of memory | 741 s, 10.8 GB | out of memory |
+| 8 | 19 s, 3.0 GB | 62 s, 10.9 GB | 17 s, 3.0 GB | 73 s, 10.9 GB |
+| 41 | 53 s, 4.7 GB | 190 s, 28.0 GB | 54 s, 5.1 GB | 227 s, 26.3 GB |
+| 83 | 104 s, 4.8 GB | out of memory | 108 s, 4.8 GB | out of memory |
+| 167 | 225 s, 6.3 GB | out of memory | 239 s, 6.2 GB | out of memory |
+| 503 | 719 s, 11.0 GB | out of memory | 721 s, 11.0 GB | out of memory |
+
+The hdfe_stream columns are from a later run on the same instance type than
+pyfixest's, which ran about 5% slower.
 
 - **pyfixest** needs 11 GB at 8 covariates and 26–28 GB at 41, close to this
   machine's limit of 29.6 GB (of 30.8 GB), and was killed at that limit from 83 up.
 - **hdfe_stream at its defaults** needs less memory than sized to the
   design up to 167 covariates, in the same time: 2.5 GB at 41 covariates, 3.2 GB
-  at 83, 4.9 GB at 167 and 12.5 GB at 503 (sized, Poisson: 4.9, 4.8, 6.2 and
-  10.9 GB),
+  at 83, 5.0 GB at 167 and 12.5 GB at 503 (sized, Poisson: 4.7, 4.8, 6.3 and
+  11.0 GB),
   because GLMs default to chunks of about 64 MB of the design. Only at 503 is
   sizing the buckets and batches, as the benchmark does and as for OLS, worth
   the trouble.
 - **Disk** grows with the width, to 6.8 GB at 503 covariates. OLS
   writes 0.5 GB for the same design.
-- **Against OLS.** At 503 covariates, sized the same way, OLS takes 111 s and
-  10.5 GB, and the Poisson fit 732 s and 10.9 GB.
+- **Against OLS.** At 503 covariates, sized the same way, OLS takes 114 s and
+  10.5 GB, and the Poisson fit 719 s and 11.0 GB.

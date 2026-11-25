@@ -28,7 +28,7 @@
   "memory_max": "96% of memory (systemd MemoryMax)",
   "data_disk": "local NVMe (/dev/nvme1n1)",
   "baseline": "2026-11-24T0427Z_c8id.4xlarge_spot_hdfe-only_v0.13.0-general-r2",
-  "note": "hdfe-stream 0.13.0 rows: binary from this run (873e7cd); ols and iv from 2026-11-24T0427Z_c8id.4xlarge_spot_hdfe-only_v0.13.0-general-r2 (50c0e03); covariates, glm_covariates and the 5 million-worker kss rows from 2026-11-24T0026Z_c8id.4xlarge_spot_hdfe-only_v0.13.0-covariates (4e8f4f6), merged without the other libraries' rows from that run. The other hdfe-stream rows (akm, glm, the smaller kss panels) and the other libraries' rows are from the runs of 2026-11-09 (hdfe-stream 0.10.0) and before."
+  "note": "hdfe-stream 0.13.0 rows: binary from this run (873e7cd); ols and iv from 2026-11-24T0427Z_c8id.4xlarge_spot_hdfe-only_v0.13.0-general-r2 (50c0e03); the 5 million-worker kss rows from 2026-11-24T0026Z_c8id.4xlarge_spot_hdfe-only_v0.13.0-covariates (4e8f4f6), merged without the other libraries' rows from that run. hdfe-stream 0.13.2 rows: covariates and glm_covariates from 2026-11-25T0159Z_c8id.4xlarge_spot_hdfe-only_v0.13.2-final (76555a6, us-west-2d, about 5% slower than us-east-2 by the sized configurations), merged without the other libraries' rows. The other hdfe-stream rows (akm, glm, the smaller kss panels) and the other libraries' rows are from the runs of 2026-11-09 (hdfe-stream 0.10.0) and before."
  },
  "R": "4.5.3",
  "fixest": "0.14.2",
