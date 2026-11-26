@@ -221,7 +221,10 @@ class StreamingHDFE(_StreamingBase, _InverseMixin, _LeaveOutMixin, _TraceMixin,
         collapse. ``diagnostics["cells_collapsed"]`` says which happened.
     collin_tol : float, default 1e-10
         Tolerance for dropping collinear covariates (pyfixest's algorithm
-        applied to the residualized X'X).
+        applied to the residualized X'X). A covariate is also dropped when
+        the part of it the earlier covariates do not explain is at most
+        1e-9 of its own sum of squares, so that an exactly collinear
+        covariate is dropped however large the sample or its weights.
     collin_tol_rel : float, default 1e-6
         Also drop a covariate when its variation left after removing the
         fixed effects is below this share of its raw variation (the default

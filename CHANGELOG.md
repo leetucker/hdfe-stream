@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **An exactly collinear covariate is dropped however large the sample or its weights.**
+  The collinearity check, pyfixest's sequential Cholesky test with `collin_tol`, compared
+  each column's pivot with an absolute tolerance. An exactly collinear column's pivot is
+  rounding error of the order of its diagonal times the machine epsilon, so on a large or
+  heavily weighted sample it could fall on either side of 1e-10, and whether the column
+  was dropped depended on the order of the sums. On 100,000 commuters, a Poisson fit kept
+  a non-citizen indicator that nativity and the other citizenship levels determine
+  exactly. A column is now also dropped when its pivot is at most 1e-9 of its own
+  diagonal; every column the absolute test drops is still dropped.
+- **The check runs in hdfe-stream's own kernel** (`core.collinear`), in place of
+  pyfixest's: the same algorithm, with the factor stored so that its inner products read
+  contiguous memory. With 3,000 covariates it takes 3 s instead of 21 s, with 6,000
+  covariates 26 s instead of 6 minutes.
 - **The Newton pass keeps each thread's sums for the whole pass.** `core.newton`'s row
   kernel (`feglm_stream` and `fepois_stream` with no fixed effect or one, and the
   packages built on `GLMDesign.newton_pass`) zeroed and added up every thread's copy of
