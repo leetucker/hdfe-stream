@@ -568,32 +568,37 @@ class StreamingGLM(_IRLSMixin, StreamingHDFE):
             D = np.zeros((1, G if info else 0))
             C = np.zeros((1, G if info else 0, c))
             grouped = bool(self.fe)
+            # each thread's copies of the sums, zeroed once per pass and added
+            # up after it (not per chunk: at a wide information's c x c that
+            # would cost as much as the rows)
+            gshape = (0, 1, 0) if grouped else (nt, 1, G)
+            parts = (np.zeros((nt, 1, 1)), np.zeros((nt, 1, 1)), np.zeros((nt, 1, k)),
+                     np.zeros((nt, 1, c, c)), np.zeros(gshape),
+                     np.zeros(gshape if info else (0, 1, 0)),
+                     np.zeros((gshape[0], 1, gshape[2], c) if info else (0, 1, 0, c)))
             for X, y, w, off, f in chunks():
                 n = len(y)
                 P = max(1, min(nt, n // 256 or 1))
                 starts = (part_starts(f, P) if grouped
                           else np.linspace(0, n, P + 1).astype(np.int64))
                 P = len(starts) - 1
-                gshape = (0, 1, 0) if grouped else (P, 1, G)
-                ll_t, sk_t = np.zeros((P, 1, 1)), np.zeros((P, 1, 1))
-                gb_t, H_t = np.zeros((P, 1, k)), np.zeros((P, 1, c, c))
-                ga_t = np.zeros(gshape)
-                D_t = np.zeros(gshape if info else (0, 1, 0))
-                C_t = np.zeros((gshape[0], 1, gshape[2], c) if info else (0, 1, 0, c))
+                ll_t, sk_t, gb_t, H_t, ga_t, D_t, C_t = (t[:P] if len(t) else t
+                                                        for t in parts)
                 with numba.parallel_chunksize(1):
                     newton_pass_rows(fam, X, y, empty if w is None else w,
                                      empty if off is None else off, f, np.zeros(n, np.int64),
                                      B, A, inc, colpos, info, state["nnz"], grouped, starts,
                                      ll_t, sk_t, gb_t, H_t, ga_t, D_t, C_t, ga, D, C)
-                ll += ll_t.sum(axis=0)
-                sk += sk_t.sum(axis=0)
-                gb += gb_t.sum(axis=0)
-                H += H_t.sum(axis=0)
-                if not grouped:
-                    ga += ga_t.sum(axis=0)
-                    if info:
-                        D += D_t.sum(axis=0)
-                        C += C_t.sum(axis=0)
+            ll_t, sk_t, gb_t, H_t, ga_t, D_t, C_t = parts
+            ll += ll_t.sum(axis=0)
+            sk += sk_t.sum(axis=0)
+            gb += gb_t.sum(axis=0)
+            H += H_t.sum(axis=0)
+            if not grouped:
+                ga += ga_t.sum(axis=0)
+                if info:
+                    D += D_t.sum(axis=0)
+                    C += C_t.sum(axis=0)
             if not info:
                 return float(ll.sum()), None
             Hs = np.triu(H) + np.transpose(np.triu(H, 1), (0, 2, 1))

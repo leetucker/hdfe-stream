@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **The Newton pass keeps each thread's sums for the whole pass.** `core.newton`'s row
+  kernel (`feglm_stream` and `fepois_stream` with no fixed effect or one, and the
+  packages built on `GLMDesign.newton_pass`) zeroed and added up every thread's copy of
+  the sums for every chunk; at a wide information's c x c per thread and model, that cost
+  as much as the rows. They are now zeroed once and added up once per pass. A penalized
+  Poisson path with about 1,000 indicator columns on 30,000 rows is about 25% faster;
+  narrow passes are unchanged or a few percent faster.
+
 ## 0.13.2
 
 - **A wide design with fixed effects no longer holds memory that grows with the rows.**
