@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.3
 
 - **An exactly collinear covariate is dropped however large the sample or its weights.**
   The collinearity check, pyfixest's sequential Cholesky test with `collin_tol`, compared
