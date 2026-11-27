@@ -118,26 +118,16 @@ def _cluster_requests(vcov, cluster):
 
 def _collinear(C, raw, tol=1e-10, tol_rel=1e-6):
     """hdfe-stream's collinearity rule (`_InferenceMixin._collinear`):
-    pyfixest's check on C, and a variable whose C diagonal is below tol_rel of
-    its raw sum of squares."""
+    pyfixest's check on C with the scale-free pivot test (`core.collinear`),
+    and a variable whose C diagonal is below tol_rel of its raw sum of
+    squares."""
+    from .core.collinear import collinear_columns
     k = C.shape[0]
     if not k:
         return np.zeros(0, bool)
 
     def pf(A):
-        try:
-            from pyfixest.core import find_collinear_variables
-            mask, _, _ = find_collinear_variables(np.ascontiguousarray(A), tol)
-            return np.asarray(mask, bool)
-        except ImportError:
-            m = np.zeros(A.shape[0], bool)
-            for j in range(A.shape[0]):
-                keep = np.flatnonzero(~m[:j])
-                r = A[j, j]
-                if len(keep):
-                    r -= A[j, keep] @ np.linalg.solve(A[np.ix_(keep, keep)], A[keep, j])
-                m[j] = r <= tol * max(A[j, j], 1e-300)
-            return m
+        return collinear_columns(A, tol)
 
     mask = pf(C)
     if raw is not None:

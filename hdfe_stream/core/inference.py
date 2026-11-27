@@ -367,8 +367,9 @@ class _InferenceMixin:
         return out
 
     def _collinear(self, Axx, idx=None, raw=None):
-        """pyfixest's collinearity check on the residualized X'X, plus a
-        relative check: a variable whose residual sum of squares is below
+        """pyfixest's collinearity check on the residualized X'X, with a
+        pivot test relative to each column's diagonal (`core.collinear`), plus
+        a relative check: a variable whose residual sum of squares is below
         collin_tol_rel of its raw (centered) sum of squares is treated as
         absorbed by the fixed effects. The iterative solve leaves noise of
         order sqrt(tol * condition number) in exactly collinear variables,
@@ -390,21 +391,10 @@ class _InferenceMixin:
         return mask
 
     def _collinear_pf(self, Axx):
-        k = Axx.shape[0]
-        try:
-            from pyfixest.core import find_collinear_variables
-            mask, _, _ = find_collinear_variables(np.ascontiguousarray(Axx),
-                                                            self.collin_tol)
-            mask = np.asarray(mask, bool)
-        except ImportError:   # fallback: sequential pivot test on the Cholesky
-            mask = np.zeros(k, bool)
-            for j in range(k):
-                keep = np.flatnonzero(~mask[:j])
-                r = Axx[j, j]
-                if len(keep):
-                    r -= Axx[j, keep] @ np.linalg.solve(Axx[np.ix_(keep, keep)], Axx[keep, j])
-                mask[j] = r <= self.collin_tol * max(Axx[j, j], 1e-300)
-        return mask
+        """pyfixest's (fixest's) sequential Cholesky test at collin_tol, with
+        the scale-free test on each pivot (`core.collinear`)."""
+        from .collinear import collinear_columns
+        return collinear_columns(Axx, self.collin_tol)
 
     # --------------------------------------------------------------- step 4
     def _pass2_rows(self, yj, xk):

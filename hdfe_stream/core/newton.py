@@ -546,6 +546,9 @@ class _Sums:
         # fewer parts (fewer threads on a chunk) rather than more memory; at
         # least one
         self.max_parts = max(1, int(part_bytes // max(per_part, 1)))
+        # the parts' copies, kept for the whole pass and added to the totals
+        # once, in `moments` (allocated by the first chunk the row kernel takes)
+        self._parts = None
         self.beta, self.effects, self.inc, self.cols, self.colpos = beta, effects, inc, cols, colpos
         self.all_cols = len(cols) == k
         self.M, self.k, self.G, self.S, self.c = M, k, G, S, c
@@ -571,33 +574,49 @@ class _Sums:
             self._add_kernel(X, y, w, off, f, s)
 
     def _add_kernel(self, X, y, w, off, f, s):
-        M, k, G, S, c = self.M, self.k, self.G, self.S, self.c
         n = len(y)
         P = max(1, min(nb.get_num_threads(), self.max_parts, n // 256 or 1))
         starts = (part_starts(f, P) if self.grouped
                   else np.linspace(0, n, P + 1).astype(np.int64))
         P = len(starts) - 1
-        info = self.information
-        ll_t = np.zeros((P, M, S))
-        sk_t = np.zeros((P, M, S))
-        gb_t = np.zeros((P, M, k))
-        H_t = np.zeros((P, M, c, c))
-        gshape = (0, M, 0) if self.grouped else (P, M, G)
-        ga_t = np.zeros(gshape)
-        D_t = np.zeros(gshape if info else (0, M, 0))
-        C_t = np.zeros((gshape[0], M, gshape[2], c) if info else (0, M, 0, c))
+        ll_t, sk_t, gb_t, H_t, ga_t, D_t, C_t = (t[:P] if len(t) else t
+                                                for t in self._part_sums())
         with nb.parallel_chunksize(1):
             newton_pass_rows(self.fam, X, y, w, off, f, s, self.beta, self.effects, self.inc,
-                             self.colpos, info, self.nnz, self.grouped, starts, ll_t, sk_t,
-                             gb_t, H_t, ga_t, D_t, C_t, self.ga, self.D, self.C,
+                             self.colpos, self.information, self.nnz, self.grouped, starts,
+                             ll_t, sk_t, gb_t, H_t, ga_t, D_t, C_t, self.ga, self.D, self.C,
                              self.observed, self.meat)
+
+    def _part_sums(self):
+        """Each part's copies of the sums (the kernel adds to them): one per
+        thread the row kernel can use, zeroed once per pass rather than per
+        chunk -- at a wide information's c x c per part and model, zeroing
+        and adding them up for every chunk would cost as much as the rows."""
+        if self._parts is None:
+            M, k, G, S, c = self.M, self.k, self.G, self.S, self.c
+            P = max(1, min(nb.get_num_threads(), self.max_parts))
+            info = self.information
+            gshape = (0, M, 0) if self.grouped else (P, M, G)
+            self._parts = (np.zeros((P, M, S)), np.zeros((P, M, S)), np.zeros((P, M, k)),
+                           np.zeros((P, M, c, c)), np.zeros(gshape),
+                           np.zeros(gshape if info else (0, M, 0)),
+                           np.zeros((gshape[0], M, gshape[2], c) if info else (0, M, 0, c)))
+        return self._parts
+
+    def _fold_parts(self):
+        """Add the parts' copies to the totals (once: `moments` may be called
+        again)."""
+        if self._parts is None:
+            return
+        ll_t, sk_t, gb_t, H_t, ga_t, D_t, C_t = self._parts
+        self._parts = None
         self.ll += ll_t.sum(axis=0)
         self.sk += sk_t.sum(axis=0)
         self.gb += gb_t.sum(axis=0)
         self.H += H_t.sum(axis=0)
         if not self.grouped:
             self.ga += ga_t.sum(axis=0)
-            if info:
+            if self.information:
                 self.D += D_t.sum(axis=0)
                 self.C += C_t.sum(axis=0)
 
@@ -634,6 +653,7 @@ class _Sums:
                 self.C[m] += F @ Xc
 
     def moments(self) -> NewtonMoments:
+        self._fold_parts()
         info = self.information
         Hs = None
         if info:
