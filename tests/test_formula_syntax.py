@@ -37,6 +37,9 @@ def test_rewrite_changes_only_the_fixed_effect_part():
 
 def test_rewrite_leaves_formulas_without_fixed_effects_alone():
     assert rewrite_fe_interactions("y ~ a:b + c", "^") == "y ~ a:b + c"
+    # an instrument block with no fixed-effect part before it
+    assert (rewrite_fe_interactions("y ~ 1 | d ~ C(q) + C(q):x0", "^")
+            == "y ~ 1 | d ~ C(q) + C(q):x0")
 
 
 def test_rewrite_ignores_separators_inside_brackets_and_calls():

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.4
+
+- **An IV formula with no fixed effects reads interactions among its instruments
+  correctly with pyfixest 0.60.** In `y ~ 1 | d ~ C(q) + C(q):x0`, the second `|` part is
+  the instrument block, but it was read as the fixed-effect part and its `:` rewritten as
+  `^`, which pyfixest then rejected. A second part containing `~` is now left as written.
+  pyfixest 0.60 is the version Python 3.10 installs.
+
 ## 0.13.3
 
 - **An exactly collinear covariate is dropped however large the sample or its weights.**

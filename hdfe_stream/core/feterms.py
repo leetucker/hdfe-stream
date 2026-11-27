@@ -58,9 +58,11 @@ def rewrite_fe_interactions(fml, to):
     after the first top-level ``|``, up to a second one) written as `to`:
     ``"^"`` (fixest) or ``":"`` (formulaic). Slope brackets and the covariates
     are left as they are, so ``"y ~ a:b | f^g[t]"`` is not touched in ``a:b``.
+    A second part that is an instrument block (``"y ~ x | d ~ z:w"``, no fixed
+    effects) is not a fixed-effect part and is left alone too.
     """
     parts, _ = _split_top(fml, "|")
-    if len(parts) < 2:
+    if len(parts) < 2 or "~" in parts[1]:
         return fml
     pieces, seps = _split_top(parts[1], "^:")
     out = pieces[0]
